@@ -7,7 +7,7 @@
 /** @file
  *  @brief Nordic mesh sensor sample
  */
-#include <bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/bluetooth.h>
 #include <bluetooth/mesh/models.h>
 #include <bluetooth/mesh/dk_prov.h>
 #include <dk_buttons_and_leds.h>
@@ -41,7 +41,7 @@ static void bt_ready(int err)
 	printk("Mesh initialized\n");
 }
 
-void main(void)
+int main(void)
 {
 	int err;
 
@@ -51,4 +51,6 @@ void main(void)
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
 	}
+
+	return 0;
 }

@@ -5,7 +5,7 @@
  */
 
 #include <zephyr/types.h>
-#include <sys/printk.h>
+#include <zephyr/sys/printk.h>
 #include <pm_config.h>
 #include <fw_info.h>
 #include <fprotect.h>
@@ -13,16 +13,25 @@
 #include <bl_boot.h>
 #include <bl_validation.h>
 #include <dfu/pcd.h>
-#include <device.h>
+#include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 
-#define FLASH_NAME DT_CHOSEN_ZEPHYR_FLASH_CONTROLLER_LABEL
-
-void main(void)
+int main(void)
 {
-	int err = fprotect_area(PM_B0N_CONTAINER_ADDRESS,
-				PM_B0N_CONTAINER_SIZE);
-	const struct device *fdev = device_get_binding(FLASH_NAME);
+	int err;
+	const struct device *fdev = DEVICE_DT_GET(DT_CHOSEN(zephyr_flash_controller));
 
+	if (!device_is_ready(fdev)) {
+		printk("Flash device not ready\n");
+		return 0;
+	}
+
+	/* The flash is locked at flash page granularity */
+	BUILD_ASSERT(
+		(PM_B0N_CONTAINER_SIZE % CONFIG_FPROTECT_BLOCK_SIZE) == 0,
+		"PM_B0N_CONTAINER_SIZE % CONFIG_FPROTECT_BLOCK_SIZE was not 0. Check the B0_SIZE Kconfig.");
+
+	err = fprotect_area(PM_B0N_CONTAINER_ADDRESS, PM_B0N_CONTAINER_SIZE);
 	if (err) {
 		printk("Failed to protect b0n flash, cancel startup\n\r");
 		goto failure;
@@ -77,8 +86,9 @@ void main(void)
 	}
 
 	bl_boot(fw_info_find(s0_addr));
-	return;
+	return 0;
 
 failure:
 	pcd_fw_copy_invalidate();
+	return 0;
 }

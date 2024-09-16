@@ -4,9 +4,15 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <ztest.h>
+#include <zephyr/ztest.h>
 #include <ei_run_classifier.h>
 
+static size_t prediction_idx;
+
+void ei_run_classifier_mock_init(void)
+{
+	prediction_idx = 0;
+}
 
 /* Input data must be ascending sequence of floats. Difference between
  * subsequent elements of input sequence equals 1. The first element
@@ -44,7 +50,6 @@ EI_IMPULSE_ERROR run_classifier(signal_t *signal,
 				ei_impulse_result_t *result,
 				bool debug)
 {
-	static size_t prediction_idx = 0;
 	ARG_UNUSED(debug);
 
 	/* Test getting data. */
@@ -67,20 +72,19 @@ EI_IMPULSE_ERROR run_classifier(signal_t *signal,
 
 	size_t res_idx = EI_MOCK_GEN_LABEL_IDX(prediction_idx);
 	const float value_selected = EI_MOCK_GEN_VALUE(prediction_idx);
-	const float value_others = (1.0 - value_selected) /
-				   (EI_CLASSIFIER_LABEL_COUNT - 1);
+	const float value_others = EI_MOCK_GEN_VALUE_OTHERS(prediction_idx);
 
 	zassert_true(value_selected < 1.0, "Wrong value of selected label.");
 	zassert_true(value_selected > value_others, "Wrong values");
 
 	for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
-		result->classification[i].label = ei_classifier_labels[i];
+		result->classification[i].label = ei_classifier_inferencing_categories[i];
 		result->classification[i].value =
 			(i == res_idx) ? (value_selected) : (value_others);
 	}
 
 	zassert_false(strcmp(EI_MOCK_GEN_LABEL(prediction_idx),
-		      ei_classifier_labels[res_idx]),
+		      ei_classifier_inferencing_categories[res_idx]),
 		      "Wrong label");
 
 	prediction_idx++;

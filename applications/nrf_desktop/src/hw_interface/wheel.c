@@ -9,18 +9,22 @@
 #include <zephyr/types.h>
 
 #include <soc.h>
-#include <device.h>
-#include <drivers/sensor.h>
-#include <drivers/gpio.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/sensor.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/pm/device.h>
+#ifdef CONFIG_PINCTRL
+#include <pinctrl_soc.h>
+#endif
 
-#include "event_manager.h"
+#include <app_event_manager.h>
 #include "wheel_event.h"
 #include <caf/events/power_event.h>
 
 #define MODULE wheel
 #include <caf/events/module_state_event.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_DESKTOP_WHEEL_LOG_LEVEL);
 
 
@@ -35,18 +39,31 @@ enum state {
 	STATE_SUSPENDED
 };
 
+#ifdef CONFIG_PINCTRL
+#define QDEC_PIN_INIT(node_id, prop, idx) \
+	NRF_GET_PIN(DT_PROP_BY_IDX(node_id, prop, idx)),
+
+/* obtan qdec pins from default state */
+static const uint32_t qdec_pin[] = {
+	DT_FOREACH_CHILD_VARGS(
+		DT_PINCTRL_BY_NAME(DT_NODELABEL(qdec), default, 0),
+		DT_FOREACH_PROP_ELEM, psels, QDEC_PIN_INIT
+	)
+};
+#else
 static const uint32_t qdec_pin[] = {
 	DT_PROP(DT_NODELABEL(qdec), a_pin),
 	DT_PROP(DT_NODELABEL(qdec), b_pin)
 };
+#endif
 
 static const struct sensor_trigger qdec_trig = {
 	.type = SENSOR_TRIG_DATA_READY,
 	.chan = SENSOR_CHAN_ROTATION,
 };
 
-static const struct device *qdec_dev;
-static const struct device *gpio_dev;
+static const struct device *qdec_dev = DEVICE_DT_GET(DT_NODELABEL(qdec));
+static const struct device *const gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
 static struct gpio_callback gpio_cbs[2];
 static struct k_spinlock lock;
 static struct k_work_delayable idle_timeout;
@@ -56,7 +73,7 @@ static enum state state;
 static int enable_qdec(enum state next_state);
 
 
-static void data_ready_handler(const struct device *dev, struct sensor_trigger *trig)
+static void data_ready_handler(const struct device *dev, const struct sensor_trigger *trig)
 {
 	if (IS_ENABLED(CONFIG_ASSERT)) {
 		k_spinlock_key_t key = k_spin_lock(&lock);
@@ -90,7 +107,7 @@ static void data_ready_handler(const struct device *dev, struct sensor_trigger *
 
 	event->wheel = MAX(MIN(wheel, SCHAR_MAX), SCHAR_MIN);
 
-	EVENT_SUBMIT(event);
+	APP_EVENT_SUBMIT(event);
 
 	qdec_triggered = true;
 }
@@ -146,7 +163,7 @@ static void wakeup_cb(const struct device *gpio_dev, struct gpio_callback *cb,
 
 		case STATE_SUSPENDED:
 			event = new_wake_up_event();
-			EVENT_SUBMIT(event);
+			APP_EVENT_SUBMIT(event);
 			break;
 
 		case STATE_ACTIVE:
@@ -199,9 +216,15 @@ static int enable_qdec(enum state next_state)
 {
 	__ASSERT_NO_MSG(next_state == STATE_ACTIVE);
 
-	int err = pm_device_state_set(qdec_dev, PM_DEVICE_STATE_ACTIVE);
+	int err = 0;
+
+	/* QDEC device driver starts in PM_DEVICE_STATE_ACTIVE state. */
+	if (state != STATE_DISABLED) {
+		err = pm_device_action_run(qdec_dev, PM_DEVICE_ACTION_RESUME);
+	}
+
 	if (err) {
-		LOG_ERR("Cannot activate QDEC");
+		LOG_ERR("Cannot resume QDEC");
 		return err;
 	}
 
@@ -237,7 +260,7 @@ static int disable_qdec(enum state next_state)
 		return err;
 	}
 
-	err = pm_device_state_set(qdec_dev, PM_DEVICE_STATE_SUSPEND);
+	err = pm_device_action_run(qdec_dev, PM_DEVICE_ACTION_SUSPEND);
 	if (err) {
 		LOG_ERR("Cannot suspend QDEC");
 	} else {
@@ -283,16 +306,14 @@ static int init(void)
 		k_work_init_delayable(&idle_timeout, idle_timeout_fn);
 	}
 
-	qdec_dev = device_get_binding(DT_LABEL(DT_NODELABEL(qdec)));
-	if (!qdec_dev) {
-		LOG_ERR("Cannot get QDEC device");
-		return -ENXIO;
+	if (!device_is_ready(qdec_dev)) {
+		LOG_ERR("QDEC device not ready");
+		return -ENODEV;
 	}
 
-	gpio_dev = device_get_binding(DT_LABEL(DT_NODELABEL(gpio0)));
-	if (!gpio_dev) {
-		LOG_ERR("Cannot get GPIO device");
-		return -ENXIO;
+	if (!device_is_ready(gpio_dev)) {
+		LOG_ERR("GPIO device not ready");
+		return -ENODEV;
 	}
 
 	BUILD_ASSERT(ARRAY_SIZE(qdec_pin) == ARRAY_SIZE(gpio_cbs),
@@ -310,10 +331,10 @@ static int init(void)
 	return err;
 }
 
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
-	if (is_module_state_event(eh)) {
-		struct module_state_event *event = cast_module_state_event(eh);
+	if (is_module_state_event(aeh)) {
+		struct module_state_event *event = cast_module_state_event(aeh);
 
 		if (check_state(event, MODULE_ID(main), MODULE_STATE_READY)) {
 			int err = init();
@@ -338,7 +359,7 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_wake_up_event(eh)) {
+	if (is_wake_up_event(aeh)) {
 		int err;
 
 		k_spinlock_key_t key = k_spin_lock(&lock);
@@ -373,7 +394,7 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_power_down_event(eh)) {
+	if (is_power_down_event(aeh)) {
 		int err;
 
 		k_spinlock_key_t key = k_spin_lock(&lock);
@@ -413,7 +434,7 @@ static bool event_handler(const struct event_header *eh)
 
 	return false;
 }
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
-EVENT_SUBSCRIBE(MODULE, wake_up_event);
-EVENT_SUBSCRIBE_EARLY(MODULE, power_down_event);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
+APP_EVENT_SUBSCRIBE(MODULE, wake_up_event);
+APP_EVENT_SUBSCRIBE_EARLY(MODULE, power_down_event);

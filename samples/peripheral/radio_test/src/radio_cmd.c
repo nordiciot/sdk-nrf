@@ -7,14 +7,14 @@
 #include <stdlib.h>
 
 #include <errno.h>
-#include <init.h>
-#include <shell/shell.h>
+#include <zephyr/init.h>
+#include <zephyr/shell/shell.h>
 #include <zephyr/types.h>
 #include <hal/nrf_power.h>
 
-#if CONFIG_NRF21540_FEM
-#include "nrf21540.h"
-#endif
+#if CONFIG_FEM
+#include "fem_al/fem_al.h"
+#endif /* CONFIG_FEM */
 
 #include "radio_test.h"
 
@@ -28,6 +28,7 @@
 	"Toggle DCDC state <state>, "			\
 	"Toggle DC/DC state regardless of state value"
 #endif
+
 
 /* Radio parameter configuration. */
 static struct radio_param_config {
@@ -52,10 +53,10 @@ static struct radio_param_config {
 	/** Duty cycle. */
 	uint32_t duty_cycle;
 
-#if CONFIG_NRF21540_FEM
-	/* nRF21540 configuration. */
-	struct radio_test_nrf21540 nrf21540;
-#endif /* CONFIG_NRF21540_FEM */
+#if CONFIG_FEM
+	/* Front-end module (FEM) configuration. */
+	struct radio_test_fem fem;
+#endif /* CONFIG_FEM */
 } config = {
 	.tx_pattern = TRANSMIT_PATTERN_RANDOM,
 	.mode = NRF_RADIO_MODE_BLE_1MBIT,
@@ -64,9 +65,9 @@ static struct radio_param_config {
 	.channel_end = 80,
 	.delay_ms = 10,
 	.duty_cycle = 50,
-#if CONFIG_NRF21540_FEM
-	.nrf21540.gain = NRF21540_USE_DEFAULT_GAIN
-#endif /* CONFIG_NRF21540_FEM */
+#if CONFIG_FEM
+	.fem.gain = FEM_USE_DEFAULT_GAIN
+#endif /* CONFIG_FEM */
 };
 
 /* Radio test configuration. */
@@ -222,10 +223,10 @@ static int cmd_tx_carrier_start(const struct shell *shell, size_t argc,
 	test_config.mode = config.mode;
 	test_config.params.unmodulated_tx.txpower = config.txpower;
 	test_config.params.unmodulated_tx.channel = config.channel_start;
-#if CONFIG_NRF21540_FEM
-	test_config.nrf21540.active_delay = config.nrf21540.active_delay;
-	test_config.nrf21540.gain = config.nrf21540.gain;
-#endif
+#if CONFIG_FEM
+	test_config.fem.ramp_up_time = config.fem.ramp_up_time;
+	test_config.fem.gain = config.fem.gain;
+#endif /* CONFIG_FEM */
 	radio_test_start(&test_config);
 
 	shell_print(shell, "Start the TX carrier");
@@ -261,10 +262,10 @@ static int cmd_tx_modulated_carrier_start(const struct shell *shell,
 	test_config.params.modulated_tx.txpower = config.txpower;
 	test_config.params.modulated_tx.channel = config.channel_start;
 	test_config.params.modulated_tx.pattern = config.tx_pattern;
-#if CONFIG_NRF21540_FEM
-	test_config.nrf21540.active_delay = config.nrf21540.active_delay;
-	test_config.nrf21540.gain = config.nrf21540.gain;
-#endif
+#if CONFIG_FEM
+	test_config.fem.ramp_up_time = config.fem.ramp_up_time;
+	test_config.fem.gain = config.fem.gain;
+#endif /* CONFIG_FEM */
 
 	if (argc == 2) {
 		test_config.params.modulated_tx.packets_num = atoi(argv[1]);
@@ -294,8 +295,8 @@ static int cmd_duty_cycle_set(const struct shell *shell, size_t argc,
 
 	duty_cycle = atoi(argv[1]);
 
-	if (duty_cycle > 100) {
-		shell_error(shell, "Duty cycle must be between 1 and 99.");
+	if (duty_cycle > 90) {
+		shell_error(shell, "Duty cycle must be between 1 and 90.");
 		return -EINVAL;
 	}
 
@@ -314,10 +315,10 @@ static int cmd_duty_cycle_set(const struct shell *shell, size_t argc,
 		config.channel_start;
 	test_config.params.modulated_tx_duty_cycle.duty_cycle =
 		config.duty_cycle;
-#if CONFIG_NRF21540_FEM
-	test_config.nrf21540.active_delay = config.nrf21540.active_delay;
-	test_config.nrf21540.gain = config.nrf21540.gain;
-#endif
+#if CONFIG_FEM
+	test_config.fem.ramp_up_time = config.fem.ramp_up_time;
+	test_config.fem.gain = config.fem.gain;
+#endif /* CONFIG_FEM */
 
 	radio_test_start(&test_config);
 	test_in_progress = true;
@@ -350,15 +351,15 @@ static int cmd_toggle_dc(const struct shell *shell, size_t argc, char **argv)
 
 #if NRF_POWER_HAS_DCDCEN_VDDH
 	shell_print(shell,
-		"DCDC VDDH state %lu\n",
-		"Write '0' to toggle state of DCDC REG0\n",
+		"DCDC VDDH state %d\n"
+		"Write '0' to toggle state of DCDC REG0\n"
 		"Write '1' to toggle state of DCDC REG1",
 		nrf_power_dcdcen_vddh_get(NRF_POWER));
 #endif /* NRF_POWER_HAS_DCDCEN_VDDH */
 
 #if NRF_POWER_HAS_DCDCEN
 	shell_print(shell,
-		"DCDC state %lu\n",
+		"DCDC state %d\n"
 		"Write '1' or '0' to toggle",
 		nrf_power_dcdcen_get(NRF_POWER));
 #endif /* NRF_POWER_HAS_DCDCEN */
@@ -470,7 +471,7 @@ static int cmd_print(const struct shell *shell, size_t argc, char **argv)
 
 	default:
 		shell_print(shell,
-			    "Data rate unknown or deprecated: %lu\n\r",
+			    "Data rate unknown or deprecated: %d\n\r",
 			    config.mode);
 		break;
 	}
@@ -656,10 +657,10 @@ static int cmd_print(const struct shell *shell, size_t argc, char **argv)
 	}
 
 	shell_print(shell,
-		"Start Channel: %lu\n"
-		"End Channel: %lu\n"
-		"Time on each channel: %lu ms\n"
-		"Duty cycle: %lu percent\n",
+		"Start Channel: %hhu\n"
+		"End Channel: %hhu\n"
+		"Time on each channel: %u ms\n"
+		"Duty cycle: %u percent\n",
 		config.channel_start,
 		config.channel_end,
 		config.delay_ms,
@@ -677,10 +678,10 @@ static int cmd_rx_sweep_start(const struct shell *shell, size_t argc,
 	test_config.params.rx_sweep.channel_start = config.channel_start;
 	test_config.params.rx_sweep.channel_end = config.channel_end;
 	test_config.params.rx_sweep.delay_ms = config.delay_ms;
-#if CONFIG_NRF21540_FEM
-	test_config.nrf21540.active_delay = config.nrf21540.active_delay;
-	test_config.nrf21540.gain = config.nrf21540.gain;
-#endif
+#if CONFIG_FEM
+	test_config.fem.ramp_up_time = config.fem.ramp_up_time;
+	test_config.fem.gain = config.fem.gain;
+#endif /* CONFIG_FEM */
 
 	radio_test_start(&test_config);
 
@@ -700,10 +701,10 @@ static int cmd_tx_sweep_start(const struct shell *shell, size_t argc,
 	test_config.params.tx_sweep.channel_end = config.channel_end;
 	test_config.params.tx_sweep.delay_ms = config.delay_ms;
 	test_config.params.tx_sweep.txpower = config.txpower;
-#if CONFIG_NRF21540_FEM
-	test_config.nrf21540.active_delay = config.nrf21540.active_delay;
-	test_config.nrf21540.gain = config.nrf21540.gain;
-#endif
+#if CONFIG_FEM
+	test_config.fem.ramp_up_time = config.fem.ramp_up_time;
+	test_config.fem.gain = config.fem.gain;
+#endif /* CONFIG_FEM */
 
 	radio_test_start(&test_config);
 
@@ -729,10 +730,10 @@ static int cmd_rx_start(const struct shell *shell, size_t argc, char **argv)
 	test_config.mode = config.mode;
 	test_config.params.rx.channel = config.channel_start;
 	test_config.params.rx.pattern = config.tx_pattern;
-#if CONFIG_NRF21540_FEM
-	test_config.nrf21540.active_delay = config.nrf21540.active_delay;
-	test_config.nrf21540.gain = config.nrf21540.gain;
-#endif
+#if CONFIG_FEM
+	test_config.fem.ramp_up_time = config.fem.ramp_up_time;
+	test_config.fem.gain = config.fem.gain;
+#endif /* CONFIG_FEM */
 
 	radio_test_start(&test_config);
 
@@ -1079,8 +1080,8 @@ static int cmd_print_payload(const struct shell *shell, size_t argc,
 	return 0;
 }
 
-#if CONFIG_NRF21540_FEM
-static int cmd_nrf21540(const struct shell *shell, size_t argc, char **argv)
+#if CONFIG_FEM
+static int cmd_fem(const struct shell *shell, size_t argc, char **argv)
 {
 	if (argc == 1) {
 		shell_help(shell);
@@ -1100,8 +1101,9 @@ static int cmd_nrf21540(const struct shell *shell, size_t argc, char **argv)
 	return 0;
 }
 
-static int cmd_nrf21540_gain_set(const struct shell *shell, size_t argc,
-				 char **argv)
+#if !CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC
+static int cmd_fem_gain_set(const struct shell *shell, size_t argc,
+			    char **argv)
 {
 	uint32_t gain;
 
@@ -1117,21 +1119,16 @@ static int cmd_nrf21540_gain_set(const struct shell *shell, size_t argc,
 
 	gain = atoi(argv[1]);
 
-	if (gain > NRF21540_TX_GAIN_Max) {
-		shell_error(shell, "%s:  Output power must be between 0 and 31",
-			    argv[0]);
-		return -EINVAL;
-	}
+	config.fem.gain = gain;
 
-	config.nrf21540.gain = gain;
-
-	shell_print(shell, "nRF21540 Tx gain set to %d", gain);
+	shell_print(shell, "Front-end module (FEM) Tx gain set to %d", gain);
 
 	return 0;
 }
+#endif /* !CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC */
 
-static int cmd_nrf21540_antenna_select(const struct shell *shell, size_t argc,
-				       char **argv)
+static int cmd_fem_antenna_select(const struct shell *shell, size_t argc,
+				  char **argv)
 {
 	if (argc == 1) {
 		shell_help(shell);
@@ -1151,26 +1148,25 @@ static int cmd_nrf21540_antenna_select(const struct shell *shell, size_t argc,
 	return 0;
 }
 
-static int cmd_nrf21540_antenna_1(const struct shell *shell, size_t argc,
-				  char **argv)
+static int cmd_fem_antenna_1(const struct shell *shell, size_t argc,
+			     char **argv)
 {
 	shell_print(shell, "ANT1 enabled, ANT2 disabled");
 
-	return nrf21540_antenna_select(NRF21540_ANT1);
+	return fem_antenna_select(FEM_ANTENNA_1);
 }
 
-static int cmd_nrf21540_antenna_2(const struct shell *shell, size_t argc,
-				  char **argv)
+static int cmd_fem_antenna_2(const struct shell *shell, size_t argc,
+			     char **argv)
 {
 	shell_print(shell, "ANT1 disabled, ANT2 enabled");
 
-	return nrf21540_antenna_select(NRF21540_ANT2);
+	return fem_antenna_select(FEM_ANTENNA_2);
 }
 
-static int cmd_nrf21540_active_delay_set(const struct shell *shell, size_t argc,
-					 char **argv)
+static int cmd_fem_ramp_up_set(const struct shell *shell, size_t argc, char **argv)
 {
-	uint32_t delay;
+	uint32_t ramp_up_time;
 
 	if (argc == 1) {
 		shell_help(shell);
@@ -1182,15 +1178,15 @@ static int cmd_nrf21540_active_delay_set(const struct shell *shell, size_t argc,
 		return -EINVAL;
 	}
 
-	delay = atoi(argv[1]);
+	ramp_up_time = atoi(argv[1]);
 
-	config.nrf21540.active_delay = delay;
+	config.fem.ramp_up_time = ramp_up_time;
 
-	shell_print(shell, "nRF21540 activation delay set to %d us", delay);
+	shell_print(shell, "Front-end module (FEM) radio rump-up time set to %d us", ramp_up_time);
 
 	return 0;
 }
-#endif /* CONFIG_NRF21540_FEM */
+#endif /* CONFIG_FEM */
 
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_output_power,
 #if defined(RADIO_TXPOWER_TXPOWER_Pos8dBm)
@@ -1256,40 +1252,70 @@ SHELL_STATIC_SUBCMD_SET_CREATE(sub_transmit_pattern,
 	SHELL_SUBCMD_SET_END
 );
 
-#if CONFIG_NRF21540_FEM
-SHELL_STATIC_SUBCMD_SET_CREATE(sub_nrf21540_antenna,
+#if CONFIG_FEM
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_fem_antenna,
 	SHELL_CMD(ant_1, NULL,
 		  "ANT1 enabled, ANT2 disabled.",
-		  cmd_nrf21540_antenna_1),
+		  cmd_fem_antenna_1),
 	SHELL_CMD(ant_2, NULL,
 		  "ANT1 disabled, ANT2 enabled",
-		  cmd_nrf21540_antenna_2),
+		  cmd_fem_antenna_2),
 	SHELL_SUBCMD_SET_END
 );
 
-SHELL_STATIC_SUBCMD_SET_CREATE(sub_nrf21540,
+SHELL_STATIC_SUBCMD_SET_CREATE(sub_fem,
+#if !CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC
 	SHELL_CMD(tx_gain, NULL,
-		  "Set the nRF21540 Front-End-Module Tx gain in an arbitrary units <gain>",
-		  cmd_nrf21540_gain_set),
-	SHELL_CMD(antenna, &sub_nrf21540_antenna,
-		  "Select the nRF21540 Front-End-Module antenna <sub_cmd>",
-		  cmd_nrf21540_antenna_select),
-	SHELL_CMD(active_delay, NULL,
-		  "Set the nRF21540 Front-End-Module activation delay <time us>",
-		  cmd_nrf21540_active_delay_set),
+		  "Set the front-end module (FEM) Tx gain in an arbitrary units <gain>",
+		  cmd_fem_gain_set),
+#endif /* !CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC */
+	SHELL_CMD(antenna, &sub_fem_antenna,
+		  "Select the front-end module (FEM) antenna <sub_cmd>",
+		  cmd_fem_antenna_select),
+	SHELL_CMD(ramp_up_time, NULL,
+		  "Set the front-end module (FEM) radio ramp-up time <time us>",
+		  cmd_fem_ramp_up_set),
 	SHELL_SUBCMD_SET_END
 );
-#endif /* CONFIG_NRF21540_FEM */
+#endif /* CONFIG_FEM */
+
+#if CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC
+static int cmd_total_output_power_set(const struct shell *shell, size_t argc, char **argv)
+{
+	int power;
+
+	if (argc == 1) {
+		shell_help(shell);
+		return SHELL_CMD_HELP_PRINTED;
+	}
+
+	if (argc > 2) {
+		shell_error(shell, "%s: bad parameters count", argv[0]);
+		return -EINVAL;
+	}
+
+	power = atoi(argv[1]);
+
+	if ((power > INT8_MAX) || (power < INT8_MIN)) {
+		shell_error(shell, "%s: Out of range power value", argv[0]);
+		return -EINVAL;
+	}
+
+	config.txpower = (int8_t)power;
+
+	return 0;
+}
+#endif /* CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC */
 
 SHELL_CMD_REGISTER(start_channel, NULL,
-		   "Start the channel for the sweep or the channel for"
-		   " the constant carrier <channel>",
+		   "Start channel for the sweep or the channel for"
+		   " the constant carrier (in MHz as difference from 2400 MHz) <channel>",
 		    cmd_start_channel_set);
 SHELL_CMD_REGISTER(end_channel, NULL,
-		   "End the channel for the sweep <channel>",
+		   "End channel for the sweep (in MHz as difference from 2400 MHz) <channel>",
 		   cmd_end_channel_set);
 SHELL_CMD_REGISTER(time_on_channel, NULL,
-		   "Time on each channel (between 1 ms and 99 ms) <time>",
+		   "Time on each channel in ms (between 1 and 99) <time>",
 		   cmd_time_set);
 SHELL_CMD_REGISTER(cancel, NULL, "Cancel the sweep or the carrier",
 		   cmd_cancel);
@@ -1302,15 +1328,25 @@ SHELL_CMD_REGISTER(start_tx_modulated_carrier, NULL,
 		   cmd_tx_modulated_carrier_start);
 SHELL_CMD_REGISTER(output_power,
 		   &sub_output_power,
-		   "Output power set <sub_cmd>",
+		   "Output power set <sub_cmd>"
+		   "If front-end module is attached and automatic power control is enabled, "
+		   "this commands sets the total output power including fem gain",
 		   cmd_output_power_set);
+
+#if CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC
+SHELL_CMD_REGISTER(total_output_power, NULL,
+		  "Total output power in dBm, including gain of the attached front-end module. "
+		  "<tx power> dBm",
+		  cmd_total_output_power_set);
+#endif /* CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC */
+
 SHELL_CMD_REGISTER(transmit_pattern,
 		   &sub_transmit_pattern,
 		   "Set the transmission pattern",
 		   cmd_transmit_pattern_set);
 SHELL_CMD_REGISTER(start_duty_cycle_modulated_tx, NULL,
 		   "Duty cycle in percent (two decimal digits, between 01 and "
-		   "99) <duty_cycle>", cmd_duty_cycle_set);
+		   "90) <duty_cycle>", cmd_duty_cycle_set);
 SHELL_CMD_REGISTER(parameters_print, NULL,
 		   "Print current delay, channel and so on",
 		   cmd_print);
@@ -1321,16 +1357,22 @@ SHELL_CMD_REGISTER(print_rx, NULL, "Print RX payload", cmd_print_payload);
 #if defined(TOGGLE_DCDC_HELP)
 SHELL_CMD_REGISTER(toggle_dcdc_state, NULL, TOGGLE_DCDC_HELP, cmd_toggle_dc);
 #endif
-#if CONFIG_NRF21540_FEM
-SHELL_CMD_REGISTER(nrf21540,
-		   &sub_nrf21540,
-		   "Set nRF21540 Front-End-Module parameters <sub_cmd>",
-		   cmd_nrf21540);
-#endif /* CONFIG_NRF21540_FEM */
+#if CONFIG_FEM
+SHELL_CMD_REGISTER(fem,
+		   &sub_fem,
+		   "Set the front-end module (FEM) parameters <sub_cmd>",
+		   cmd_fem);
+#endif /* CONFIG_FEM */
 
-static int radio_cmd_init(const struct device *dev)
+static int radio_cmd_init(void)
 {
-	ARG_UNUSED(dev);
+
+#if CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC
+	/* When front-end module is used, set output power to the front-end module
+	 * default gain.
+	 */
+	config.txpower = fem_default_tx_gain_get();
+#endif /* CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC */
 
 	return radio_test_init(&test_config);
 }

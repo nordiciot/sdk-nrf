@@ -11,6 +11,8 @@
 #ifndef AWS_FOTA_H__
 #define AWS_FOTA_H__
 
+#include <dfu/dfu_target.h>
+
 /**
  * @defgroup aws_fota AWS FOTA library
  * @{
@@ -24,7 +26,15 @@ extern "C" {
 enum aws_fota_evt_id {
 	/** AWS FOTA has started */
 	AWS_FOTA_EVT_START,
-	/** AWS FOTA complete and status reported to job document */
+	/** AWS FOTA complete and status reported to job document.
+	 *  Payload of type @ref dfu_target_image_type (image).
+	 *
+	 *  If the image parameter type is of type DFU_TARGET_IMAGE_TYPE_MCUBOOT the device needs to
+	 *  reboot to apply the new application image.
+	 *
+	 *  If the image parameter type is of type DFU_TARGET_IMAGE_TYPE_MODEM_DELTA the modem
+	 *  needs to be reinitialized to apply the new modem image.
+	 */
 	AWS_FOTA_EVT_DONE,
 	/** AWS FOTA error */
 	AWS_FOTA_EVT_ERROR,
@@ -45,6 +55,7 @@ struct aws_fota_event {
 	enum aws_fota_evt_id id;
 	union {
 		struct aws_fota_event_dl dl;
+		enum dfu_target_image_type image;
 	};
 };
 
@@ -66,7 +77,7 @@ int aws_fota_init(struct mqtt_client *const client,
 /**@brief AWS Firmware over the air mqtt event handler.
  *
  * @param client Pointer to the mqtt_client instance.
- * @param evt          Pointer to the recived mqtt_evt.
+ * @param evt          Pointer to the received mqtt_evt.
  *
  * @retval 0 If successful and the application can skip handling this event.
  * @retval 1 If successful but wants the application to handle the event.

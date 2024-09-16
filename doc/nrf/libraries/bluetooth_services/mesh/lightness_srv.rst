@@ -53,7 +53,7 @@ Light: ``uint16_t``
 
     Your application is expected to hold the state memory and provide access to the state through the :c:struct:`bt_mesh_lightness_srv_handlers` handler structure.
 
-    ..note::
+    .. note::
         If the Lightness Server is part of an xyL, CTL or HSL Server, it will publish the xyL, CTL or HSL status whenever the Light state changes.
         This is not handled automatically by the xyL, CTL or HSL Servers.
 
@@ -100,8 +100,16 @@ The Light Lightness Server stores the following information:
 
 This information is used to reestablish the correct Light level when the device powers up.
 
-If :kconfig:`CONFIG_BT_SETTINGS` is enabled, the Light Lightness Server stores all its states persistently using a configurable storage delay to stagger storing.
-See :kconfig:`CONFIG_BT_MESH_MODEL_SRV_STORE_TIMEOUT`.
+If :kconfig:option:`CONFIG_BT_SETTINGS` is enabled, the Light Lightness Server stores all its states persistently using a configurable storage delay to stagger storing.
+See :kconfig:option:`CONFIG_BT_MESH_STORE_TIMEOUT`.
+
+The Light Lightness Server can use the :ref:`emergency data storage (EMDS) <emds_readme>` together with persistent storage for the following purposes:
+
+* Extend the flash memory life expectancy.
+* Reduce the use of resources by reducing the number of writes to flash memory.
+
+If option :kconfig:option:`CONFIG_EMDS` is enabled, the Light Lightness Server continues to store the default light and light range states to the flash memory through the settings library, but the last known non-zero Light level and whether the light is on or off are stored by using the :ref:`EMDS <emds_readme>` library. The values stored by :ref:`EMDS <emds_readme>` will be lost at first boot when the :kconfig:option:`CONFIG_EMDS` is enabled.
+This split is done so the values that may change often are stored on shutdown only, while the rarely changed values are immediately stored in flash memory.
 
 API documentation
 ==================

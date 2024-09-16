@@ -9,29 +9,29 @@
 config UART_INTERRUPT_DRIVEN
 	default y if SERIAL
 
-# Asset Tracker v2 requires the default logging mode as LOG_MODE_IMMEDIATE because
-# a) LOG_MODE_DEFERRED does not print floating point numbers.
-#	 See : https://github.com/zephyrproject-rtos/zephyr/issues/18351
-# b) Using LOG2_MODE_DEFERRED results in missing logs in certain situations. Ref: NCSIDB-630
-choice LOG_MODE
-	default LOG_MODE_IMMEDIATE
-endchoice
-
-menu "Asset Tracker"
+menu "Asset Tracker v2"
 
 config ASSET_TRACKER_V2_APP_VERSION
 	string "Asset Tracker application firmware version"
 	default "0.0.0-development"
 
 config ASSET_TRACKER_V2_APP_VERSION_MAX_LEN
-	int "Maximum length of application firmware version"
+	int "Maximum length of the application firmware version"
 	default 150
 
+config ASSET_TRACKER_V2_LTO
+	bool "Enable link time optimization"
+	default y if SIZE_OPTIMIZATIONS
+	help
+	  Compile the Asset Tracker application code with link time optimization enabled. This
+	  option is only applied for the application code and not the libraries and external modules
+	  that are linked in.
+
 rsource "src/modules/Kconfig.modules_common"
-rsource "src/modules/Kconfig.app_module"
 rsource "src/modules/Kconfig.cloud_module"
+rsource "src/cloud/Kconfig.lwm2m_integration"
 rsource "src/modules/Kconfig.data_module"
-rsource "src/modules/Kconfig.gps_module"
+rsource "src/modules/Kconfig.location_module"
 rsource "src/modules/Kconfig.modem_module"
 rsource "src/modules/Kconfig.sensor_module"
 rsource "src/modules/Kconfig.ui_module"

@@ -11,7 +11,7 @@
 #define ZB_TRACE_MASK  0x00000800
 
 #include <zephyr/types.h>
-#include <ztest.h>
+#include <zephyr/ztest.h>
 #include <zboss_api.h>
 #include "log_mock.h"
 
@@ -20,7 +20,9 @@ static uint8_t test_logger_data[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
 				  11, 12, 13, 14, 15, 16, 17, 18};
 
 
-static void test_logger(void)
+ZTEST_SUITE(nrf_osif_logger_tests, NULL, NULL, NULL, NULL, NULL);
+
+ZTEST(nrf_osif_logger_tests, test_logger)
 {
 	int32_t i;
 
@@ -37,13 +39,4 @@ static void test_logger(void)
 			      test_logger_data[i],
 			      "data compare error");
 	}
-}
-
-void test_main(void)
-{
-	ztest_test_suite(nrf_osif_logger_tests,
-			 ztest_unit_test(test_logger)
-	);
-
-	ztest_run_test_suite(nrf_osif_logger_tests);
 }

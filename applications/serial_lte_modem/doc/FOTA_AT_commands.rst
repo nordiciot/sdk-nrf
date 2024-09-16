@@ -24,7 +24,7 @@ Syntax
 
 ::
 
-   AT#XFOTA=<op>,<file_url>[,<sec_tag>[,<apn>]]
+   AT#XFOTA=<op>,<file_url>[,<sec_tag>[,<pdn_id>]]
 
 * The ``<op>`` parameter can accept one of the following values:
 
@@ -33,7 +33,7 @@ Syntax
   * ``2`` - Start FOTA for modem delta update.
   * ``6`` - Read application image size and version (optional for application FOTA).
   * ``7`` - Read modem scratch space size and offset (optional for modem FOTA).
-  * ``8`` - Erase mcuboot secondary slot (optional for application FOTA).
+  * ``8`` - Erase MCUboot secondary slot (optional for application FOTA).
   * ``9`` - Erase modem scratch space (optional for modem FOTA).
 
 * The ``<file url>`` parameter is a string.
@@ -42,8 +42,8 @@ Syntax
   It indicates to the modem the credential of the security tag used for establishing a secure connection for downloading the image.
   It is associated with the certificate or PSK.
   Specifying the ``<sec_tag>`` is mandatory when using HTTPS.
-* The ``<apn>`` parameter is a string.
-  It represents an alternative access point name (APN), other than the default primary APN, to use for downloading.
+* The ``<pdn_id>`` parameter is an integer.
+  It represents the Packet Data Network (PDN) ID that can be used instead of the default PDN for downloading.
 
 Response syntax
 ~~~~~~~~~~~~~~~
@@ -81,8 +81,11 @@ Example
    OK
    #XFOTA: 1,0,0
    ...
-   #XFOTA: 1,4,0
+   #XFOTA:4,0
    AT#XRESET
+   OK
+   READY
+   #XFOTA: 5,0
 
    Erase previous image after FOTA
    AT#XFOTA=8
@@ -102,8 +105,22 @@ Example
    OK
    #XFOTA: 1,0,0
    ...
-   #XFOTA: 1,4,0
+   #XFOTA: 4,0
    AT#XRESET
+   OK
+   READY
+   #XFOTA: 5,0
+
+   Application download and activate if NSIB is enabled
+   AT#XFOTA=1,"http://remote.host/fota/slm_app_update.bin+slm_app_update.bin"
+   OK
+   #XFOTA: 1,0,0
+   ...
+   #XFOTA:4,0
+   AT#XRESET
+   OK
+   READY
+   #XFOTA: 5,0
 
 Unsolicited notification
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -112,7 +129,7 @@ Unsolicited notification
 
    #XFOTA: <fota_stage>,<fota_status>[,<fota_info>]
 
-* The ``<fota_stage>`` value is an integer and can assume one of the following values:
+* The ``<fota_stage>`` value is an integer and can return one of the following values:
 
   * ``0`` - Init
   * ``1`` - Download
@@ -121,7 +138,7 @@ Unsolicited notification
   * ``4`` - Downloaded, to be activated
   * ``5`` - Complete
 
-* The ``<fota_status>`` value is an integer and can assume one of the following values:
+* The ``<fota_status>`` value is an integer and can return one of the following values:
 
   * ``0`` - OK
   * ``1`` - Error
@@ -129,7 +146,7 @@ Unsolicited notification
   * ``3`` - Reverted (application FOTA only)
 
 * The ``<fota_info>`` value is an integer.
-  Its value can have different meanings based on the values assumed by ``<fota_stage>`` and ``<fota_status>``.
+  Its value can have different meanings based on the values returned by ``<fota_stage>`` and ``<fota_status>``.
   See the following table:
 
   +-------------------------+----------------------------+-------------------------------------------------------------------------------+

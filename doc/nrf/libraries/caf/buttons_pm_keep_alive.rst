@@ -15,15 +15,13 @@ Configuration
 
 To use the module, you must enable the following Kconfig options:
 
-* :kconfig:`CONFIG_CAF_BUTTONS_PM_KEEP_ALIVE` - This option enables the |buttons_pm_keep_alive|.
-  It is enabled by default if :kconfig:`CONFIG_CAF_POWER_MANAGER` and :kconfig:`CONFIG_CAF_BUTTONS` are enabled.
-* :kconfig:`CONFIG_CAF_BUTTONS` - This option enables the :ref:`CAF buttons module <caf_buttons>`.
-* :kconfig:`CONFIG_CAF_POWER_MANAGER` - This option enables the :ref:`CAF power manager module <caf_power_manager>` and it is required by :kconfig:`CONFIG_CAF_BUTTONS_PM_KEEP_ALIVE`.
+* :kconfig:option:`CONFIG_CAF_BUTTONS_PM_KEEP_ALIVE` - This option enables the |buttons_pm_keep_alive|.
+  It is enabled by default if :kconfig:option:`CONFIG_CAF_POWER_MANAGER` and :kconfig:option:`CONFIG_CAF_BUTTONS` are enabled.
+* :kconfig:option:`CONFIG_CAF_BUTTONS` - This option enables the :ref:`CAF buttons module <caf_buttons>`.
+* :kconfig:option:`CONFIG_CAF_POWER_MANAGER` - This option enables the :ref:`CAF power manager module <caf_power_manager>` and it is required by :kconfig:option:`CONFIG_CAF_BUTTONS_PM_KEEP_ALIVE`.
 
 Implementation details
 **********************
 
 The module reacts to :c:struct:`button_event` and generates :c:struct:`keep_alive_event` for the CAF power manager if any configured button is pressed.
 See :ref:`CAF buttons module <caf_buttons>` documentation page for information about how to configure buttons and the :ref:`CAF power manager module <caf_power_manager>` documentation page for more information about the power state management.
-
-.. |buttons_pm_keep_alive| replace:: Power manager keep alive module for buttons

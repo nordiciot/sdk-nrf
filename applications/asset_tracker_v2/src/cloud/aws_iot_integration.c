@@ -1,11 +1,17 @@
+/*
+ * Copyright (c) 2022 Nordic Semiconductor ASA
+ *
+ * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+ */
+
 #include "cloud/cloud_wrapper.h"
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <net/aws_iot.h>
-#include <modem/at_cmd.h>
+#include <hw_id.h>
 
 #define MODULE aws_iot_integration
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_CLOUD_INTEGRATION_LOG_LEVEL);
 
 #if !defined(CONFIG_CLOUD_CLIENT_ID_USE_CUSTOM)
@@ -22,8 +28,8 @@ LOG_MODULE_REGISTER(MODULE, CONFIG_CLOUD_INTEGRATION_LOG_LEVEL);
 #define BATCH_TOPIC_LEN (AWS_CLOUD_CLIENT_ID_LEN + 6)
 #define MESSAGES_TOPIC "%s/messages"
 #define MESSAGES_TOPIC_LEN (AWS_CLOUD_CLIENT_ID_LEN + 9)
-#define NEIGHBOR_CELLS_TOPIC "%s/ncellmeas"
-#define NEIGHBOR_CELLS_TOPIC_LEN (AWS_CLOUD_CLIENT_ID_LEN + 10)
+#define GROUND_FIX_TOPIC "%s/ground-fix"
+#define GROUND_FIX_TOPIC_LEN (AWS_CLOUD_CLIENT_ID_LEN + 11)
 #define AGPS_REQUEST_TOPIC "%s/agps/get"
 #define AGPS_REQUEST_TOPIC_LEN (AWS_CLOUD_CLIENT_ID_LEN + 9)
 #define AGPS_RESPONSE_TOPIC "%s/agps"
@@ -61,7 +67,7 @@ static char client_id_buf[AWS_CLOUD_CLIENT_ID_LEN + 1];
 static char batch_topic[BATCH_TOPIC_LEN + 1];
 static char cfg_topic[CFG_TOPIC_LEN + 1];
 static char messages_topic[MESSAGES_TOPIC_LEN + 1];
-static char neighbor_cells_topic[NEIGHBOR_CELLS_TOPIC_LEN + 1];
+static char ground_fix_topic[GROUND_FIX_TOPIC_LEN + 1];
 static char agps_request_topic[AGPS_REQUEST_TOPIC_LEN + 1];
 static char agps_response_topic[AGPS_RESPONSE_TOPIC_LEN + 1];
 static char pgps_request_topic[PGPS_REQUEST_TOPIC_LEN + 1];
@@ -106,14 +112,14 @@ static int populate_app_endpoint_topics(void)
 	pub_topics[APP_PUB_TOPIC_IDX_UI].str = messages_topic;
 	pub_topics[APP_PUB_TOPIC_IDX_UI].len = MESSAGES_TOPIC_LEN;
 
-	err = snprintf(neighbor_cells_topic, sizeof(neighbor_cells_topic),
-		       NEIGHBOR_CELLS_TOPIC, client_id_buf);
-	if (err != NEIGHBOR_CELLS_TOPIC_LEN) {
+	err = snprintf(ground_fix_topic, sizeof(ground_fix_topic),
+		       GROUND_FIX_TOPIC, client_id_buf);
+	if (err != GROUND_FIX_TOPIC_LEN) {
 		return -ENOMEM;
 	}
 
-	pub_topics[APP_PUB_TOPIC_IDX_NEIGHBOR_CELLS].str = neighbor_cells_topic;
-	pub_topics[APP_PUB_TOPIC_IDX_NEIGHBOR_CELLS].len = NEIGHBOR_CELLS_TOPIC_LEN;
+	pub_topics[APP_PUB_TOPIC_IDX_NEIGHBOR_CELLS].str = ground_fix_topic;
+	pub_topics[APP_PUB_TOPIC_IDX_NEIGHBOR_CELLS].len = GROUND_FIX_TOPIC_LEN;
 
 	err = snprintf(agps_request_topic, sizeof(agps_request_topic),
 		       AGPS_REQUEST_TOPIC, client_id_buf);
@@ -231,6 +237,17 @@ void aws_iot_event_handler(const struct aws_iot_evt *const evt)
 		LOG_DBG("AWS_IOT_EVT_DATA_RECEIVED");
 		incoming_message_handle((struct aws_iot_evt *)evt);
 		break;
+	case AWS_IOT_EVT_PUBACK:
+		LOG_DBG("AWS_IOT_EVT_PUBACK");
+		cloud_wrap_evt.type = CLOUD_WRAP_EVT_DATA_ACK;
+		cloud_wrap_evt.message_id = evt->data.message_id;
+		notify = true;
+		break;
+	case AWS_IOT_EVT_PINGRESP:
+		LOG_DBG("AWS_IOT_EVT_PINGRESP");
+		cloud_wrap_evt.type = CLOUD_WRAP_EVT_PING_ACK;
+		notify = true;
+		break;
 	case AWS_IOT_EVT_FOTA_START:
 		LOG_DBG("AWS_IOT_EVT_FOTA_START");
 		cloud_wrap_evt.type = CLOUD_WRAP_EVT_FOTA_START;
@@ -280,20 +297,21 @@ int cloud_wrap_init(cloud_wrap_evt_handler_t event_handler)
 	int err;
 
 #if !defined(CONFIG_CLOUD_CLIENT_ID_USE_CUSTOM)
-	char imei_buf[20];
+	char hw_id_buf[HW_ID_LEN];
 
-	/* Retrieve device IMEI from modem. */
-	err = at_cmd_write("AT+CGSN", imei_buf, sizeof(imei_buf), NULL);
+	err = hw_id_get(hw_id_buf, ARRAY_SIZE(hw_id_buf));
+
 	if (err) {
-		LOG_ERR("Not able to retrieve device IMEI from modem");
+		LOG_ERR("Failed to retrieve device ID");
 		return err;
 	}
 
-	/* Set null character at the end of the device IMEI. */
-	imei_buf[AWS_CLOUD_CLIENT_ID_LEN] = 0;
+	strncpy(client_id_buf, hw_id_buf, sizeof(client_id_buf) - 1);
 
-	strncpy(client_id_buf, imei_buf, sizeof(client_id_buf) - 1);
-
+	/* Explicitly null terminate client_id_buf to be sure that we carry a
+	 * null terminated buffer after strncpy().
+	 */
+	client_id_buf[sizeof(client_id_buf) - 1] = '\0';
 #else
 	snprintf(client_id_buf, sizeof(client_id_buf), "%s",
 		 CONFIG_CLOUD_CLIENT_ID);
@@ -320,7 +338,7 @@ int cloud_wrap_init(cloud_wrap_evt_handler_t event_handler)
 	LOG_DBG(" The Asset Tracker v2 has started");
 	LOG_DBG(" Version:     %s",
 		CONFIG_ASSET_TRACKER_V2_APP_VERSION);
-	LOG_DBG(" Client ID:   %s", log_strdup(client_id_buf));
+	LOG_DBG(" Client ID:   %s", client_id_buf);
 	LOG_DBG(" Cloud:       %s", "AWS IoT");
 	LOG_DBG(" Endpoint:    %s",
 		CONFIG_AWS_IOT_BROKER_HOST_NAME);
@@ -357,14 +375,15 @@ int cloud_wrap_disconnect(void)
 	return 0;
 }
 
-int cloud_wrap_state_get(void)
+int cloud_wrap_state_get(bool ack, uint32_t id)
 {
 	int err;
 
 	struct aws_iot_data msg = {
 		.ptr = REQUEST_SHADOW_DOCUMENT_STRING,
 		.len = sizeof(REQUEST_SHADOW_DOCUMENT_STRING) - 1,
-		.qos = MQTT_QOS_0_AT_MOST_ONCE,
+		.message_id = id,
+		.qos = ack ? MQTT_QOS_1_AT_LEAST_ONCE : MQTT_QOS_0_AT_MOST_ONCE,
 		.topic.type = AWS_IOT_SHADOW_TOPIC_GET
 	};
 
@@ -377,14 +396,15 @@ int cloud_wrap_state_get(void)
 	return 0;
 }
 
-int cloud_wrap_state_send(char *buf, size_t len)
+int cloud_wrap_state_send(char *buf, size_t len, bool ack, uint32_t id)
 {
 	int err;
 
 	struct aws_iot_data msg = {
 		.ptr = buf,
 		.len = len,
-		.qos = MQTT_QOS_0_AT_MOST_ONCE,
+		.message_id = id,
+		.qos = ack ? MQTT_QOS_1_AT_LEAST_ONCE : MQTT_QOS_0_AT_MOST_ONCE,
 		.topic.type = AWS_IOT_SHADOW_TOPIC_UPDATE,
 	};
 
@@ -397,14 +417,17 @@ int cloud_wrap_state_send(char *buf, size_t len)
 	return 0;
 }
 
-int cloud_wrap_data_send(char *buf, size_t len)
+int cloud_wrap_data_send(char *buf, size_t len, bool ack, uint32_t id,
+			 const struct lwm2m_obj_path path_list[])
 {
-	int err;
+	ARG_UNUSED(path_list);
 
+	int err;
 	struct aws_iot_data msg = {
 		.ptr = buf,
 		.len = len,
-		.qos = MQTT_QOS_0_AT_MOST_ONCE,
+		.message_id = id,
+		.qos = ack ? MQTT_QOS_1_AT_LEAST_ONCE : MQTT_QOS_0_AT_MOST_ONCE,
 		.topic.type = AWS_IOT_SHADOW_TOPIC_UPDATE,
 	};
 
@@ -417,14 +440,15 @@ int cloud_wrap_data_send(char *buf, size_t len)
 	return 0;
 }
 
-int cloud_wrap_batch_send(char *buf, size_t len)
+int cloud_wrap_batch_send(char *buf, size_t len, bool ack, uint32_t id)
 {
 	int err;
 
 	struct aws_iot_data msg = {
 		.ptr = buf,
 		.len = len,
-		.qos = MQTT_QOS_0_AT_MOST_ONCE,
+		.message_id = id,
+		.qos = ack ? MQTT_QOS_1_AT_LEAST_ONCE : MQTT_QOS_0_AT_MOST_ONCE,
 		/* <imei>/batch */
 		.topic = pub_topics[APP_PUB_TOPIC_IDX_BATCH]
 	};
@@ -438,14 +462,17 @@ int cloud_wrap_batch_send(char *buf, size_t len)
 	return 0;
 }
 
-int cloud_wrap_ui_send(char *buf, size_t len)
+int cloud_wrap_ui_send(char *buf, size_t len, bool ack, uint32_t id,
+		       const struct lwm2m_obj_path path_list[])
 {
-	int err;
+	ARG_UNUSED(path_list);
 
+	int err;
 	struct aws_iot_data msg = {
 		.ptr = buf,
 		.len = len,
-		.qos = MQTT_QOS_0_AT_MOST_ONCE,
+		.message_id = id,
+		.qos = ack ? MQTT_QOS_1_AT_LEAST_ONCE : MQTT_QOS_0_AT_MOST_ONCE,
 		/* <imei>/messages */
 		.topic = pub_topics[APP_PUB_TOPIC_IDX_UI]
 	};
@@ -459,13 +486,14 @@ int cloud_wrap_ui_send(char *buf, size_t len)
 	return 0;
 }
 
-int cloud_wrap_neighbor_cells_send(char *buf, size_t len)
+int cloud_wrap_cloud_location_send(char *buf, size_t len, bool ack, uint32_t id)
 {
 	int err;
 	struct aws_iot_data msg = {
 		.ptr = buf,
 		.len = len,
-		.qos = MQTT_QOS_0_AT_MOST_ONCE,
+		.message_id = id,
+		.qos = ack ? MQTT_QOS_1_AT_LEAST_ONCE : MQTT_QOS_0_AT_MOST_ONCE,
 		/* <imei>/ncellmeas */
 		.topic = pub_topics[APP_PUB_TOPIC_IDX_NEIGHBOR_CELLS]
 	};
@@ -479,13 +507,14 @@ int cloud_wrap_neighbor_cells_send(char *buf, size_t len)
 	return 0;
 }
 
-int cloud_wrap_agps_request_send(char *buf, size_t len)
+int cloud_wrap_agps_request_send(char *buf, size_t len, bool ack, uint32_t id)
 {
 	int err;
 	struct aws_iot_data msg = {
 		.ptr = buf,
 		.len = len,
-		.qos = MQTT_QOS_0_AT_MOST_ONCE,
+		.message_id = id,
+		.qos = ack ? MQTT_QOS_1_AT_LEAST_ONCE : MQTT_QOS_0_AT_MOST_ONCE,
 		/* <imei>/agps/get */
 		.topic = pub_topics[APP_PUB_TOPIC_IDX_AGPS]
 	};
@@ -499,13 +528,14 @@ int cloud_wrap_agps_request_send(char *buf, size_t len)
 	return 0;
 }
 
-int cloud_wrap_pgps_request_send(char *buf, size_t len)
+int cloud_wrap_pgps_request_send(char *buf, size_t len, bool ack, uint32_t id)
 {
 	int err;
 	struct aws_iot_data msg = {
 		.ptr = buf,
 		.len = len,
-		.qos = MQTT_QOS_0_AT_MOST_ONCE,
+		.message_id = id,
+		.qos = ack ? MQTT_QOS_1_AT_LEAST_ONCE : MQTT_QOS_0_AT_MOST_ONCE,
 		/* <imei>/pgps/get */
 		.topic = pub_topics[APP_PUB_TOPIC_IDX_PGPS]
 	};
@@ -519,13 +549,14 @@ int cloud_wrap_pgps_request_send(char *buf, size_t len)
 	return 0;
 }
 
-int cloud_wrap_memfault_data_send(char *buf, size_t len)
+int cloud_wrap_memfault_data_send(char *buf, size_t len, bool ack, uint32_t id)
 {
 	int err;
 	struct aws_iot_data msg = {
 		.ptr = buf,
 		.len = len,
-		.qos = MQTT_QOS_0_AT_MOST_ONCE,
+		.message_id = id,
+		.qos = ack ? MQTT_QOS_1_AT_LEAST_ONCE : MQTT_QOS_0_AT_MOST_ONCE,
 		/* <imei>/memfault */
 		.topic = pub_topics[APP_PUB_TOPIC_IDX_MEMFAULT]
 	};

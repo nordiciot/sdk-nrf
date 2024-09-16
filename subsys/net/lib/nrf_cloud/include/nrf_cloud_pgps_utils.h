@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 
 #ifndef NRF_CLOUD_PGPS_UTILS_H_
 #define NRF_CLOUD_PGPS_UTILS_H_
@@ -46,6 +46,12 @@ struct nrf_cloud_pgps_header;
 
 typedef int (*npgps_buffer_handler_t)(uint8_t *buf, size_t len);
 
+typedef void (*npgps_eot_handler_t)(int err);
+
+/* access control functions */
+int npgps_download_lock(void);
+void npgps_download_unlock(void);
+
 /* settings functions */
 int npgps_save_header(struct nrf_cloud_pgps_header *header);
 const struct nrf_cloud_pgps_header *npgps_get_saved_header(void);
@@ -75,9 +81,9 @@ int npgps_pointer_to_block(uint8_t *p);
 void *npgps_block_to_pointer(int block);
 
 /* download functions */
-int npgps_download_init(npgps_buffer_handler_t handler);
+int npgps_download_init(npgps_buffer_handler_t buf_handler, npgps_eot_handler_t eot_handler);
 int npgps_download_start(const char *host, const char *file, int sec_tag,
-			 const char *apn, size_t fragment_size);
+			 uint8_t pdn_id, size_t fragment_size);
 
 
 #ifdef __cplusplus

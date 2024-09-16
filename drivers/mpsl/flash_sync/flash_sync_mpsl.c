@@ -14,7 +14,7 @@
 #include "soc_flash_nrf.h"
 
 #define LOG_LEVEL CONFIG_FLASH_LOG_LEVEL
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(flash_sync_mpsl);
 
 /* The request length specified by the upper layers is only time required to do
@@ -26,6 +26,9 @@ LOG_MODULE_REGISTER(flash_sync_mpsl);
 #else
 #define TIMESLOT_LENGTH_SLACK_US 100
 #endif
+
+/* After this many us's, start using higher priority when requesting. */
+#define TIMESLOT_TIMEOUT_PRIORITY_NORMAL_US 30000
 
 struct mpsl_context {
 	/* This semaphore is taken with a timeout when the flash operation starts. */
@@ -61,7 +64,8 @@ static void reschedule_next_timeslot(void)
 {
 	_context.timeslot_request.params.earliest.priority =
 		MPSL_TIMESLOT_PRIORITY_HIGH;
-
+	_context.timeslot_request.params.earliest.timeout_us =
+		MPSL_TIMESLOT_EARLIEST_TIMEOUT_MAX_US;
 	int32_t ret = mpsl_timeslot_request(_context.session_id,
 					    &_context.timeslot_request);
 
@@ -91,6 +95,8 @@ timeslot_callback(mpsl_timeslot_session_id_t session_id, uint32_t signal)
 			 * timeslot. */
 			_context.timeslot_request.params.earliest.priority =
 				MPSL_TIMESLOT_PRIORITY_NORMAL;
+			_context.timeslot_request.params.earliest.timeout_us =
+				TIMESLOT_TIMEOUT_PRIORITY_NORMAL_US;
 
 			_context.return_param.callback_action =
 				MPSL_TIMESLOT_SIGNAL_ACTION_REQUEST;
@@ -160,7 +166,7 @@ int nrf_flash_sync_exe(struct flash_op_desc *op_desc)
 	req->params.earliest.priority = MPSL_TIMESLOT_PRIORITY_NORMAL;
 	req->params.earliest.length_us =
 		_context.request_length_us + TIMESLOT_LENGTH_SLACK_US;
-	req->params.earliest.timeout_us = MPSL_TIMESLOT_EARLIEST_TIMEOUT_MAX_US;
+	req->params.earliest.timeout_us = TIMESLOT_TIMEOUT_PRIORITY_NORMAL_US;
 
 	_context.op_desc = op_desc;
 	_context.status = -ETIMEDOUT;

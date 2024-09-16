@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/bluetooth.h>
 #include <bluetooth/mesh/models.h>
 
 /* Private Mesh Model headers */
@@ -18,15 +18,13 @@
 #include <lightness_internal.h>
 #include <light_ctrl_internal.h>
 
-#define BT_DBG_ENABLED IS_ENABLED(CONFIG_BT_MESH_DEBUG)
-#define LOG_MODULE_NAME bttester_mmdl
-#include "common/log.h"
+#define LOG_LEVEL CONFIG_BT_MESH_LOG_LEVEL
+#include "zephyr/logging/log.h"
+LOG_MODULE_REGISTER(bttester_mmdl);
 
 #include "model_handler.h"
 #include "bttester.h"
 
-#define BT_MESH_APP_SEG_SDU_MAX 12
-#define BT_MESH_TX_SDU_MAX (CONFIG_BT_MESH_TX_SEG_MAX * BT_MESH_APP_SEG_SDU_MAX)
 #define CONTROLLER_INDEX 0
 
 struct bt_mesh_onoff_cli onoff_cli = BT_MESH_ONOFF_CLI_INIT(NULL);
@@ -1888,7 +1886,7 @@ static void sensor_setting_set(uint8_t *data, uint16_t len)
 	struct mesh_sensor_setting_set *cmd = (void *)data;
 	const struct bt_mesh_sensor_type *sensor;
 	const struct bt_mesh_sensor_type *setting;
-	struct sensor_value value;
+	struct sensor_value value[CONFIG_BT_MESH_SENSOR_CHANNELS_MAX];
 	struct bt_mesh_sensor_setting_status rsp;
 	struct model_data *model_bound;
 	struct bt_mesh_msg_ctx ctx = {
@@ -1931,14 +1929,15 @@ static void sensor_setting_set(uint8_t *data, uint16_t len)
 		goto fail;
 	}
 
-	memcpy(&value, cmd->data, cmd->len);
+	memset(value, 0, sizeof(value));
+	memcpy(value, cmd->data, cmd->len);
 
 	if (cmd->ack) {
 		err = bt_mesh_sensor_cli_setting_set(&sensor_cli, &ctx, sensor,
-						     setting, &value, &rsp);
+						     setting, value, &rsp);
 	} else {
 		err = bt_mesh_sensor_cli_setting_set_unack(
-			&sensor_cli, &ctx, sensor, setting, &value);
+			&sensor_cli, &ctx, sensor, setting, value);
 	}
 
 	if (err) {
@@ -1950,6 +1949,16 @@ fail:
 	tester_rsp(BTP_SERVICE_ID_MMDL, MMDL_SENSOR_SETTING_SET,
 		   CONTROLLER_INDEX,
 		   err ? BTP_STATUS_FAILED : BTP_STATUS_SUCCESS);
+}
+
+struct sensor_value val_to_sensorval(int val)
+{
+	struct sensor_value out;
+
+	out.val1 = val;
+	out.val2 = (val - out.val1) * 1000000;
+
+	return out;
 }
 
 static void sensor_column_get(uint8_t *data, uint16_t len)
@@ -1991,10 +2000,15 @@ static void sensor_column_get(uint8_t *data, uint16_t len)
 	net_buf_simple_init_with_data(buf, (void *)&cmd->data, cmd->len);
 
 	col_format = bt_mesh_sensor_column_format_get(sensor);
-	err = sensor_ch_decode(buf, col_format, &column.start);
-	if (err) {
-		LOG_ERR("err=%d", err);
-		goto fail;
+	if (col_format == NULL) {
+		column.start = val_to_sensorval(cmd->data[0]);
+	} else {
+		err = sensor_ch_decode(buf, col_format, &column.start);
+
+		if (err) {
+			LOG_ERR("err=%d", err);
+			goto fail;
+		}
 	}
 
 	err = bt_mesh_sensor_cli_series_entry_get(&sensor_cli, &ctx, sensor,
@@ -2005,6 +2019,11 @@ static void sensor_column_get(uint8_t *data, uint16_t len)
 	}
 	net_buf_simple_init(buf_rsp, 0);
 	net_buf_simple_add_le16(buf_rsp, sensor->id);
+
+	if (col_format == NULL) {
+		sensor_value_encode(buf_rsp, sensor, rsp.value);
+		goto send;
+	}
 
 	LOG_ERR("err=%d", err);
 	err = sensor_ch_encode(buf_rsp, col_format, &rsp.column.start);
@@ -2027,7 +2046,7 @@ static void sensor_column_get(uint8_t *data, uint16_t len)
 		LOG_ERR("err=%d", err);
 		goto fail;
 	}
-
+send:
 	tester_send(BTP_SERVICE_ID_MMDL, MMDL_SENSOR_COLUMN_GET,
 		    CONTROLLER_INDEX, buf_rsp->data, buf_rsp->len);
 	return;
@@ -2044,7 +2063,7 @@ static void sensor_series_get(uint8_t *data, uint16_t len)
 	struct net_buf_simple *buf_rsp = NET_BUF_SIMPLE(BT_MESH_TX_SDU_MAX);
 	const struct bt_mesh_sensor_type *sensor;
 	struct bt_mesh_sensor_column range;
-	struct bt_mesh_sensor_series_entry rsp[5];
+	struct bt_mesh_sensor_series_entry rsp[10];
 	struct sensor_value width;
 	uint32_t count = ARRAY_SIZE(rsp);
 	const struct bt_mesh_sensor_format *col_format;
@@ -2078,15 +2097,17 @@ static void sensor_series_get(uint8_t *data, uint16_t len)
 	net_buf_simple_init_with_data(buf, (void *)&cmd->data, cmd->len);
 
 	col_format = bt_mesh_sensor_column_format_get(sensor);
-	err = sensor_ch_decode(buf, col_format, &range.start);
-	if (err) {
-		goto fail;
+
+	if (col_format != NULL) {
+		err = sensor_ch_decode(buf, col_format, &range.end);
+		if (err) {
+			goto fail;
+		}
+	} else {
+		range.start.val1 = net_buf_simple_pull_u8(buf);
+		range.end.val1 = net_buf_simple_pull_u8(buf);
 	}
 
-	err = sensor_ch_decode(buf, col_format, &range.end);
-	if (err) {
-		goto fail;
-	}
 
 	err = bt_mesh_sensor_cli_series_entries_get(&sensor_cli, &ctx, sensor,
 						    &range, rsp, &count);
@@ -2096,6 +2117,13 @@ static void sensor_series_get(uint8_t *data, uint16_t len)
 	}
 
 	net_buf_simple_init(buf_rsp, 0);
+
+	if (col_format == NULL) {
+		for (i = 0; i < count; ++i) {
+			sensor_value_encode(buf_rsp, sensor, rsp[i].value);
+		}
+		goto send;
+	}
 
 	for (i = 0; i < count; ++i) {
 		err = sensor_ch_encode(buf_rsp, col_format,
@@ -2120,6 +2148,8 @@ static void sensor_series_get(uint8_t *data, uint16_t len)
 			goto fail;
 		}
 	}
+
+send:
 	net_buf_simple_add_le16(buf_rsp, sensor->id);
 	tester_send(BTP_SERVICE_ID_MMDL, MMDL_SENSOR_SERIES_GET,
 		    CONTROLLER_INDEX, buf_rsp->data, buf_rsp->len);
@@ -2133,7 +2163,7 @@ fail:
 static void time_get(uint8_t *data, uint16_t len)
 {
 	struct net_buf_simple *buf =
-		NET_BUF_SIMPLE(BT_MESH_TIME_MSG_LEN_TIME_STATUS);
+		NET_BUF_SIMPLE(BT_MESH_TIME_MSG_MAXLEN_TIME_STATUS);
 	struct bt_mesh_time_status status;
 	struct model_data *model_bound;
 	struct bt_mesh_msg_ctx ctx = {
@@ -2176,7 +2206,7 @@ static void time_set(uint8_t *data, uint16_t len)
 {
 	struct net_buf_simple *buf = NET_BUF_SIMPLE(0);
 	struct net_buf_simple *buf_rsp =
-		NET_BUF_SIMPLE(BT_MESH_TIME_MSG_LEN_TIME_STATUS);
+		NET_BUF_SIMPLE(BT_MESH_TIME_MSG_MAXLEN_TIME_STATUS);
 	struct bt_mesh_time_status set;
 	struct bt_mesh_time_status status;
 	struct model_data *model_bound;
@@ -2616,8 +2646,8 @@ static void light_lightness_linear_get(uint8_t *data, uint16_t len)
 		goto fail;
 	}
 
-	current = light_to_repr(status.current, LINEAR);
-	target = light_to_repr(status.target, LINEAR);
+	current = to_linear(status.current);
+	target = to_linear(status.target);
 
 	net_buf_simple_init(buf, 0);
 	net_buf_simple_add_le16(buf, current);
@@ -2676,8 +2706,8 @@ static void light_lightness_linear_set(uint8_t *data, uint16_t len)
 		err = lightness_cli_light_set(&lightness_cli, &ctx, LINEAR,
 					      &set, &status);
 
-		current = light_to_repr(status.current, LINEAR);
-		target = light_to_repr(status.target, LINEAR);
+		current = to_linear(status.current);
+		target = to_linear(status.target);
 
 		net_buf_simple_init(buf, 0);
 		net_buf_simple_add_le16(buf, current);

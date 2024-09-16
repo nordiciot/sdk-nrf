@@ -8,7 +8,7 @@
 #include <bluetooth/mesh/gen_lvl_srv.h>
 #include <bluetooth/mesh/gen_dtt_srv.h>
 #include <bluetooth/mesh/scene_srv.h>
-#include <sys/byteorder.h>
+#include <zephyr/sys/byteorder.h>
 #include "model_utils.h"
 
 static void encode_status(const struct bt_mesh_lvl_status *status,
@@ -325,5 +325,5 @@ int bt_mesh_lvl_srv_pub(struct bt_mesh_lvl_srv *srv,
 				 BT_MESH_LVL_MSG_MAXLEN_STATUS);
 	encode_status(status, &msg);
 
-	return model_send(srv->model, ctx, &msg);
+	return bt_mesh_msg_send(srv->model, ctx, &msg);
 }

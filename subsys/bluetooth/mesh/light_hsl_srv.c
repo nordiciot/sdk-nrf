@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <sys/byteorder.h>
+#include <zephyr/sys/byteorder.h>
 #include <bluetooth/mesh/light_hsl.h>
 #include <bluetooth/mesh/light_hsl_srv.h>
 #include <bluetooth/mesh/light_sat_srv.h>
@@ -15,9 +15,9 @@
 #include "lightness_internal.h"
 #include "model_utils.h"
 
-#define BT_DBG_ENABLED IS_ENABLED(CONFIG_BT_MESH_DEBUG_MODEL)
-#define LOG_MODULE_NAME bt_mesh_light_hsl_srv
-#include "common/log.h"
+#define LOG_LEVEL CONFIG_BT_MESH_MODEL_LOG_LEVEL
+#include "zephyr/logging/log.h"
+LOG_MODULE_REGISTER(bt_mesh_light_hsl_srv);
 
 #define HSL_STATUS_INIT(_hue, _sat, _lightness, _member)                       \
 	{                                                                      \
@@ -94,7 +94,7 @@ static int hsl_set(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 		return -EMSGSIZE;
 	}
 
-	set.l.lvl = repr_to_light(net_buf_simple_pull_le16(buf), ACTUAL);
+	set.l.lvl = from_actual(net_buf_simple_pull_le16(buf));
 	set.h.lvl = net_buf_simple_pull_le16(buf);
 	set.s.lvl = net_buf_simple_pull_le16(buf);
 
@@ -406,14 +406,13 @@ static ssize_t scene_store(struct bt_mesh_model *model, uint8_t data[])
 	struct bt_mesh_light_hsl_srv *srv = model->user_data;
 	struct bt_mesh_lightness_status status = { 0 };
 
-	if (atomic_test_bit(&srv->lightness->flags, LIGHTNESS_SRV_FLAG_EXTENDED_BY_LIGHT_CTRL)) {
+	if (atomic_test_bit(&srv->lightness->flags,
+			    LIGHTNESS_SRV_FLAG_EXTENDED_BY_LIGHT_CTRL)) {
 		return 0;
 	}
 
 	srv->lightness->handlers->light_get(srv->lightness, NULL, &status);
-	sys_put_le16(status.remaining_time ? light_to_repr(status.target, ACTUAL) :
-					     status.current,
-		     &data[0]);
+	sys_put_le16(status.remaining_time ? to_actual(status.target) : status.current, &data[0]);
 
 	return 2;
 }
@@ -424,13 +423,14 @@ static void scene_recall(struct bt_mesh_model *model, const uint8_t data[],
 {
 	struct bt_mesh_light_hsl_srv *srv = model->user_data;
 
-	if (atomic_test_bit(&srv->lightness->flags, LIGHTNESS_SRV_FLAG_EXTENDED_BY_LIGHT_CTRL)) {
+	if (atomic_test_bit(&srv->lightness->flags,
+			    LIGHTNESS_SRV_FLAG_EXTENDED_BY_LIGHT_CTRL)) {
 		return;
 	}
 
 	struct bt_mesh_lightness_status light_status = { 0 };
 	struct bt_mesh_lightness_set light_set = {
-		.lvl = repr_to_light(sys_get_le16(data), ACTUAL),
+		.lvl = from_actual(sys_get_le16(data)),
 		.transition = transition,
 	};
 
@@ -498,7 +498,7 @@ static int bt_mesh_light_hsl_srv_init(struct bt_mesh_model *model)
 		bt_mesh_model_find(bt_mesh_model_elem(model), BT_MESH_MODEL_ID_LIGHT_LIGHTNESS_SRV);
 
 	if (!lightness_srv) {
-		BT_ERR("Failed to find Lightness Server on element");
+		LOG_ERR("Failed to find Lightness Server on element");
 		return -EINVAL;
 	}
 
@@ -515,14 +515,14 @@ static int bt_mesh_light_hsl_srv_start(struct bt_mesh_model *model)
 
 	if (!srv->sat.model ||
 	    (srv->model->elem_idx > srv->sat.model->elem_idx)) {
-		BT_ERR("Light HSL srv[%d]: Sat. srv not properly initialized",
+		LOG_ERR("Light HSL srv[%d]: Sat. srv not properly initialized",
 		       srv->model->elem_idx);
 		return -EINVAL;
 	}
 
 	if (!srv->hue.model ||
 	    (srv->model->elem_idx > srv->hue.model->elem_idx)) {
-		BT_ERR("Light HSL srv[%d]: Hue srv not properly initialized",
+		LOG_ERR("Light HSL srv[%d]: Hue srv not properly initialized",
 		       srv->model->elem_idx);
 		return -EINVAL;
 	}
@@ -536,8 +536,8 @@ static int bt_mesh_light_hsl_srv_start(struct bt_mesh_model *model)
 		sat.lvl = srv->sat.dflt;
 		break;
 	case BT_MESH_ON_POWER_UP_RESTORE:
-		hue.lvl = srv->hue.last;
-		sat.lvl = srv->sat.last;
+		hue.lvl = srv->hue.transient.last;
+		sat.lvl = srv->sat.transient.last;
 		break;
 	default:
 		return -EINVAL;
@@ -591,7 +591,7 @@ static int bt_mesh_light_hsl_setup_srv_init(struct bt_mesh_model *model)
 						 BT_MESH_MODEL_ID_LIGHT_LIGHTNESS_SETUP_SRV);
 
 	if (!lightness_setup_srv) {
-		BT_ERR("Failed to find Lightness Setup Server on element");
+		LOG_ERR("Failed to find Lightness Setup Server on element");
 		return -EINVAL;
 	}
 
@@ -617,5 +617,5 @@ int bt_mesh_light_hsl_srv_pub(struct bt_mesh_light_hsl_srv *srv,
 				 BT_MESH_LIGHT_HSL_MSG_MAXLEN_STATUS);
 	hsl_status_encode(&buf, BT_MESH_LIGHT_HSL_OP_STATUS, status);
 
-	return model_send(srv->model, ctx, &buf);
+	return bt_mesh_msg_send(srv->model, ctx, &buf);
 }

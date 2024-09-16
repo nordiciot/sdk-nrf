@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
-#include <logging/log.h>
-#include <drivers/uart.h>
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/devicetree.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/drivers/uart.h>
 
 LOG_MODULE_REGISTER(app);
 
@@ -103,11 +105,11 @@ static void async(const struct device *lpuart)
 	err = uart_callback_set(lpuart, uart_callback, (void *)lpuart);
 	__ASSERT(err == 0, "Failed to set callback");
 
-	err = uart_rx_enable(lpuart, buf, BUF_SIZE, 10);
+	err = uart_rx_enable(lpuart, buf, BUF_SIZE, 10000);
 	__ASSERT(err == 0, "Failed to enable RX");
 
 	while (1) {
-		err = uart_tx(lpuart, txbuf, sizeof(txbuf), 10);
+		err = uart_tx(lpuart, txbuf, sizeof(txbuf), 10000);
 		__ASSERT(err == 0, "Failed to initiate transmission");
 
 		k_sleep(K_MSEC(500));
@@ -117,18 +119,17 @@ static void async(const struct device *lpuart)
 	}
 }
 
-void main(void)
+int main(void)
 {
-	const struct device *lpuart;
+	const struct device *lpuart = DEVICE_DT_GET(DT_NODELABEL(lpuart));
 
-	k_msleep(1000);
-
-	lpuart = device_get_binding("LPUART");
-	__ASSERT(lpuart, "Failed to get the device");
+	__ASSERT(device_is_ready(lpuart), "LPUART device not ready");
 
 	if (IS_ENABLED(CONFIG_NRF_SW_LPUART_INT_DRIVEN)) {
 		interrupt_driven(lpuart);
 	} else {
 		async(lpuart);
 	}
+
+	return 0;
 }

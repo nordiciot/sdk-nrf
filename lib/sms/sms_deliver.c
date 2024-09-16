@@ -6,9 +6,9 @@
 
 #include <string.h>
 #include <stdio.h>
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <modem/sms.h>
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 #include "sms_deliver.h"
 #include "sms_internal.h"
@@ -158,7 +158,7 @@ static void convert_number_to_str(uint8_t *number, uint8_t number_length, char *
 
 		if (number_value >= 10) {
 			LOG_WRN("Single number in phone number is higher than 10: "
-				"index=%d, number_value=%d, lower semi-octet",
+				"index=%d, number_value=%d, higher semi-octet",
 				i, number_value);
 		}
 		sprintf(str_number + hex_str_index, "%d", number_value);
@@ -354,7 +354,7 @@ static int decode_pdu_scts_field(struct parser *parser, uint8_t *buf)
 	 *   (bit 3 of the seventh octet of the TP Service Centre Time Stamp field) represents
 	 *   the algebraic sign of this difference (0: positive, 1: negative)."
 	 */
-	tmp_tz = ((*buf & 0xf7) * 15) / 60;
+	tmp_tz = semioctet_to_dec(*buf & 0xf7);
 
 	if (*buf & 0x08) {
 		tmp_tz = -(tmp_tz);
@@ -855,14 +855,14 @@ int sms_deliver_pdu_parse(const char *pdu, struct sms_data *data)
 		return data->payload_len;
 	}
 
-	LOG_DBG("Time:   %02x-%02x-%02x %02x:%02x:%02x",
+	LOG_DBG("Time:   %02d-%02d-%02d %02d:%02d:%02d",
 		header->time.year,
 		header->time.month,
 		header->time.day,
 		header->time.hour,
 		header->time.minute,
 		header->time.second);
-	LOG_DBG("Text:   '%s'", log_strdup(data->payload));
+	LOG_DBG("Text:   '%s'", (char *)data->payload);
 
 	LOG_DBG("Length: %d", data->payload_len);
 

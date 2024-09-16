@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <zephyr/types.h>
 
 #include <modem/at_cmd_parser.h>
@@ -78,6 +78,26 @@ static inline bool check_response_for_forced_string(const char *tmpstr)
 	}
 
 	return retval;
+}
+
+static bool is_result(const char *str)
+{
+	int diff;
+	static const char * const toclip[] = {
+		"OK\r\n",
+		"ERROR\r\n",
+		"+CME ERROR",
+		"+CMS ERROR"
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(toclip); i++) {
+		diff = strncmp(str, toclip[i], strlen(toclip[i]));
+		if (!diff) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 static int at_parse_detect_type(const char **str, int index)
@@ -297,6 +317,11 @@ static int at_parse_param(const char **at_params_str,
 
 	reset_state();
 
+	/* trim leading CRLF */
+	while (is_lfcr(*str)) {
+		str++;
+	}
+
 	while ((!is_terminated(*str)) && (index < max_params)) {
 		if (isspace((int)*str)) {
 			str++;
@@ -347,7 +372,8 @@ static int at_parse_param(const char **at_params_str,
 			while (is_lfcr(str[++i])) {
 			}
 
-			if (is_terminated(str[i]) || is_notification(str[i])) {
+			if (is_terminated(str[i]) || is_notification(str[i]) ||
+			    is_result(str + i)) {
 				str += i;
 				break;
 			}
@@ -366,7 +392,7 @@ static int at_parse_param(const char **at_params_str,
 		return -E2BIG;
 	}
 
-	if (!is_terminated(*str)) {
+	if (!is_terminated(*str) && !is_result(str)) {
 		return -EAGAIN;
 	}
 

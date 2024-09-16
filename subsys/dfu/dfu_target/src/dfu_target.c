@@ -3,9 +3,9 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <zephyr.h>
-#include <logging/log.h>
-#include <dfu/mcuboot.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/dfu/mcuboot.h>
 #include <dfu/dfu_target.h>
 
 #define DEF_DFU_TARGET(name) \
@@ -14,6 +14,8 @@ static const struct dfu_target dfu_target_ ## name  = { \
 	.offset_get = dfu_target_## name ##_offset_get, \
 	.write = dfu_target_ ## name ## _write, \
 	.done = dfu_target_ ## name ## _done, \
+	.schedule_update = dfu_target_ ## name ## _schedule_update, \
+	.reset = dfu_target_ ## name ## _reset, \
 }
 
 #ifdef CONFIG_DFU_TARGET_MODEM_DELTA
@@ -34,11 +36,12 @@ DEF_DFU_TARGET(full_modem);
 LOG_MODULE_REGISTER(dfu_target, CONFIG_DFU_TARGET_LOG_LEVEL);
 
 static const struct dfu_target *current_target;
+static int current_img_num = -1;
 
-int dfu_target_img_type(const void *const buf, size_t len)
+enum dfu_target_image_type dfu_target_img_type(const void *const buf, size_t len)
 {
 	if (len < MIN_SIZE_IDENTIFY_BUF) {
-		return -EAGAIN;
+		return DFU_TARGET_IMAGE_TYPE_NONE;
 	}
 #ifdef CONFIG_DFU_TARGET_MCUBOOT
 	if (dfu_target_mcuboot_identify(buf)) {
@@ -56,10 +59,10 @@ int dfu_target_img_type(const void *const buf, size_t len)
 	}
 #endif
 	LOG_ERR("No supported image type found");
-	return -ENOTSUP;
+	return DFU_TARGET_IMAGE_TYPE_NONE;
 }
 
-int dfu_target_init(int img_type, size_t file_size, dfu_target_callback_t cb)
+int dfu_target_init(int img_type, int img_num, size_t file_size, dfu_target_callback_t cb)
 {
 	const struct dfu_target *new_target = NULL;
 
@@ -83,20 +86,23 @@ int dfu_target_init(int img_type, size_t file_size, dfu_target_callback_t cb)
 		return -ENOTSUP;
 	}
 
-	/* The user is re-initializing with an previously aborted target.
+	/* The user is re-initializing with an previously aborted target
+	 * or initializes the same target for a different image.
 	 * Avoid re-initializing generally to ensure that the download can
 	 * continue where it left off. Re-initializing is required for
 	 * modem_delta upgrades to re-open the DFU socket that is closed on
-	 * abort.
+	 * abort and to change the image number.
 	 */
 	if (new_target == current_target
-	   && img_type != DFU_TARGET_IMAGE_TYPE_MODEM_DELTA) {
+	   && img_type != DFU_TARGET_IMAGE_TYPE_MODEM_DELTA
+	   && current_img_num == img_num) {
 		return 0;
 	}
 
 	current_target = new_target;
+	current_img_num = img_num;
 
-	return current_target->init(file_size, cb);
+	return current_target->init(file_size, img_num, cb);
 }
 
 int dfu_target_offset_get(size_t *offset)
@@ -131,23 +137,35 @@ int dfu_target_done(bool successful)
 		return err;
 	}
 
-	if (successful) {
-		current_target = NULL;
-	}
-
 	return 0;
 }
 
 int dfu_target_reset(void)
 {
-	if (current_target != NULL) {
-		int err = current_target->done(false);
+	int err;
 
-		if (err != 0) {
-			LOG_ERR("Unable to clean up dfu_target");
-			return err;
-		}
+	if (current_target == NULL) {
+		return -EACCES;
 	}
-	current_target = NULL;
+
+	err = current_target->reset();
+	if (err != 0) {
+		LOG_ERR("Unable to clean up dfu_target");
+		return err;
+	}
+
 	return 0;
+}
+
+int dfu_target_schedule_update(int img_num)
+{
+	int err = 0;
+
+	if (current_target == NULL) {
+		return -EACCES;
+	}
+
+	err = current_target->schedule_update(img_num);
+
+	return err;
 }

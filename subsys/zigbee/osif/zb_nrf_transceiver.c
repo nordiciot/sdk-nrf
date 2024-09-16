@@ -4,11 +4,12 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <kernel.h>
-#include <device.h>
-#include <sys/byteorder.h>
-#include <logging/log.h>
-#include <net/ieee802154_radio.h>
+#include <zephyr/kernel.h>
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/net/ieee802154_radio.h>
 #include <zboss_api.h>
 #include <zb_macll.h>
 #include <zb_transceiver.h>
@@ -16,15 +17,38 @@
 
 #define PHR_LENGTH                1
 #define FCS_LENGTH                2
-#define ACK_PKT_LENGTH            3
+#define ACK_PKT_LENGTH            5
 #define FRAME_TYPE_MASK           0x07
 #define FRAME_TYPE_ACK            0x02
-#define ZBOSS_ED_MIN_DBM          -94
-#define ZBOSS_ED_RESULT_FACTOR    4
+
+#if defined(NRF52840_XXAA) || defined(NRF52811_XXAA)
+/* Minimum value in dBm detectable by the radio. */
+#define MIN_RADIO_SENSITIVITY (-92)
+/* Factor needed to calculate the ED result based on the data from the RADIO peripheral. */
+#define ZBOSS_ED_RESULT_FACTOR 4
+
+#elif defined(NRF52833_XXAA) || defined(NRF52820_XXAA) \
+|| defined(NRF5340_XXAA_NETWORK) || defined(NRF5340_XXAA_APPLICATION)
+/* Minimum value in dBm detectable by the radio. */
+#define MIN_RADIO_SENSITIVITY (-93)
+/* Factor needed to calculate the ED result based on the data from the RADIO peripheral. */
+#define ZBOSS_ED_RESULT_FACTOR 5
+
+#else
+#error "Selected chip is not supported."
+#endif
+
+/* dBm value corresponding to value 0 of the energy scan result. */
+#define ZBOSS_ED_MIN_DBM (-75)
+/* dBm value corresponding to value 255 of the energy scan result. */
+#define ZBOSS_ED_MAX_DBM (MIN_RADIO_SENSITIVITY + (255/ZBOSS_ED_RESULT_FACTOR))
 
 BUILD_ASSERT(IS_ENABLED(CONFIG_NET_PKT_TIMESTAMP), "Timestamp is required");
 BUILD_ASSERT(!IS_ENABLED(CONFIG_IEEE802154_NET_IF_NO_AUTO_START),
 	     "Option not supported");
+
+/* Required by workaround for KRKNWK-12301. */
+#define NO_ACK_DELAY_MS           23U
 
 LOG_MODULE_DECLARE(zboss_osif, CONFIG_ZBOSS_OSIF_LOG_LEVEL);
 
@@ -113,7 +137,7 @@ static void energy_scan_done(const struct device *dev, int16_t max_ed)
 		energy_detect.failed = true;
 	} else {
 		energy_detect.rssi_val =
-			(max_ed - ZBOSS_ED_MIN_DBM) * ZBOSS_ED_RESULT_FACTOR;
+			255 * (max_ed - ZBOSS_ED_MIN_DBM) / (ZBOSS_ED_MAX_DBM - ZBOSS_ED_MIN_DBM);
 	}
 	k_sem_give(&energy_detect.sem);
 }
@@ -363,6 +387,10 @@ zb_bool_t zb_trans_transmit(zb_uint8_t wait_type, zb_time_t tx_at,
 	case -ENOMSG:
 		zb_macll_transmit_failed(ZB_TRANS_NO_ACK);
 		zigbee_event_notify(ZIGBEE_EVENT_TX_FAILED);
+
+		/* Workaround for KRKNWK-12301. */
+		k_sleep(K_MSEC(NO_ACK_DELAY_MS));
+		/* End of workaround. */
 		break;
 	case -EBUSY:
 	case -EIO:
@@ -531,8 +559,8 @@ void ieee802154_init(struct net_if *iface)
 	LOG_DBG("The 802.15.4 interface initialized.");
 }
 
-enum net_verdict ieee802154_radio_handle_ack(struct net_if *iface,
-					     struct net_pkt *pkt)
+enum net_verdict ieee802154_handle_ack(struct net_if *iface,
+				       struct net_pkt *pkt)
 {
 	ARG_UNUSED(iface);
 

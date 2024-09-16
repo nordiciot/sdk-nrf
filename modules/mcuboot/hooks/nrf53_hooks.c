@@ -5,11 +5,13 @@
  */
 
 #include <assert.h>
-#include <zephyr.h>
-#include <device.h>
-#include <drivers/flash/flash_simulator.h>
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/devicetree.h>
+#include <zephyr/drivers/flash/flash_simulator.h>
 #include "bootutil/image.h"
 #include "bootutil/bootutil.h"
+#include "bootutil/boot_hooks.h"
 #include "bootutil/fault_injection_hardening.h"
 #include "flash_map_backend/flash_map_backend.h"
 
@@ -81,8 +83,8 @@ int network_core_update(bool wait)
 	void *mock_flash;
 	size_t mock_size;
 
-	mock_flash_dev = device_get_binding(PM_MCUBOOT_PRIMARY_1_DEV_NAME);
-	if (mock_flash_dev == NULL) {
+	mock_flash_dev = DEVICE_DT_GET(DT_NODELABEL(PM_MCUBOOT_PRIMARY_1_DEV));
+	if (!device_is_ready(mock_flash_dev)) {
 		return -ENODEV;
 	}
 
@@ -124,5 +126,15 @@ int boot_serial_uploaded_hook(int img_index, const struct flash_area *area,
 		return network_core_update(false);
 	}
 
+	return 0;
+}
+
+int boot_reset_request_hook(bool force)
+{
+	ARG_UNUSED(force);
+
+	if (pcd_fw_copy_status_get() == PCD_STATUS_COPY) {
+		return BOOT_RESET_REQUEST_HOOK_BUSY;
+	}
 	return 0;
 }

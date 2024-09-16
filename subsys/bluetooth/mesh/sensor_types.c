@@ -6,7 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "sensor.h"
-#include <toolchain/common.h>
+#include <zephyr/toolchain/common.h>
 #include <bluetooth/mesh/properties.h>
 #include <bluetooth/mesh/sensor_types.h>
 
@@ -25,7 +25,7 @@
 	const struct bt_mesh_sensor_format bt_mesh_sensor_format_##_name
 
 #define SENSOR_TYPE(name)                                                      \
-	const Z_STRUCT_SECTION_ITERABLE(bt_mesh_sensor_type,                   \
+	const STRUCT_SECTION_ITERABLE(bt_mesh_sensor_type,                     \
 					bt_mesh_sensor_##name)
 
 #ifdef CONFIG_BT_MESH_SENSOR_LABELS
@@ -162,8 +162,8 @@ enum scalar_repr_flags {
 	/** The highest encoded value represents "undefined" */
 	HAS_UNDEFINED = BIT(3),
 	/**
-	 * The second highest encoded value represents
-	 * "value is higher than xxx".
+	 * The highest encoded value represents
+	 * the maximum value or higher.
 	 */
 	HAS_HIGHER_THAN = (BIT(4)),
 	/** The second highest encoded value represents "value is invalid" */
@@ -206,7 +206,7 @@ static int64_t scalar_max(const struct bt_mesh_sensor_format *format)
 		max_value = BIT64(8 * format->size - 1) - 1;
 	}
 
-	if (repr->flags & (HAS_HIGHER_THAN | HAS_INVALID)) {
+	if (repr->flags & HAS_INVALID) {
 		max_value -= 2;
 	} else if (repr->flags & HAS_UNDEFINED) {
 		max_value -= 1;
@@ -256,8 +256,8 @@ static int scalar_encode(const struct bt_mesh_sensor_format *format,
 		}
 
 		if ((repr->flags & HAS_HIGHER_THAN) &&
-			!((repr->flags & HAS_UNDEFINED) && (raw == type_max))) {
-			raw = type_max - 1;
+			!((repr->flags & HAS_UNDEFINED) && (val->val1 == type_max))) {
+			raw = max_value;
 		} else if ((repr->flags & HAS_INVALID) && val->val1 == type_max - 1) {
 			raw = type_max - 1;
 		} else if ((repr->flags & HAS_UNDEFINED) && val->val1 == type_max) {
@@ -344,7 +344,7 @@ static int scalar_decode(const struct bt_mesh_sensor_format *format,
 
 		if (repr->flags & HAS_UNDEFINED_MIN) {
 			type_max += 1;
-		} else if (repr->flags & (HAS_HIGHER_THAN | HAS_INVALID) && raw == type_max - 1) {
+		} else if ((repr->flags & HAS_INVALID) && raw == type_max - 1) {
 			type_max -= 1;
 		} else if (raw != type_max) {
 			return -ERANGE;
@@ -443,7 +443,7 @@ static int float32_encode(const struct bt_mesh_sensor_format *format,
 			  const struct sensor_value *val,
 			  struct net_buf_simple *buf)
 {
-	if (net_buf_simple_tailroom(buf) < 1) {
+	if (net_buf_simple_tailroom(buf) < sizeof(float)) {
 		return -ENOMEM;
 	}
 
@@ -458,7 +458,7 @@ static int float32_encode(const struct bt_mesh_sensor_format *format,
 static int float32_decode(const struct bt_mesh_sensor_format *format,
 			  struct net_buf_simple *buf, struct sensor_value *val)
 {
-	if (buf->len < 1) {
+	if (buf->len < sizeof(float)) {
 		return -ENOMEM;
 	}
 
@@ -496,7 +496,7 @@ FORMAT(percentage_16) = SCALAR_FORMAT_MAX(2,
 					  SCALAR(1e-2, 0),
 					  10000);
 FORMAT(percentage_delta_trigger) = SCALAR_FORMAT(2,
-					  (UNSIGNED),
+					  (UNSIGNED | HAS_UNDEFINED),
 					  percent,
 					  SCALAR(1e-2, 0));
 
@@ -517,21 +517,21 @@ FORMAT(co2_concentration)     = SCALAR_FORMAT_MAX(2,
 					      HAS_UNDEFINED),
 					      ppm,
 					      SCALAR(1, 0),
-					      65533);
+					      65534);
 FORMAT(noise)			     = SCALAR_FORMAT_MAX(1,
 					       (UNSIGNED |
 					       HAS_HIGHER_THAN |
 					       HAS_UNDEFINED),
 					       db,
 					       SCALAR(1, 0),
-					       253);
+					       254);
 FORMAT(voc_concentration)     = SCALAR_FORMAT_MAX(2,
 					       (UNSIGNED |
 					       HAS_HIGHER_THAN |
 					       HAS_UNDEFINED),
 					       ppb,
 					       SCALAR(1, 0),
-					       65533);
+					       65534);
 FORMAT(wind_speed)            = SCALAR_FORMAT(2,
 					      UNSIGNED,
 					      mps,
@@ -602,10 +602,12 @@ FORMAT(electric_current) = SCALAR_FORMAT_MAX(2,
 					 SCALAR(1e-2, 0),
 					 65534);
 FORMAT(voltage)		 = SCALAR_FORMAT_MAX(2,
-					 (UNSIGNED | HAS_UNDEFINED),
+					 (UNSIGNED |
+					 HAS_UNDEFINED |
+					 HAS_HIGHER_THAN),
 					 volt,
 					 SCALAR(1, -6),
-					 10220);
+					 65408);
 FORMAT(energy32)	 = SCALAR_FORMAT(4,
 					 UNSIGNED | HAS_INVALID | HAS_UNDEFINED,
 					 kwh,
@@ -767,7 +769,6 @@ SENSOR_TYPE(time_since_presence_detected) = {
  ******************************************************************************/
 SENSOR_TYPE(avg_amb_temp_in_day) = {
 	.id = BT_MESH_PROP_ID_AVG_AMB_TEMP_IN_A_PERIOD_OF_DAY,
-	.flags = BT_MESH_SENSOR_TYPE_FLAG_SERIES,
 	CHANNELS(CHANNEL("Temperature", temp_8),
 		 CHANNEL("Start time", time_decihour_8),
 		 CHANNEL("End time", time_decihour_8)),
@@ -929,7 +930,6 @@ SENSOR_TYPE(present_dev_op_temp) = {
 
 SENSOR_TYPE(rel_runtime_in_a_dev_op_temp_range) = {
 	.id = BT_MESH_PROP_ID_REL_RUNTIME_IN_A_DEV_OP_TEMP_RANGE,
-	.flags = BT_MESH_SENSOR_TYPE_FLAG_SERIES,
 	CHANNELS(CHANNEL("Relative value", percentage_8),
 		 CHANNEL("Min", temp),
 		 CHANNEL("Max", temp))
@@ -984,7 +984,6 @@ SENSOR_TYPE(present_input_voltage) = {
 };
 SENSOR_TYPE(rel_runtime_in_an_input_current_range) = {
 	.id = BT_MESH_PROP_ID_REL_RUNTIME_IN_AN_INPUT_CURRENT_RANGE,
-	.flags = BT_MESH_SENSOR_TYPE_FLAG_SERIES,
 	CHANNELS(CHANNEL("Relative runtime value", percentage_8),
 		 CHANNEL("Min", electric_current),
 		 CHANNEL("Max", electric_current)),
@@ -992,7 +991,6 @@ SENSOR_TYPE(rel_runtime_in_an_input_current_range) = {
 
 SENSOR_TYPE(rel_runtime_in_an_input_voltage_range) = {
 	.id = BT_MESH_PROP_ID_REL_RUNTIME_IN_AN_INPUT_VOLTAGE_RANGE,
-	.flags = BT_MESH_SENSOR_TYPE_FLAG_SERIES,
 	CHANNELS(CHANNEL("Relative runtime value", percentage_8),
 		 CHANNEL("Min", voltage),
 		 CHANNEL("Max", voltage)),
@@ -1033,7 +1031,6 @@ SENSOR_TYPE(power_factor) = {
 };
 SENSOR_TYPE(rel_dev_energy_use_in_a_period_of_day) = {
 	.id = BT_MESH_PROP_ID_REL_DEV_ENERGY_USE_IN_A_PERIOD_OF_DAY,
-	.flags = BT_MESH_SENSOR_TYPE_FLAG_SERIES,
 	CHANNELS(CHANNEL("Energy", energy),
 		 CHANNEL("Start time", time_decihour_8),
 		 CHANNEL("End time", time_decihour_8)),
@@ -1104,7 +1101,6 @@ SENSOR_TYPE(present_planckian_distance) = {
 };
 SENSOR_TYPE(rel_exposure_time_in_an_illuminance_range) = {
 	.id = BT_MESH_PROP_ID_REL_EXPOSURE_TIME_IN_AN_ILLUMINANCE_RANGE,
-	.flags = BT_MESH_SENSOR_TYPE_FLAG_SERIES,
 	CHANNELS(CHANNEL("Relative value", percentage_8),
 		 CHANNEL("Min", illuminance),
 		 CHANNEL("Max", illuminance))
@@ -1194,17 +1190,21 @@ SENSOR_TYPE(gain) = {
 };
 SENSOR_TYPE(rel_dev_runtime_in_a_generic_level_range) = {
 	.id = BT_MESH_PROP_ID_REL_DEV_RUNTIME_IN_A_GENERIC_LEVEL_RANGE,
-	.flags = BT_MESH_SENSOR_TYPE_FLAG_SERIES,
 	CHANNELS(CHANNEL("Relative value", percentage_8),
 		 CHANNEL("Min", gen_lvl),
 		 CHANNEL("Max", gen_lvl)),
+};
+
+SENSOR_TYPE(total_dev_runtime) = {
+	.id = BT_MESH_PROP_ID_TOT_DEV_RUNTIME,
+	CHANNELS(CHANNEL("Total device runtime", time_decihour_8)),
 };
 
 /******************************************************************************/
 
 const struct bt_mesh_sensor_type *bt_mesh_sensor_type_get(uint16_t id)
 {
-	Z_STRUCT_SECTION_FOREACH(bt_mesh_sensor_type, type) {
+	STRUCT_SECTION_FOREACH(bt_mesh_sensor_type, type) {
 		if (type->id == id) {
 			return type;
 		}

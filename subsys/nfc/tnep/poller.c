@@ -3,11 +3,11 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <kernel.h>
+#include <zephyr/kernel.h>
 #include <errno.h>
-#include <logging/log.h>
-#include <sys/byteorder.h>
-#include <sys/util.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/sys/util.h>
 #include <nfc/t4t/ndef_file.h>
 #include <nfc/ndef/msg_parser.h>
 #include <nfc/ndef/tnep_rec.h>
@@ -29,7 +29,7 @@ LOG_MODULE_REGISTER(nfc_tnep_poller, CONFIG_NFC_TNEP_POLLER_LOG_LEVEL);
  * Exchange Protocol 1.0 4.1.6
  */
 #define NFC_TNEP_MIN_WAIT_TIME(_time) \
-	(1 << (((ceiling_fraction((_time), 4)) - 1)))
+	(1 << (((DIV_ROUND_UP((_time), 4)) - 1)))
 
 enum tnep_poller_state {
 	TNEP_POLLER_STATE_IDLE,
@@ -257,18 +257,21 @@ static int svc_param_record_get(const struct nfc_ndef_bin_payload_desc *bin_pay_
 
 static void on_svc_delayed_operation(void)
 {
-	int err;
+	int ret;
 	int64_t time_spent;
 
 	time_spent = k_uptime_delta(&tnep.last_time);
 
-	err = k_work_reschedule(&tnep.tnep_work,
+	ret = k_work_reschedule(&tnep.tnep_work,
 				time_spent > tnep.wait_time ?
 				K_NO_WAIT :
 				K_MSEC(tnep.wait_time - time_spent));
-	if (err) {
-		svc_error_notify(err);
+	if (ret < 0) {
+		svc_error_notify(ret);
+		return;
 	}
+
+	__ASSERT_NO_MSG(ret == 1);
 }
 
 static void tnep_delay_handler(struct k_work *work)
@@ -601,7 +604,7 @@ int nfc_tnep_poller_svc_write(const struct nfc_ndef_msg_desc *msg,
 int nfc_tnep_poller_on_ndef_read(const uint8_t *data, size_t len)
 {
 	int err;
-	uint8_t desc_buf[NFC_NDEF_PARSER_REQIRED_MEMO_SIZE_CALC(CONFIG_NFC_TNEP_POLLER_RX_MAX_RECORD_CNT)];
+	uint8_t desc_buf[NFC_NDEF_PARSER_REQUIRED_MEM(CONFIG_NFC_TNEP_POLLER_RX_MAX_RECORD_CNT)];
 	size_t desc_buf_len = sizeof(desc_buf);
 	struct nfc_tnep_poller_msg poller_msg;
 	struct nfc_ndef_msg_desc *msg;

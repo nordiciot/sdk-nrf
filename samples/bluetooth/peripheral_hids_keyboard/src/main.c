@@ -8,25 +8,25 @@
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
-#include <sys/printk.h>
-#include <sys/byteorder.h>
-#include <zephyr.h>
-#include <drivers/gpio.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/gpio.h>
 #include <soc.h>
 #include <assert.h>
-#include <spinlock.h>
+#include <zephyr/spinlock.h>
 
-#include <settings/settings.h>
+#include <zephyr/settings/settings.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
 
-#include <bluetooth/services/bas.h>
+#include <zephyr/bluetooth/services/bas.h>
 #include <bluetooth/services/hids.h>
-#include <bluetooth/services/dis.h>
+#include <zephyr/bluetooth/services/dis.h>
 #include <dk_buttons_and_leds.h>
 
 #include "app_nfc.h"
@@ -120,10 +120,8 @@ static const struct bt_data ad[] = {
 		      (CONFIG_BT_DEVICE_APPEARANCE >> 0) & 0xff,
 		      (CONFIG_BT_DEVICE_APPEARANCE >> 8) & 0xff),
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-	BT_DATA_BYTES(BT_DATA_UUID16_ALL,
-		      0x12, 0x18,       /* HID Service */
-		      0x0f, 0x18),      /* Battery Service */
-
+	BT_DATA_BYTES(BT_DATA_UUID16_ALL, BT_UUID_16_ENCODE(BT_UUID_HIDS_VAL),
+					  BT_UUID_16_ENCODE(BT_UUID_BAS_VAL)),
 };
 
 static const struct bt_data sd[] = {
@@ -341,7 +339,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 }
 
 
-static struct bt_conn_cb conn_callbacks = {
+BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected = connected,
 	.disconnected = disconnected,
 	.security_changed = security_changed,
@@ -557,18 +555,6 @@ static void auth_cancel(struct bt_conn *conn)
 }
 
 
-static void pairing_confirm(struct bt_conn *conn)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-	bt_conn_auth_pairing_confirm(conn);
-
-	printk("Pairing confirmed: %s\n", addr);
-}
-
-
 #if CONFIG_NFC_OOB_PAIRING
 static void auth_oob_data_request(struct bt_conn *conn,
 				  struct bt_conn_oob_info *info)
@@ -633,10 +619,12 @@ static struct bt_conn_auth_cb conn_auth_callbacks = {
 	.passkey_display = auth_passkey_display,
 	.passkey_confirm = auth_passkey_confirm,
 	.cancel = auth_cancel,
-	.pairing_confirm = pairing_confirm,
 #if CONFIG_NFC_OOB_PAIRING
 	.oob_data_request = auth_oob_data_request,
 #endif
+};
+
+static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {
 	.pairing_complete = pairing_complete,
 	.pairing_failed = pairing_failed
 };
@@ -731,7 +719,7 @@ static int hid_kbd_state_key_set(uint8_t key)
 		hid_keyboard_state.ctrl_keys_state |= ctrl_mask;
 		return 0;
 	}
-	for (size_t i = 0; i < KEY_CTRL_CODE_MAX; ++i) {
+	for (size_t i = 0; i < KEY_PRESS_MAX; ++i) {
 		if (hid_keyboard_state.keys_state[i] == 0) {
 			hid_keyboard_state.keys_state[i] = key;
 			return 0;
@@ -750,7 +738,7 @@ static int hid_kbd_state_key_clear(uint8_t key)
 		hid_keyboard_state.ctrl_keys_state &= ~ctrl_mask;
 		return 0;
 	}
-	for (size_t i = 0; i < KEY_CTRL_CODE_MAX; ++i) {
+	for (size_t i = 0; i < KEY_PRESS_MAX; ++i) {
 		if (hid_keyboard_state.keys_state[i] == key) {
 			hid_keyboard_state.keys_state[i] = 0;
 			return 0;
@@ -943,7 +931,7 @@ static void bas_notify(void)
 }
 
 
-void main(void)
+int main(void)
 {
 	int err;
 	int blink_status = 0;
@@ -952,18 +940,27 @@ void main(void)
 
 	configure_gpio();
 
-	bt_conn_cb_register(&conn_callbacks);
-	bt_conn_auth_cb_register(&conn_auth_callbacks);
+	err = bt_conn_auth_cb_register(&conn_auth_callbacks);
+	if (err) {
+		printk("Failed to register authorization callbacks.\n");
+		return 0;
+	}
+
+	err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
+	if (err) {
+		printk("Failed to register authorization info callbacks.\n");
+		return 0;
+	}
+
+	hid_init();
 
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Bluetooth initialized\n");
-
-	hid_init();
 
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
 		settings_load();

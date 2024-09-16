@@ -4,15 +4,16 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <stdio.h>
 #include <ctype.h>
-#include <logging/log.h>
-#include <drivers/uart.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/drivers/uart.h>
 #include <string.h>
-#include <init.h>
-#include <modem/at_cmd.h>
-#include <modem/at_notif.h>
+#include <zephyr/init.h>
+
+#include <nrf_modem_at.h>
+#include <modem/at_monitor.h>
 
 LOG_MODULE_REGISTER(at_host, CONFIG_AT_HOST_LOG_LEVEL);
 
@@ -21,20 +22,9 @@ LOG_MODULE_REGISTER(at_host, CONFIG_AT_HOST_LOG_LEVEL);
 
 K_THREAD_STACK_DEFINE(at_host_stack_area, AT_HOST_STACK_SIZE);
 
-#define CONFIG_UART_0_NAME      "UART_0"
-#define CONFIG_UART_1_NAME      "UART_1"
-#define CONFIG_UART_2_NAME      "UART_2"
-
-#define INVALID_DESCRIPTOR      -1
-
-#define OK_STR    "OK\r\n"
-#define ERROR_STR "ERROR\r\n"
-
-#if CONFIG_AT_HOST_CMD_MAX_LEN > CONFIG_AT_CMD_RESPONSE_MAX_LEN
 #define AT_BUF_SIZE CONFIG_AT_HOST_CMD_MAX_LEN
-#else
-#define AT_BUF_SIZE CONFIG_AT_CMD_RESPONSE_MAX_LEN
-#endif
+
+AT_MONITOR(at_host, ANY, response_handler);
 
 /** @brief Termination Modes. */
 enum term_modes {
@@ -45,74 +35,52 @@ enum term_modes {
 	MODE_COUNT      /* Counter of term_modes */
 };
 
-
-/** @brief UARTs. */
-enum select_uart {
-	UART_0,
-	UART_1,
-	UART_2
-};
-
 static enum term_modes term_mode;
-static const struct device *uart_dev;
+#if DT_HAS_CHOSEN(ncs_at_host_uart)
+static const struct device *const uart_dev = DEVICE_DT_GET(DT_CHOSEN(ncs_at_host_uart));
+#else
+static const struct device *const uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
+#endif
 static bool at_buf_busy; /* Guards at_buf while processing a command */
 static char at_buf[AT_BUF_SIZE]; /* AT command and modem response buffer */
 static struct k_work_q at_host_work_q;
 static struct k_work cmd_send_work;
 
-
-
 static inline void write_uart_string(const char *str)
 {
+	if (IS_ENABLED(CONFIG_LOG_BACKEND_UART)) {
+		LOG_RAW("%s", str);
+		return;
+	}
+
 	/* Send characters until, but not including, null */
 	for (size_t i = 0; str[i]; i++) {
 		uart_poll_out(uart_dev, str[i]);
 	}
 }
 
-static void response_handler(void *context, const char *response)
+static void response_handler(const char *response)
 {
-	ARG_UNUSED(context);
-
 	/* Forward the data over UART */
 	write_uart_string(response);
 }
 
 static void cmd_send(struct k_work *work)
 {
-	char              str[25];
-	enum at_cmd_state state;
 	int               err;
 
 	ARG_UNUSED(work);
 
-	err = at_cmd_write(at_buf, at_buf,
-			   sizeof(at_buf), &state);
+    /* Sending through string format rather than raw buffer in case
+     * the buffer contains characters that need to be escaped
+     */
+	err = nrf_modem_at_cmd(at_buf, sizeof(at_buf), "%s", at_buf);
 	if (err < 0) {
 		LOG_ERR("Error while processing AT command: %d", err);
-		state = AT_CMD_ERROR;
 	}
 
-	/* Handle the various error responses from modem */
-	switch (state) {
-	case AT_CMD_OK:
-		write_uart_string(at_buf);
-		write_uart_string(OK_STR);
-		break;
-	case AT_CMD_ERROR:
-		write_uart_string(ERROR_STR);
-		break;
-	case AT_CMD_ERROR_CMS:
-		sprintf(str, "+CMS ERROR: %d\r\n", err);
-		write_uart_string(str);
-		break;
-	case AT_CMD_ERROR_CME:
-		sprintf(str, "+CME ERROR: %d\r\n", err);
-		write_uart_string(str);
-		break;
-	default:
-		break;
-	}
+	write_uart_string(at_buf);
+
 	at_buf_busy = false;
 	uart_irq_rx_enable(uart_dev);
 }
@@ -222,15 +190,14 @@ static void isr(const struct device *dev, void *user_data)
 	}
 }
 
-static int at_uart_init(char *uart_dev_name)
+static int at_uart_init(const struct device *uart_dev)
 {
 	int err;
 	uint8_t dummy;
 
-	uart_dev = device_get_binding(uart_dev_name);
-	if (uart_dev == NULL) {
-		LOG_ERR("Cannot bind %s\n", uart_dev_name);
-		return -EINVAL;
+	if (!device_is_ready(uart_dev)) {
+		LOG_ERR("UART device not ready");
+		return -ENODEV;
 	}
 
 	uint32_t start_time = k_uptime_get_32();
@@ -260,14 +227,11 @@ static int at_uart_init(char *uart_dev_name)
 	return err;
 }
 
-static int at_host_init(const struct device *arg)
+static int at_host_init(void)
 {
-	char *uart_dev_name;
 	int err;
-	enum select_uart uart_id = CONFIG_AT_HOST_UART;
 	enum term_modes mode = CONFIG_AT_HOST_TERMINATION;
 
-	ARG_UNUSED(arg);
 
 	/* Choosing the termination mode */
 	if (mode < MODE_COUNT) {
@@ -276,36 +240,8 @@ static int at_host_init(const struct device *arg)
 		return -EINVAL;
 	}
 
-	/* Choose which UART to use */
-	switch (uart_id) {
-	case UART_0:
-		uart_dev_name = CONFIG_UART_0_NAME;
-		break;
-	case UART_1:
-		uart_dev_name = CONFIG_UART_1_NAME;
-		break;
-	case UART_2:
-		uart_dev_name = CONFIG_UART_2_NAME;
-		break;
-	default:
-		LOG_ERR("Unknown UART instance %d", uart_id);
-		return -EINVAL;
-	}
-
-	err = at_notif_init();
-	if (err) {
-		LOG_ERR("Failed to initialize AT notifications, err %d", err);
-		return err;
-	}
-
-	err = at_notif_register_handler(NULL, response_handler);
-	if (err != 0) {
-		LOG_ERR("Can't register handler err=%d", err);
-		return err;
-	}
-
 	/* Initialize the UART module */
-	err = at_uart_init(uart_dev_name);
+	err = at_uart_init(uart_dev);
 	if (err) {
 		LOG_ERR("UART could not be initialized: %d", err);
 		return -EFAULT;

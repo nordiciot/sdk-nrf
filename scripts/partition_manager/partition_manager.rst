@@ -15,7 +15,7 @@ See :ref:`ug_multi_image` for more information about multi-image builds.
 The Partition Manager is activated for all multi-image builds, regardless of which build strategy is used for the child image.
 
 .. note::
-   When you build a multi-image application using the Partition Manager, the Device Tree Source flash partitions are ignored.
+   When you build a multi-image application using the Partition Manager, the devicetree source flash partitions are ignored.
 
 .. _pm_overview:
 
@@ -23,39 +23,40 @@ Overview
 ********
 
 The Partition Manager script reads the configuration files named :file:`pm.yml`, which define flash and RAM partitions.
-A definition of a flash partition includes the name and the constraints on both size and placement in the flash.
+A definition of a flash partition includes the name and the constraints on both size and placement in the flash memory.
 A definition of a RAM partition includes the name and the constraints on its size.
 The Partition Manager allocates a start address and, when set, a size to each partition in a way that complies with these constraints.
 
-There are different types of **flash partitions** and **RAM partitions**, as described below.
+There are different types of *flash partitions* and *RAM partitions*, as described in the following section.
 
 Flash partition types
 =====================
 
 Image partitions
-   An image partition is the flash area reserved for an image, to which the image binary is written.
+   An image partition is the flash memory area reserved for an image to which the image binary is written.
 
    When the Partition Manager is active, there is one *root image* and one or more *child images*.
-   The name of the root image is ``app``; it is always implicitly defined.
+   The name of the root image is ``app``.
+   It is always implicitly defined.
    Child images are explicitly defined in :file:`pm.yml` files.
    The size of the root image partition is dynamic, while the sizes of all child image partitions are statically defined.
 
 Placeholder partitions
    A placeholder partition does not contain an image, but reserves space for other uses.
-   For example, you might want to reserve space in flash to hold an updated application image while it is being downloaded and before it is copied to the application image partition.
+   For example, you might want to reserve space in the flash memory to hold an updated application image while it is being downloaded and before it is copied to the application image partition.
 
 Container partitions
-   A container partition does not reserve space but is used to logically and/or physically group other partitions.
+   A container partition does not reserve space but is used to logically and (or) physically group other partitions.
 
 The start addresses and sizes of image partitions are used in the preprocessing of the linker script for each image.
 
 RAM partition types
-=====================
+===================
 
 Default image RAM partition
    The default image RAM partition consists of all the RAM that is not defined as a permanent image RAM partition or placeholder RAM partition.
    It is the default RAM partition associated with an image and is set as the RAM region when linking the image.
-   If an image must reserve its RAM area permanently (i.e. at the same time as other images are running), it must use a permanent image RAM partition, described below.
+   If an image must reserve its RAM area permanently (that is, at the same time as other images are running), it must use a permanent image RAM partition, described below.
 
 .. _pm_permanent_image_ram_partition:
 
@@ -100,7 +101,7 @@ In particular, partition definitions are global per domain, and must be identica
 If the same partition is defined twice with different configurations within a domain, the Partition Manager will fail.
 
 .. note::
-   If Partition Manager configurations are only defined by subsystems, so that only one image is included in the build, you must set the option :kconfig:`CONFIG_PM_SINGLE_IMAGE` to execute the Partition Manager script.
+   If Partition Manager configurations are only defined by subsystems, so that only one image is included in the build, you must set the option :kconfig:option:`CONFIG_PM_SINGLE_IMAGE` to execute the Partition Manager script.
 
 .. _pm_yaml_format:
 
@@ -145,10 +146,17 @@ placement: dict
      It is not possible to place the partition after ``end`` or before ``start``.
 
       align: dict
-         Ensure alignment of start or end of partition by specifying a dict with a ``start`` or ``end`` key respectively, where the value is the number of bytes to align to.
+         Ensure the alignment of the start or the end of the partition by specifying a dict with a ``start`` or ``end`` key respectively, where the value is the number of bytes to align to.
          If necessary, empty partitions are inserted in front of or behind the partition to ensure that the alignment is correct.
          Only one key can be specified.
          Partitions that directly or indirectly (through :ref:`spans <partition_manager_spans>`) share size with the ``app`` partitions can only be aligned if they are placed directly after the ``app`` partition.
+
+      align_next: int
+         Ensure that the _next_ partition is aligned on this number of bytes.
+         This is equivalent to ensuring the alignment of the start of the next partition.
+         If the start of the next partition is already aligned, the largest alignment takes effect.
+         ``align_next`` fails if the alignment of the start of the next partition is not a divisor or multiple of the ``align_next`` value.
+         ``align_next`` also fails if the end of the next partition is aligned.
 
 .. _partition_manager_spans:
 
@@ -172,7 +180,7 @@ The following example shows a partition that *spans*, or contains, ``partition_1
 
    If the value is a string, it is interpreted as a list with one item:
 
-The following 2 examples are equivalent:
+The following two examples are equivalent:
 
    .. code-block:: yaml
 
@@ -193,31 +201,31 @@ The following 2 examples are equivalent:
       Different versions of the Partition Manager script may produce different partition orders for such configurations, or fail to find a solution even if one is possible.
       The Partition Manager always detects unsatisfiable configurations (no false positives), but it might fail on some valid inputs (false negatives).
 
-   Here are 3 examples of valid and invalid configurations:
+   Here are three examples of valid and invalid configurations:
 
    .. _partition_manager_span_ex1:
 
-   * In the following example, the mcuboot and spm configurations result in this partition order: ``mcuboot``, ``spm``, ``app``.
-     Therefore, the foo partition configuration is invalid, because ``spm`` must be placed between ``mcuboot`` and ``app``, but is not in the span list.
+   * In the following example, the mcuboot and tfm configurations result in this partition order: ``mcuboot``, ``tfm``, ``app``.
+     Therefore, the foo partition configuration is invalid, because ``tfm`` must be placed between ``mcuboot`` and ``app``, but is not in the span list.
 
      .. code-block:: yaml
         :caption: Span property example 1 (invalid)
 
         mcuboot:
            placement:
-              before: [spm, app]
+              before: [tfm, app]
 
-        spm:
+        tfm:
            placement:
               before: [app]
 
         foo:
            span: [mcuboot, app]
 
-   * In the following example, these mcuboot, spm, and app configurations have two possible orders:
+   * In the following example, these mcuboot, tfm, and app configurations have two possible orders:
 
-     * Order 1: mcuboot, spm, app
-     * Order 2: mcuboot, app, spm
+     * Order 1: mcuboot, tfm, app
+     * Order 2: mcuboot, app, tfm
 
      In the absence of additional configuration, the Partition Manager may choose either order.
      However, since a span configuring the foo partition is present, the Partition Manager should choose order 2, since it is the only order that results in a valid configuration for the foo partition.
@@ -228,7 +236,7 @@ The following 2 examples are equivalent:
         mcuboot:
            placement:
 
-        spm:
+        tfm:
            placement:
               after: [mcuboot]
 
@@ -240,10 +248,10 @@ The following 2 examples are equivalent:
            span: [mcuboot, app]
 
 
-   * In the following example, these mcuboot, spm, and app configurations have two possible orders:
+   * In the following example, these mcuboot, tfm, and app configurations have two possible orders:
 
-     * Order 1: mcuboot, spm, app
-     * Order 2: mcuboot, app, spm
+     * Order 1: mcuboot, tfm, app
+     * Order 2: mcuboot, app, tfm
 
      However, the overall configuration is unsatisfiable: foo requires order 2, while bar requires order 1.
 
@@ -253,7 +261,7 @@ The following 2 examples are equivalent:
         mcuboot:
            placement:
 
-        spm:
+        tfm:
            placement:
               after: [mcuboot]
 
@@ -265,7 +273,7 @@ The following 2 examples are equivalent:
            span: [mcuboot, app]
 
         bar:
-           span: [mcuboot, spm]
+           span: [mcuboot, tfm]
 
 .. _partition_manager_inside:
 
@@ -310,17 +318,17 @@ RAM partition configuration
    A RAM partition is specified by having the partition name end with ``_sram``.
    If a partition name is composed of an image name plus the ``_sram`` ending, it is used as a permanent image RAM partition for the image.
 
-The following 2 examples are equivalent:
+The following two examples are equivalent:
 
    .. code-block:: yaml
-      :caption: RAM partition configuration, without the ``_sram`` ending.
+      :caption: RAM partition configuration, without the ``_sram`` ending
 
       some_permament_sram_block_used_for_logging:
          size: 0x1000
          region: sram_primary
 
    .. code-block:: yaml
-      :caption: RAM partition configuration, using the ``_sram`` ending.
+      :caption: RAM partition configuration, using the ``_sram`` ending
 
       some_permament_sram_block_used_for_logging_sram:
          size: 0x1000
@@ -336,16 +344,16 @@ All occurrences of a partition name can be replaced by a dict with the key ``one
 This dict is resolved to the first existing partition in the ``one_of`` value.
 The value of the ``one_of`` key must be a list of placeholder or image partitions, and it cannot be a span.
 
-See the following 2 examples, they are equivalent:
+See the following two examples, they are equivalent:
 
    .. code-block:: yaml
-      :caption: Example use of a ``one_of`` dict
+      :caption: Example of using a ``one_of`` dict
 
       some_span:
          span: [something, {one_of: [does_not_exist_0, does_not_exist_1, exists1, exists2]}]
 
    .. code-block:: yaml
-      :caption: Example not using a ``one_of`` dict
+      :caption: Example of not using a ``one_of`` dict
 
       some_span:
          span: [something, exists1]
@@ -372,7 +380,7 @@ Configuration file preprocessing
 
 Each :file:`pm.yml` file is preprocessed to resolve symbols from Kconfig and devicetree.
 
-The following example is taken from the :file:`pm.yml` file for the :ref:`immutable_bootloader` provided with the  |NCS|.
+The following example is taken from the :file:`pm.yml` file for the :ref:`immutable_bootloader` provided with the |NCS|.
 It includes :file:`autoconf.h` and :file:`devicetree_legacy_unfixed.h` (generated by Kconfig and devicetree respectively) to read application configurations and hardware properties.
 In this example the application configuration is used to configure the size of the image and placeholder partitions.
 The application configuration is also used to decide in which region the ``otp`` partition should be stored.
@@ -398,12 +406,12 @@ The information extracted from devicetree is the alignment value for some partit
        after: b0
        align: {start: CONFIG_FPROTECT_BLOCK_SIZE}
 
-   spm_app:
-     span: [spm, app]
+   app_image:
+     span: [tfm, app]
 
    s0_image:
      # S0 spans over the image booted by B0
-     span: {one_of: [mcuboot, spm_app]}
+     span: {one_of: [mcuboot, app_image]}
 
    s0:
      # Phony container to allow hex overriding
@@ -428,7 +436,7 @@ The information extracted from devicetree is the alignment value for some partit
 
    provision:
      size: CONFIG_PM_PARTITION_SIZE_PROVISION
-   #if defined(CONFIG_SOC_NRF9160) || defined(CONFIG_SOC_NRF5340_CPUAPP)
+   #if defined(CONFIG_SOC_SERIES_NRF91X) || defined(CONFIG_SOC_NRF5340_CPUAPP)
      region: otp
    #else
      placement:
@@ -474,42 +482,40 @@ For example, see the following definitions for default regions:
 
 .. code-block:: cmake
 
-  add_region(     # Define region without device name
-    otp           # Name
-    756           # Size
-    0xff8108      # Base address
-    start_to_end  # Placement strategy
+  add_region(                           # Define region without device name
+    NAME otp                            # Name
+    SIZE 756                            # Size
+    BASE 0xff8108                       # Base address
+    PLACEMENT start_to_end              # Placement strategy
     )
 
-  add_region_with_dev(           # Define region with device name
-    flash_primary                # Name
-    ${flash_size}                # Size
-    ${CONFIG_FLASH_BASE_ADDRESS} # Base address
-    complex                      # Placement strategy
-    NRF_FLASH_DRV_NAME           # Device name
+  add_region(                           # Define region with device name
+    NAME flash_primary                  # Name
+    SIZE ${flash_size}                  # Size
+    BASE ${CONFIG_FLASH_BASE_ADDRESS}   # Base address
+    PLACEMENT complex                   # Placement strategy
+    DEVICE flash_controller             # DTS node label of flash controller
+    DEFAULT_DRIVER_KCONFIG	        # Kconfig option that should be set for
+                                        # the driver to be compiled in
     )
 
 .. _pm_external_flash:
 
-External flash
-==============
+External flash memory partitions
+================================
 
 The Partition Manager supports partitions in the external flash memory through the use of :ref:`pm_regions`.
-Any placeholder partition can specify that it should be stored in the external flash region.
-External flash regions always use the start_to_end placement strategy.
+Any placeholder partition can specify that it should be stored in the external flash memory region.
+External flash memory regions always use the *start_to_end* placement strategy.
 
-To store partitions in external flash, you must choose a value for the ``nordic,pm-ext-flash`` property in devicetree as shown below.
+To store partitions in the external flash memory, you can either choose a value for the ``nordic,pm-ext-flash`` property in the devicetree, or directly use an external flash DTS node label as ``DEVICE``.
+See the following example of an overlay file that sets this value:
 
-.. code-block:: devicetree
+.. literalinclude:: ../../tests/modules/mcuboot/external_flash/boards/nrf52840dk_nrf52840.overlay
+    :language: c
+    :caption: nrf52840dk_nrf52840.overlay
 
-    / {
-            chosen {
-                    nordic,pm-ext-flash = &mx25r64;
-            };
-
-    };
-
-Now partitions can be placed in the external flash:
+After the ``nordic,pm-ext-flash`` value is set, you can place partitions in the external flash memory as follows:
 
 .. code-block:: yaml
 
@@ -518,7 +524,42 @@ Now partitions can be placed in the external flash:
      region: external_flash
      size: CONFIG_EXTERNAL_PLZ_SIZE
 
+.. note::
+
+   * Use the :kconfig:option:`CONFIG_PM_PARTITION_REGION_LITTLEFS_EXTERNAL`, :kconfig:option:`CONFIG_PM_PARTITION_REGION_SETTINGS_STORAGE_EXTERNAL`, and :kconfig:option:`CONFIG_PM_PARTITION_REGION_NVS_STORAGE_EXTERNAL` to specify that the relevant partition must be located in external flash memory.
+     You must add a ``chosen`` entry for ``nordic,pm-ext-flash`` in your devicetree to make this option available.
+     See :file:`tests/subsys/partition_manager` for example configurations.
+
+   * If the external flash device is not using the :ref:`QSPI NOR <zephyr:dtbinding_nordic_qspi_nor>` driver, you must enable :kconfig:option:`CONFIG_PM_OVERRIDE_EXTERNAL_DRIVER_CHECK` to override the Partition Manager's external flash driver check, and the required driver must also be enabled for all applications that need it.
+
+See :ref:`ug_bootloader_external_flash` for more details on using external flash memory with MCUboot.
+
 .. _pm_build_system:
+
+A partition can be accessible at runtime only if the flash device where it resides has its driver enabled at compile time.
+Partition manager ignores partitions that are located in a region without its driver enabled.
+To let partition manager know which Kconfig option ensures the existence of the driver, the option ``DEFAULT_DRIVER_KCONFIG`` is used.
+
+For partitions in the internal flash memory, ``DEFAULT_DRIVER_KCONFIG`` within :file:`partition_manager.cmake` is set automatically to :kconfig:option:`CONFIG_SOC_FLASH_NRF`, so that all the partitions placed in the internal flash are always available at runtime.
+For external regions, ``DEFAULT_DRIVER_KCONFIG`` within :file:`partition_manager.cmake` must be set to :kconfig:option:`CONFIG_PM_EXTERNAL_FLASH_HAS_DRIVER`.
+Out-of-tree drivers can select this value to attest that they provide support for the external flash.
+This is a hidden option and can be selected only by an external driver or a Kconfig option.
+
+This option is automatically set when :kconfig:option:`CONFIG_NRF_QSPI_NOR` or :kconfig:option:`CONFIG_SPI_NOR` is enabled.
+If the application provides the driver in an unusual way, this option can be overridden by setting :kconfig:option:`CONFIG_PM_OVERRIDE_EXTERNAL_DRIVER_CHECK` in the application configuration.
+
+As partition manager does not know if partitions are used at runtime, consider the following:
+
+  * Enabling Kconfig options that affect ``DEFAULT_DRIVER_KCONFIG`` will add a partition map entry for the partition depending on it, whether it is used at runtime or not.
+  * Not enabling the Kconfig options that affect ``DEFAULT_DRIVER_KCONFIG`` will not add partition map entry for partition depending on it, whether it is used at runtime or not.
+  * Enabling Kconfig options that affect ``DEFAULT_DRIVER_KCONFIG`` can cause linker errors when the option has no effect on including a driver into compilation.
+    In this case, partition manager adds a partition map entry that has a pointer to the flash device it is supposed to be placed on, but due to misconfiguration the driver is actually not compiled in.
+    This situation can also be caused by setting the :kconfig:option:`CONFIG_PM_OVERRIDE_EXTERNAL_DRIVER_CHECK`, as partition manager will just assume that the driver is provided by the application.
+
+.. note::
+
+   When using an application configured with an MCUboot child image, both images use the same partition manager configuration, which means that the app and MCUboot have exactly the same partition maps.
+   The accessibility at runtime of flash partitions depends on the configurations of both the application and MCUboot and the values they give to the ``DEFAULT_DRIVER_KCONFIG`` option of the partition manager region specification.
 
 Build system
 ************
@@ -537,8 +578,6 @@ The configurations generated by the Partition Manager script are imported as CMa
 The Partition Manager script outputs a :file:`partitions.yml` file.
 This file contains the internal state of the Partition Manager at the end of processing.
 This means it contains the merged contents of all :file:`pm.yml` files, the sizes and addresses of all partitions, and other information generated by the Partition Manager.
-
-
 
 .. _pm_generated_output_and_usage:
 
@@ -578,7 +617,7 @@ HEX files
 
 The Partition Manager may implicitly or explicitly assign a HEX file to a partition.
 
-Image partitions are implicitly assigned the compiled HEX file, i.e. the HEX file that is generated when building the corresponding image.
+Image partitions are implicitly assigned the compiled HEX file, that is, the HEX file that is generated when building the corresponding image.
 Container partitions are implicitly assigned the result of merging the HEX files that are assigned to the underlying partitions.
 Placeholder partitions are not implicitly assigned a HEX file.
 
@@ -612,6 +651,8 @@ If the HEX files overlap, the conflict is resolved as follows:
 * Explicitly assigned HEX files overwrite implicitly assigned HEX files.
 
 This means that you can overwrite a partition's HEX file by wrapping that partition in another partition and assigning a HEX file to the new partition.
+
+.. _pm_generated_output_and_usage_pm_report:
 
 Partition Manager report
 ------------------------
@@ -663,13 +704,13 @@ For example, if you generate a partition placement report on the build of :file:
    +---0x23000: mcuboot_primary (0x6e000)-----+
    | 0x23000: mcuboot_pad (0x200)             |
    +---0x23200: mcuboot_primary_app (0x6de00)-+
-   +---0x23200: spm_app (0x6de00)-------------+
+   +---0x23200: app_image (0x6de00)-----------+
    | 0x23200: app (0x6de00)                   |
    | 0x91000: mcuboot_secondary (0x6e000)     |
    | 0xff000: EMPTY_2 (0x1000)                |
    +------------------------------------------+
 
-The sizes of each partition are determined by the associated `pm.yml` file, such as :file:`nrf/samples/bootloader/pm.yml` for |NSIB| and :file:`bootloader/mcuboot/boot/zephyr/pm.yml` for MCUboot.
+The sizes of each partition are determined by the associated :file:`pm.yml` file, such as :file:`nrf/samples/bootloader/pm.yml` for |NSIB| and :file:`bootloader/mcuboot/boot/zephyr/pm.yml` for MCUboot.
 
 .. _ug_pm_static:
 
@@ -697,14 +738,25 @@ Configuring static partitions
 Static partitions are defined through a YAML-formatted configuration file in the root application's source directory.
 This file is similar to the regular :file:`pm.yml` configuration files, except that it also defines the start address for all partitions.
 
-The static configuration can be provided through a :file:`pm_static.yml` file in the application's source directory.
-Alternatively, define a ``PM_STATIC_YML_FILE`` variable that provides the path and file name for the static configuration in the application's :file:`CMakeLists.txt` file, as shown in the example below.
+You can set ``PM_STATIC_YML_FILE`` to contain exactly the static configuration you want to use.
 
-.. code-block:: cmake
+If you do not set ``PM_STATIC_YML_FILE``, the build system will use the following order to look for files in your application source directory to use as a static configuration layout:
 
-   set(PM_STATIC_YML_FILE
-     ${CMAKE_CURRENT_SOURCE_DIR}/configuration/${BOARD}/pm_static_${CMAKE_BUILD_TYPE}.yml
-     )
+* If build type is used, :ref:`gs_modifying_build_types`, the following order applies:
+
+  1. If the file :file:`pm_static_<board>_<revision>_<buildtype>.yml` exists, it will be used.
+  #. Otherwise, if the file :file:`pm_static_<board>_<buildtype>.yml` exists, it will be used.
+  #. Otherwise, if the file :file:`pm_static_<buildtype>.yml` exists, it will be used.
+  #. Otherwise, if the file :file:`pm_static.yml` exists, it will be used.
+
+* If build type is not used, then the same order as above applies, except that *<buildtype>* is not part of the file name:
+
+  1. If the file :file:`pm_static_<board>_<revision>.yml` exists, it will be used.
+  #. Otherwise, if the file :file:`pm_static_<board>.yml` exists, it will be used.
+  #. Otherwise, if the file :file:`pm_static.yml` exists, it will be used.
+
+For :ref:`ug_multi_image` where the image targets a different domain, :ref:`ug_multi_image_build_scripts` uses the same search algorithm, but a domain specific configuration file is also searched.
+For example, :file:`pm_static_<board>_<buildtype>_<domain>.yml` or :file:`pm_static_<board>_<domain>.yml`.
 
 Use a static partition layout to ensure consistency between builds, as the settings storage will be at the same location after the DFU.
 

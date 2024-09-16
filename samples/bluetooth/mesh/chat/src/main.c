@@ -7,13 +7,13 @@
 /** @file
  *  @brief Nordic Mesh light sample
  */
-#include <bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/bluetooth.h>
 #include <bluetooth/mesh/models.h>
 #include <bluetooth/mesh/dk_prov.h>
 #include <dk_buttons_and_leds.h>
 #include "model_handler.h"
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(chat, CONFIG_LOG_DEFAULT_LEVEL);
 
 static void bt_ready(int err)
@@ -44,7 +44,7 @@ static void bt_ready(int err)
 	printk("Mesh initialized\n");
 }
 
-void main(void)
+int main(void)
 {
 	int err;
 
@@ -54,4 +54,6 @@ void main(void)
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
 	}
+
+	return 0;
 }

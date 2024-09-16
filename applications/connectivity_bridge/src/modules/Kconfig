@@ -10,7 +10,7 @@ source "subsys/logging/Kconfig.template.log_config"
 
 config BRIDGE_CDC_ENABLE
 	bool "Enable USB CDC ACM"
-	depends on USB
+	depends on USB_DEVICE_STACK
 	select USB_CDC_ACM
 	help
 		This option enables USB CDC ACM
@@ -73,7 +73,7 @@ endif
 
 config BRIDGE_BUF_SIZE
 	int "Transport interface buffer size"
-	default 2048
+	default 4096
 	help
 	  Size of transmit/receive buffer for transfer between interfaces.
 

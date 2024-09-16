@@ -1,0 +1,23 @@
+/* Definitions for optional metrics. */
+
+#ifdef CONFIG_MEMFAULT_NCS_STACK_METRICS
+MEMFAULT_METRICS_KEY_DEFINE(Ncs_ConnectionPollUnusedStack, kMemfaultMetricType_Unsigned)
+MEMFAULT_METRICS_KEY_DEFINE(NcsBtRxUnusedStack, kMemfaultMetricType_Unsigned)
+MEMFAULT_METRICS_KEY_DEFINE(NcsBtTxUnusedStack, kMemfaultMetricType_Unsigned)
+#endif /* CONFIG_MEMFAULT_NCS_STACK_METRICS */
+
+#ifdef CONFIG_MEMFAULT_NCS_LTE_METRICS
+MEMFAULT_METRICS_KEY_DEFINE(Ncs_LteTimeToConnect, kMemfaultMetricType_Timer)
+MEMFAULT_METRICS_KEY_DEFINE(Ncs_LteConnectionLossCount, kMemfaultMetricType_Unsigned)
+MEMFAULT_METRICS_KEY_DEFINE(Ncs_LtePsmTauSec, kMemfaultMetricType_Signed)
+MEMFAULT_METRICS_KEY_DEFINE(Ncs_LtePsmActiveTimeSec, kMemfaultMetricType_Signed)
+MEMFAULT_METRICS_KEY_DEFINE(Ncs_LteEdrxIntervalMsec, kMemfaultMetricType_Unsigned)
+MEMFAULT_METRICS_KEY_DEFINE(Ncs_LteEdrxPtwMsec, kMemfaultMetricType_Unsigned)
+MEMFAULT_METRICS_KEY_DEFINE(Ncs_LteMode, kMemfaultMetricType_Unsigned)
+#endif /* CONFIG_MEMFAULT_NCS_LTE_METRICS */
+
+#ifdef CONFIG_MEMFAULT_NCS_BT_METRICS
+MEMFAULT_METRICS_KEY_DEFINE(Ncs_BtConnectionTime, kMemfaultMetricType_Timer)
+MEMFAULT_METRICS_KEY_DEFINE(Ncs_BtConnectionCount, kMemfaultMetricType_Unsigned)
+MEMFAULT_METRICS_KEY_DEFINE(Ncs_BtBondCount, kMemfaultMetricType_Unsigned)
+#endif /* CONFIG_MEMFAULT_NCS_BT_METRICS */

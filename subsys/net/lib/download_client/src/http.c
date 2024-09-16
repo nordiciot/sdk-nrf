@@ -8,8 +8,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <logging/log.h>
-#include <sys/__assert.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/sys/__assert.h>
 #include <net/download_client.h>
 
 LOG_MODULE_DECLARE(download_client, CONFIG_DOWNLOAD_CLIENT_LOG_LEVEL);
@@ -40,9 +40,11 @@ LOG_MODULE_DECLARE(download_client, CONFIG_DOWNLOAD_CLIENT_LOG_LEVEL);
 	"Connection: keep-alive\r\n"                                           \
 	"\r\n"
 
+extern char *strnstr(const char *haystack, const char *needle, size_t haystack_sz);
+
 int url_parse_host(const char *url, char *host, size_t len);
 int url_parse_file(const char *url, char *file, size_t len);
-int socket_send(const struct download_client *client, size_t len);
+int socket_send(const struct download_client *client, size_t len, int timeout);
 
 int http_get_request_send(struct download_client *client)
 {
@@ -54,6 +56,8 @@ int http_get_request_send(struct download_client *client)
 
 	__ASSERT_NO_MSG(client->host);
 	__ASSERT_NO_MSG(client->file);
+
+	client->http.has_header = false;
 
 	err = url_parse_host(client->host, host, sizeof(host));
 	if (err) {
@@ -83,14 +87,17 @@ int http_get_request_send(struct download_client *client)
 		len = snprintf(client->buf,
 			CONFIG_DOWNLOAD_CLIENT_BUF_SIZE,
 			HTTP_GET_RANGE, file, host, client->progress, off);
+		client->http.ranged = true;
 	} else if (client->progress) {
 		len = snprintf(client->buf,
 			CONFIG_DOWNLOAD_CLIENT_BUF_SIZE,
 			HTTP_GET_OFFSET, file, host, client->progress);
+		client->http.ranged = false;
 	} else {
 		len = snprintf(client->buf,
 			CONFIG_DOWNLOAD_CLIENT_BUF_SIZE,
 			HTTP_GET, file, host);
+		client->http.ranged = false;
 	}
 
 	if (len < 0 || len > CONFIG_DOWNLOAD_CLIENT_BUF_SIZE) {
@@ -102,7 +109,7 @@ int http_get_request_send(struct download_client *client)
 		LOG_HEXDUMP_DBG(client->buf, len, "HTTP request");
 	}
 
-	err = socket_send(client, len);
+	err = socket_send(client, len, 0);
 	if (err) {
 		LOG_ERR("Failed to send HTTP request, errno %d", errno);
 		return err;
@@ -114,21 +121,17 @@ int http_get_request_send(struct download_client *client)
 /* Returns:
  *  1 while the header is being received
  *  0 if the header has been fully received
- * -1 on error
+ * -errno on error
  */
 static int http_header_parse(struct download_client *client, size_t *hdr_len)
 {
 	char *p;
 	char *q;
 	unsigned int http_status;
-	const bool using_range_requests =
-		(client->proto == IPPROTO_TLS_1_2 ||
-		 IS_ENABLED(CONFIG_DOWNLOAD_CLIENT_RANGE_REQUESTS) ||
-		 client->progress);
 
-	const unsigned int expected_status = using_range_requests ? 206 : 200;
+	const unsigned int expected_status = (client->http.ranged || client->progress) ? 206 : 200;
 
-	p = strstr(client->buf, "\r\n\r\n");
+	p = strnstr(client->buf, "\r\n\r\n", sizeof(client->buf));
 	if (!p || p > client->buf + client->offset) {
 		/* Waiting full HTTP header */
 		LOG_DBG("Waiting full header in response");
@@ -148,17 +151,22 @@ static int http_header_parse(struct download_client *client, size_t *hdr_len)
 	}
 
 	/* Look for the status code just after "http/1.1 " */
-	p = strstr(client->buf, "http/1.1 ");
+	p = strnstr(client->buf, "http/1.1 ", sizeof(client->buf));
 	if (!p) {
 		LOG_ERR("Server response missing HTTP/1.1");
-		return -1;
+		return -EBADMSG;
 	}
 	p += strlen("http/1.1 ");
 
 	http_status = strtoul(p, &q, 10);
 	if (!q) {
 		LOG_ERR("Server response malformed: status code not found");
-		return -1;
+		return -EBADMSG;
+	}
+
+	if (expected_status == 206 && http_status == 200) {
+		LOG_ERR("Server respond range not supported");
+		return -ERANGE;
 	}
 
 	if (http_status != expected_status) {
@@ -173,37 +181,37 @@ static int http_header_parse(struct download_client *client, size_t *hdr_len)
 		}
 		*q = '\0';
 
-		LOG_ERR("Unexpected HTTP response: %s", log_strdup(p));
-		return -1;
+		LOG_ERR("Unexpected HTTP response: %s", p);
+		return -EBADMSG;
 	}
 
 	/* The file size is returned via "Content-Length" in case of HTTP,
 	 * and via "Content-Range" in case of HTTPS with range requests.
 	 */
 	if (client->file_size == 0) {
-		if (using_range_requests) {
-			p = strstr(client->buf, "content-range");
+		if (client->http.ranged) {
+			p = strnstr(client->buf, "content-range", sizeof(client->buf));
 			if (!p) {
 				LOG_ERR("Server did not send "
 					"\"Content-Range\" in response");
-				return -1;
+				return -EBADMSG;
 			}
-			p = strstr(p, "/");
+			p = strnstr(p, "/", sizeof(client->buf) - (p - client->buf));
 			if (!p) {
 				LOG_ERR("No file size in response");
-				return -1;
+				return -EBADMSG;
 			}
 		} else { /* proto == PROTO_HTTP */
-			p = strstr(client->buf, "content-length");
+			p = strnstr(client->buf, "content-length", sizeof(client->buf));
 			if (!p) {
 				LOG_WRN("Server did not send "
 					"\"Content-Length\" in response");
-					return -1;
+					return -EBADMSG;
 			}
 			p = strstr(p, ":");
 			if (!p) {
 				LOG_ERR("No file size in response");
-				return -1;
+				return -EBADMSG;
 			}
 			/* Accumulate any eventual progress (starting offset)
 			 * when reading the file size from Content-Length
@@ -215,7 +223,7 @@ static int http_header_parse(struct download_client *client, size_t *hdr_len)
 		LOG_DBG("File size = %u", client->file_size);
 	}
 
-	p = strstr(client->buf, "connection: close");
+	p = strnstr(client->buf, "connection: close", sizeof(client->buf));
 	if (p) {
 		LOG_WRN("Peer closed connection, will re-connect");
 		client->http.connection_close = true;
@@ -229,7 +237,7 @@ static int http_header_parse(struct download_client *client, size_t *hdr_len)
 /* Returns:
  *  1 if more data is expected
  *  0 if a whole fragment has been received
- * -1 on error
+ * -errno on error
  */
 int http_parse(struct download_client *client, size_t len)
 {
@@ -247,7 +255,7 @@ int http_parse(struct download_client *client, size_t len)
 		}
 		if (rc < 0) {
 			/* Something is wrong with the header */
-			return -1;
+			return rc;
 		}
 
 		if (client->offset != hdr_len) {
@@ -279,12 +287,20 @@ int http_parse(struct download_client *client, size_t len)
 	client->progress += MIN(client->offset, len);
 
 	/* Have we received a whole fragment or the whole file? */
-	if (client->progress != client->file_size &&
-	    client->offset < (client->config.frag_size_override != 0 ?
-			      client->config.frag_size_override :
-			      CONFIG_DOWNLOAD_CLIENT_HTTP_FRAG_SIZE)) {
-		return 1;
+	if (client->progress != client->file_size) {
+		if (client->http.ranged) {
+			if (client->offset < (client->config.frag_size_override != 0 ?
+						      client->config.frag_size_override :
+						      CONFIG_DOWNLOAD_CLIENT_HTTP_FRAG_SIZE)) {
+				/* Ranged query: read until a full fragment */
+				return 1;
+			}
+		} else {
+			/* Non-ranged query: just keep on reading, ignore fragment size */
+			return 1;
+		}
 	}
 
+	/* Either we have a full file, or we need to request a next fragment */
 	return 0;
 }

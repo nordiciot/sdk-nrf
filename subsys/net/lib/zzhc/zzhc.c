@@ -4,22 +4,30 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(zzhc, CONFIG_ZZHC_LOG_LEVEL);
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <stdio.h>
 #include <ctype.h>
 #include <string.h>
 #if defined(CONFIG_POSIX_API)
-#include <posix/unistd.h>
-#include <posix/netdb.h>
-#include <posix/sys/socket.h>
+#include <zephyr/posix/unistd.h>
+#include <zephyr/posix/netdb.h>
+#include <zephyr/posix/sys/socket.h>
 #else
-#include <net/socket.h>
+#include <zephyr/net/socket.h>
 #endif
 
+#include <nrf_modem_at.h>
+#include <modem/at_monitor.h>
+#include <modem/nrf_modem_lib.h>
+#include <nrf_socket.h>
+
 #include "zzhc_internal.h"
+
+NRF_MODEM_LIB_ON_INIT(zzhc_init_hook, on_modem_lib_init, NULL);
+AT_MONITOR(zzhc_monitor, ANY, response_handler);
 
 #define REGVER            2         /** Self-registration protocol version */
 #define MANUFACTURER_CODE "NOD"     /** Manufactuerer code */
@@ -30,9 +38,16 @@ LOG_MODULE_REGISTER(zzhc, CONFIG_ZZHC_LOG_LEVEL);
 #define RETRY_TIMEOUT     3600      /** 1 hour, 3600s */
 #define RETRY_CNT_MAX     3         /** Max. value of retry counter */
 #define WHITELISTED_OP_ID 6         /** Whitelisted Operator ID */
+#define PRIMARY_DNS "218.2.2.2"
+#define SECONDARY_DNS "218.4.4.4"
 
 #define THREAD_PRIORITY   K_PRIO_PREEMPT(CONFIG_ZZHC_THREAD_PRIO)
 #define STACK_SIZE        CONFIG_ZZHC_STACK_SIZE
+
+static uint8_t at_resp[256];
+
+static struct k_thread zzhc_thread;
+static K_THREAD_STACK_DEFINE(zzhc_thread_stack, STACK_SIZE);
 
 /**@brief Host name of self-registration server. */
 static char const hostname[] = "zzhc.vnet.cn";
@@ -43,11 +58,13 @@ static char const status_cereg[7] = "+CEREG:";
 /**@brief %XSIM event prefix. */
 static char const status_xsim[6] = "%XSIM:";
 
+static struct zzhc zzhc_context;
+
 /**@brief Function to handle AT-command notifications. */
-static void at_notif_handler(void *context, char *response)
+static void response_handler(const char *response)
 {
 	int rc;
-	struct zzhc *ctx = (struct zzhc *)context;
+	struct zzhc *ctx = &zzhc_context;
 
 	if (ctx == NULL) {
 		return;
@@ -121,7 +138,8 @@ static int build_json(struct zzhc *ctx, char *buff, int len)
 	strcat(l_buff, duple);
 
 	/* IMEI */
-	if (zzhc_at_cmd_xfer("AT+CGSN=1", ctx->at_resp, AT_RESPONSE_LEN) != 0) {
+	if (nrf_modem_at_cmd(ctx->at_resp, AT_RESPONSE_LEN,
+			     "AT+CGSN=1") != 0) {
 		return -EIO;
 	}
 	cptr = strchr(ctx->at_resp, '"');
@@ -135,7 +153,8 @@ static int build_json(struct zzhc *ctx, char *buff, int len)
 	strcat(l_buff, duple);
 
 	/* MODEL */
-	if (zzhc_at_cmd_xfer("AT+CGMM", ctx->at_resp, AT_RESPONSE_LEN) != 0) {
+	if (nrf_modem_at_cmd(ctx->at_resp, AT_RESPONSE_LEN,
+			     "AT+CGMM") != 0) {
 		return -EIO;
 	}
 	cptr = strstr(ctx->at_resp, "\r\n");
@@ -148,8 +167,8 @@ static int build_json(struct zzhc *ctx, char *buff, int len)
 	strcat(l_buff, duple);
 
 	/* SWVER */
-	if (zzhc_at_cmd_xfer("AT%SHORTSWVER", ctx->at_resp,
-		AT_RESPONSE_LEN) != 0) {
+	if (nrf_modem_at_cmd(ctx->at_resp, AT_RESPONSE_LEN,
+			     "AT%%SHORTSWVER") != 0) {
 		return -EIO;
 	}
 	cptr = strstr(ctx->at_resp, "\r\n");
@@ -165,7 +184,8 @@ static int build_json(struct zzhc *ctx, char *buff, int len)
 	strcat(l_buff, duple);
 
 	/* SIM1LTEIMSI */
-	if (zzhc_at_cmd_xfer("AT+CIMI", ctx->at_resp, AT_RESPONSE_LEN) != 0) {
+	if (nrf_modem_at_cmd(ctx->at_resp, AT_RESPONSE_LEN,
+			     "AT+CIMI") != 0) {
 		return -EIO;
 	}
 	cptr = strstr(ctx->at_resp, "\r\n");
@@ -230,7 +250,7 @@ static int resolve_and_connect(struct zzhc *ctx)
 
 	rc = getaddrinfo(hostname, NULL, &hints, &info);
 	if (rc != 0) {
-		LOG_DBG("Can't resolve hostname %s.", log_strdup(hostname));
+		LOG_DBG("Can't resolve hostname %s.", hostname);
 		return -EIO;
 	}
 
@@ -384,7 +404,7 @@ static int check_simcard_whitelist(struct zzhc *ctx)
 	int rc;
 
 	/* Read operator ID. For China Telecom, it's 6. */
-	rc = zzhc_at_cmd_xfer("AT%XOPERID", ctx->at_resp, AT_RESPONSE_LEN);
+	rc = nrf_modem_at_cmd(ctx->at_resp, AT_RESPONSE_LEN, "AT%%XOPERID");
 	if (rc != 0) {
 		return -EIO;
 	}
@@ -413,8 +433,7 @@ static int check_iccid(struct zzhc *ctx)
 	char c;
 
 	/* SIM1ICCID */
-	if (zzhc_at_cmd_xfer("AT+CRSM=176,12258,0,0,0", ctx->at_resp,
-		AT_RESPONSE_LEN) != 0) {
+	if (nrf_modem_at_cmd(ctx->at_resp, AT_RESPONSE_LEN, "AT+CRSM=176,12258,0,0,0") != 0) {
 		return -EIO;
 	}
 
@@ -442,6 +461,82 @@ static int check_iccid(struct zzhc *ctx)
 	return rc;
 }
 
+static int check_and_set_dns(struct zzhc *ctx)
+{
+	int err;
+	uint8_t dns_compare[32];
+	struct nrf_in_addr pri_dns;
+	struct nrf_in_addr sec_dns;
+	struct nrf_addrinfo *info;
+	struct nrf_addrinfo hints = {
+		.ai_family = NRF_AF_INET,
+		.ai_socktype = NRF_SOCK_STREAM,
+		.ai_protocol = NRF_IPPROTO_TCP,
+	};
+
+	err = nrf_modem_at_cmd(at_resp, sizeof(at_resp), "AT+CGCONTRDP=0");
+
+	if (err) {
+		LOG_WRN("nrf_modem_at_cmd failed. errno: %d", err);
+		return 0;
+	}
+
+	snprintk(dns_compare, sizeof(dns_compare),
+		 "\"%s\",\"%s\"",
+		 PRIMARY_DNS,
+		 SECONDARY_DNS);
+
+	if (strstr(at_resp, dns_compare) != NULL) {
+		return 0;
+	}
+
+	err = nrf_inet_pton(NRF_AF_INET, PRIMARY_DNS, &pri_dns);
+
+	if (err != 1) {
+		LOG_DBG("nrf_inet_pton failed. errno: %d", errno);
+		return -EIO;
+	}
+
+	/* Manually set DNS */
+	err = nrf_setdnsaddr(NRF_AF_INET, &pri_dns, sizeof(pri_dns));
+
+	if (err) {
+		LOG_DBG("nrf_setdnsaddr failed. errno: %d", errno);
+		return -EIO;
+	}
+
+	/* Hostname resolution */
+	err = nrf_getaddrinfo(hostname, NULL, &hints, &info);
+	if (err) {
+		LOG_DBG("Can't resolve hostname %s. err: %d. Trying secondary backup DNS.",
+			hostname, err);
+	} else {
+		return 0;
+	}
+
+	err = nrf_inet_pton(NRF_AF_INET, SECONDARY_DNS, &sec_dns);
+
+	if (err != 1) {
+		LOG_DBG("nrf_inet_pton failed. errno: %d", errno);
+		return -EIO;
+	}
+
+	err = nrf_setdnsaddr(NRF_AF_INET, &sec_dns, sizeof(sec_dns));
+
+	if (err) {
+		LOG_DBG("nrf_setdnsaddr failed. errno: %d", errno);
+		return -EIO;
+	}
+
+	err = nrf_getaddrinfo(hostname, NULL, &hints, &info);
+	if (err) {
+		LOG_DBG("Can't resolve hostname %s. err: %d", hostname, err);
+		return -EIO;
+	}
+
+	return 0;
+}
+
 /**@brief Finite state machine */
 static int fsm(struct zzhc *ctx)
 {
@@ -452,15 +547,15 @@ static int fsm(struct zzhc *ctx)
 		LOG_DBG("STATE_INIT");
 
 		zzhc_sem_init(ctx->sem, 0, 0);
-		zzhc_register_handler(ctx, at_notif_handler);
+		at_monitor_resume(&zzhc_monitor);
 		ctx->state = STATE_WAIT_FOR_REG;
 		break;
 
 	case STATE_WAIT_FOR_REG:
 		LOG_DBG("STATE_WAIT_FOR_REG");
 
-		if (zzhc_at_cmd_xfer("AT+CEREG?", ctx->at_resp,
-			AT_RESPONSE_LEN) != 0) {
+		if (nrf_modem_at_cmd(ctx->at_resp, AT_RESPONSE_LEN,
+				     "AT+CEREG?") != 0) {
 			return -EIO;
 		}
 
@@ -472,7 +567,8 @@ static int fsm(struct zzhc *ctx)
 		}
 
 		if (check_iccid(ctx) == 0 ||
-			check_simcard_whitelist(ctx) != 0) {
+		    check_simcard_whitelist(ctx) != 0 ||
+		    check_and_set_dns(ctx) != 0) {
 			ctx->state = STATE_END;
 		} else {
 			ctx->state = STATE_START;
@@ -564,7 +660,7 @@ static int fsm(struct zzhc *ctx)
 
 		/* Clean-up */
 		disconnect(ctx);
-		zzhc_deregister_handler(ctx, at_notif_handler);
+		at_monitor_pause(&zzhc_monitor);
 		return -ECANCELED;
 
 	default:
@@ -581,26 +677,20 @@ static void zzhc_init(void *arg1, void *arg2, void *arg3)
 	struct zzhc *ctx;
 
 	/* Unconditionally subscribe +CEREG events */
-	if (zzhc_at_cmd_xfer("AT+CEREG=5", NULL, 0) != 0) {
+	if (nrf_modem_at_printf("AT+CEREG=5") != 0) {
 		LOG_DBG("Can't subscribe to +CEREG events.");
 		return;
 	}
 
 	/* Unconditionally subscribe %XSIM events */
-	if (zzhc_at_cmd_xfer("AT%XSIM=1", NULL, 0) != 0) {
+	if (nrf_modem_at_printf("AT%%XSIM=1") != 0) {
 		LOG_DBG("Can't subscribe to %%XSIM events.");
 		return;
 	}
 
-	/* Allocate resource. */
-	ctx = (struct zzhc *)zzhc_malloc(sizeof(struct zzhc));
-	if (ctx == NULL) {
-		LOG_DBG("Can't allocate memory for context.");
-		return;
-	}
+	ctx = &zzhc_context;
 
 	/* Initial values */
-	memset(ctx, 0, sizeof(struct zzhc));
 	ctx->state      = STATE_INIT;
 	ctx->registered = false;
 	ctx->sim_ready  = false;
@@ -611,6 +701,7 @@ static void zzhc_init(void *arg1, void *arg2, void *arg3)
 	/* Initialize external modules */
 	rc = zzhc_ext_init(ctx);
 	if (rc != 0) {
+		LOG_DBG("zzhc_ext_init() = %d", rc);
 		goto zzhc_init_cleanup;
 	}
 
@@ -628,10 +719,24 @@ static void zzhc_init(void *arg1, void *arg2, void *arg3)
 
 zzhc_init_cleanup:
 	zzhc_ext_uninit(ctx);
-	zzhc_free(ctx);
 	LOG_DBG("Exit.");
 }
 
-K_THREAD_DEFINE(zzhc_thread, STACK_SIZE,
-		zzhc_init, NULL, NULL, NULL,
-		THREAD_PRIORITY, 0, 0);
+static void on_modem_lib_init(int ret, void *ctx)
+{
+	ARG_UNUSED(ctx);
+
+	/** ret: Zero on success, a positive value @em nrf_modem_dfu when executing
+	 *  Modem firmware updates, and negative errno on other failures.
+	 *
+	 *  ZZHC thread is only started upon normal modem lib initialization.
+	 */
+	if (ret == 0) {
+		k_thread_create(&zzhc_thread, zzhc_thread_stack,
+				K_THREAD_STACK_SIZEOF(zzhc_thread_stack),
+				zzhc_init, NULL, NULL, NULL,
+				THREAD_PRIORITY, K_USER, K_NO_WAIT);
+
+		LOG_DBG("zzhc_thread created");
+	}
+}

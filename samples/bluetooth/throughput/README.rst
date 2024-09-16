@@ -7,11 +7,23 @@ Bluetooth: Throughput
    :local:
    :depth: 2
 
-.. note::
-   The implementation and usage of this sample has changed considerably with |NCS| v1.5.0.
+The Bluetooth® Throughput sample uses the :ref:`throughput_readme` to measure Bluetooth Low Energy throughput performance.
+You can use it to determine the maximum throughput, or to experiment with different connection parameters and check their impact on the throughput.
 
-The Bluetooth® Throughput sample uses the :ref:`throughput_readme` to measure Bluetooth® Low Energy throughput performance.
-You can use it to determine the maximum throughput, or to experiment with different connection parameters and check their influence on the throughput.
+Requirements
+************
+
+The sample supports the following development kits:
+
+.. table-from-sample-yaml::
+
+.. include:: /includes/tfm.txt
+
+You can use any two of the development kits listed above and mix different development kits.
+
+.. include:: /includes/hci_rpmsg_overlay.txt
+
+The sample also requires a connection to a computer with a serial terminal |ANSI| for each of the development kits.
 
 Overview
 ********
@@ -24,23 +36,23 @@ Zephyr's :ref:`zephyr:shell_api` module is used to handle the commands.
 The sample demonstrates the interaction of the following connection parameters:
 
 ATT_MTU size
-   In *Bluetooth* Low Energy, the default Maximum Transmission Unit (MTU) is 23 bytes.
-   When increasing this value, longer ATT payloads can be achieved, increasing ATT throughput.
+   In Bluetooth Low Energy, the default Maximum Transmission Unit (MTU) is 23 bytes.
+   When increasing this value, longer ATT payloads can be achieved, increasing the ATT throughput.
 
-.. note::
-   To configure the ATT_MTU size, use menuconfig and compile and program the sample again.
+   .. note::
+      To configure the ATT_MTU size, use menuconfig and compile and program the sample again.
 
 Data length
-   In *Bluetooth* Low Energy, the default data length for a radio packet is 27 bytes.
-   Data length extension allows to use larger radio packets, so that more data can be sent in one packet, increasing throughput.
+   In Bluetooth Low Energy, the default data length for a radio packet is 27 bytes.
+   Data length extension allows to use larger radio packets, so that more data can be sent in one packet, increasing the throughput.
 
 Connection interval
-   The connection interval defines how often the devices must listen on the radio.
+   The connection interval defines how often the devices must listen to the radio.
    When increasing this value, more packets may be sent in one interval, but if a packet is lost, the wait until the retransmission is longer.
 
 Physical layer (PHY) data rate
-   Starting with Bluetooth® 5, the over-the-air data rate in Bluetooth Low Energy can exceed 1 Ms/s (mega symbol per second), which allows for faster transmission.
-   In addition, it is possible to use coded PHY (available on the nRF52840 SoC only) for long-range transmission.
+   Starting with Bluetooth 5, the over-the-air data rate in Bluetooth Low Energy can exceed 1 Ms/s (mega symbols per second), which allows for faster transmission.
+   In addition, you can use coded PHY (available on the nRF52840 SoC only) for long-range transmission.
 
 By default, the following connection parameter values are used:
 
@@ -50,14 +62,13 @@ By default, the following connection parameter values are used:
    * - Parameter
      - Value
    * - ATT_MTU size
-     - 247 bytes
+     - 498 bytes
    * - Data length
      - 251 bytes
    * - Connection interval
      - 320 units (400 ms)
    * - PHY data rate
      - 2 Ms/s
-
 
 Changing connection parameter values
 ====================================
@@ -71,57 +82,38 @@ You can adjust the following parameters:
 * LE Connection interval
 
 .. note::
-   In a *Bluetooth* Low Energy connection, the different devices negotiate the connection parameters that are used.
+   In a Bluetooth Low Energy connection, the different devices negotiate the connection parameters that are used.
    If the configuration parameters for the devices differ, they agree on the lowest common denominator.
 
    By default, the sample uses the fastest connection parameters.
    You can change them to different valid values without a need to program both kits again.
 
-.. note::
-   When you have set the LE Connection Interval to high values and need to change the PHY or the Data Length in the next test, the PHY Update procedure or Data Length Update procedure can take several seconds.
-
-Requirements
-************
-
-The sample supports the following development kits:
-
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp_and_cpuapp_ns, nrf52840dk_nrf52840, nrf52833dk_nrf52833, nrf52dk_nrf52832
-
-You can use any two of the development kits listed above and mix different development kits.
-
-.. include:: /includes/hci_rpmsg_overlay.txt
-
-The sample also requires a connection to a computer with a serial terminal for each of the development kits.
+   When you have set the LE Connection Interval to high values and need to change the PHY or the Data Length in the next test, the PHY Update or Data Length Update procedure can take several seconds.
 
 User interface
 **************
 
 Button 1:
-   Set the board into a master (tester) role.
+   Set the board into a central (tester) role.
 
 Button 2:
-   Set the board into a slave (peer) role.
-
+   Set the board into a peripheral (peer) role.
 
 Building and running
 ********************
 .. |sample path| replace:: :file:`samples/bluetooth/throughput`
 
-.. include:: /includes/build_and_run.txt
-
+.. include:: /includes/build_and_run_ns.txt
 
 Testing
 =======
 
-After programming the sample to both kits, test it by performing the following steps:
+After programming the sample to both kits, complete following steps to test it:
 
-1. Connect to both kits with a terminal emulator (for example, PuTTY).
-   See :ref:`putty` for the required settings.
+1. |connect_terminal_both_ANSI|
 #. Reset both kits.
-#. Press Button 1 on the kit to set the kit into master (tester) role.
-#. Press Button 2 on the other kit to set the kit into slave (peer) mode.
+#. Press **Button 1** on the first development kit or type ``central`` in the terminal connected to the first kit to set it into the central (tester) role.
+#. Press **Button 2** on the second development kit or type ``peripheral`` in the terminal connected to the second kit to set it into the peripheral (peer) role.
 #. Observe that the kits establish a connection.
    The tester outputs the following information::
 
@@ -138,7 +130,6 @@ After programming the sample to both kits, test it by performing the following s
 #. Repeat the test after changing the parameters.
    Observe how the throughput changes for different sets of parameters.
 
-
 Sample output
 ==============
 
@@ -146,28 +137,28 @@ The result should look similar to the following output.
 
 For the tester::
 
-   *** Booting Zephyr OS build v2.4.0-ncs1-1715-g3366927a5498  ***
+   *** Booting Zephyr OS build v3.0.99-ncs1  ***
    Starting Bluetooth Throughput example
    I: SoftDevice Controller build revision:
-   I: 7a 01 b4 17 68 14 99 b6 |z...h...
-   I: 6a d1 f2 fd fe 59 63 e3 |j....Yc.
-   I: 43 ca fb 5c             |C..\
-   I: HW Platform: Nordic Semiconductor (0x0002)
+   I: 33 78 2a 18 20 f5 61 61 |3x*. .aa
+   I: a6 8b 77 60 62 83 39 2a |..w`b.9*
+   I: 7c f1 14 e4             ||...
+
+
+   : HW Platform: Nordic Semiconductor (0x0002)
    I: HW Variant: nRF52x (0x0002)
-   I: Firmware: Standard Bluetooth controller (0x00) Version 122.46081 Build 256825
-   I: Identity: D9:85:73:DC:7D:D4 (random)
-   I: HCI: version 5.2 (0x0b) revision 0x1154, manufacturer 0x0059
-   I: LMP: version 5.2 (0x0b) subver 0x1154
+   I: Firmware: Standard Bluetooth controller (0x00) Version 51.10872 Build 1643454488
+   I: Identity: D7:D6:AD:A2:50:62 (random)
+   I: HCI: version 5.3 (0x0c) revision 0x1136, manufacturer 0x0059
+   I: LMP: version 5.3 (0x0c) subver 0x1136
    Bluetooth initialized
 
-   Press button 1 on the master board.
-   Press button 2 on the slave board.
-
-
+   Press button 1 or type "central" on the central board.
+   Press button 2 or type "peripheral" on the peripheral board.
    uart:~$
-   Master role. Starting scanning
-   Filters matched. Address: D2:71:97:84:DE:B2 (random) connectable: 1
-   Connected as master
+   Central. Starting scanning
+   Filters matched. Address: DC:D6:E5:EE:75:9A (random) connectable: 1
+   Connected as central
    Conn. interval is 320 units
    Service discovery completed
    MTU exchange pending
@@ -183,41 +174,47 @@ For the tester::
    LE PHY updated: TX PHY LE 2M, RX PHY LE 2M
    LE Data length update pending
    LE data len updated: TX (len: 251 time: 2120) RX (len: 251 time: 2120)
-
-                       ^.-.^                               ^..^
-                    ^-/ooooo+:.^                       ^.--:+syo/.
-                 ^-/oooooooooooo+:.                 ^.-:::::+yyyyyy+:^
-              ^-/+oooooooooooooooooo/-^          ^.-::::::::/yyyyyyyhhs/-
-           ^-:/++++oooooooooooooooooooo+:.   ^.-::::::::::::/yyyyyyyhhhhhho:^
-         ^::///++++oooooooooooooooooooooooo//:::::::::::::::/yyyyyyyhhhhhddds
-         -::://+++ooooooooooooooooooooooooooooo+/:::::::::::/yyyyyyyhhhhhdddd^
-         -::::::/++ooooooooooooooooooooooooooooooo+/::::::::/yyyyyyyhhhhhdddd^
-         -:::::::::/+ooooooooooooooooooooooooooooossso+/::::/yyyyyyyhhhhhdddd^
-         -::::::::::::/+oooooooooooooooooooooooooossssssso+//yyyyyyyhhhhhdddd^
-         -::::::::::::::::/+ooooooooooooooooooooooossssssssssyyyyyyyhhhhhdddd.
-         -:::::::::::::::::::/+oooooooooooooooooooossssssssssyyyyyyyhhhhhdddd.
-         -:::::::::::::::::::::::/+ooooooooooooooosssssssssssyyyyyyyhhhhhdddd.
-         -::::::::::::::::::::::::::/+ooooooooooooossssssssssyyyyyyyhhhhhdddd.
-         -::::::::::::::::::::::::::::::/+ooooooooossssssssssyyyyyyyhhhhhdddd-
-         -:::::::::::::::::::::::::::::::::/+ooooosssssssssssyyyyyyyhhhhhdddd-
-         -:::::::::::::::::::::::::::::::::::::/+oossssssssssyyyyyyyhhhhhdddd:
-         -::::::::::::::::::::::::::::::::::::::::/+ossssssssyyyyyyyhhhhhdddd:
-         -::::::::::::::::::::::::::::::::::::::::::::/osssssyyyyyyyhhhhhdddd:
-         -:::::::::::::::::::::::::::::::::::::::::::::::/+ossyyyyyyhhhhhdddd:
-         -:::::::::::::::::o+/:::::::::::::::::::::::::::::::+oyyyyyhhhhhdddd:
-         -:::::::::::::::::ossyso/::::::::::::::::::::::::::::::/osyhhhhhdddd/
-         -:::::::::::::::::ossyyyyys+:::::::::::::::::::::::::::::::+shhhdddd/
-         -:::::::::::::::::ossyyyyhhhhyo/::::::::::::::::::::::::::::::/oyddd/
-         .-::::::::::::::::ossyyyyhhhhddddy/-::::::::::::::::::::::::::::::+y:
-           ^.-:::::::::::::ossyyyyhhhhdhs/.  ^.--:::::::::::::::::::::::::-.^
-              ^.--:::::::::ossyyyyhhy+-^         ^.-::::::::::::::::::--.^
-                  ^.-::::::ossyyyo/.                ^^.-:::::::::::-.^
-                     ^..-::oss+:^                       ^.-:::::-.^
-                         ^.:.^                             ^^.^^
+   +---------------------------------------------------------------------------+
+   |                                                                           |
+   |                   ####                            :::###                  |
+   |               ############                    :::::::######               |
+   |           ####################            :::::::::::##########           |
+   |       ############################    :::::::::::::::##############       |
+   |    ###################################:::::::::::::::#################    |
+   |    ::::###################################:::::::::::#################    |
+   |    ::::::::###################################:::::::#################    |
+   |    ::::::::::::###################################:::#################    |
+   |    ::::::::::::::::###################################################    |
+   |    ::::::::::::::::::::###############################################    |
+   |    ::::::::::::::::::::::::###########################################    |
+   |    ::::::::::::::::::::::::::::#######################################    |
+   |    ::::::::::::::::::::::::::::::::###################################    |
+   |    ::::::::::::::::::::::::::::::::::::###############################    |
+   |    ::::::::::::::::::::::::::::::::::::::::###########################    |
+   |    ::::::::::::::::::::::::::::::::::::::::::::#######################    |
+   |    ::::::::::::::::::::::::::::::::::::::::::::::::###################    |
+   |    :::::::::::::::::##::::::::::::::::::::::::::::::::################    |
+   |    :::::::::::::::::#####:::::::::::::::::::::::::::::::::############    |
+   |    :::::::::::::::::#########:::::::::::::::::::::::::::::::::########    |
+   |    :::::::::::::::::##############:::::::::::::::::::::::::::::::::###    |
+   |       ::::::::::::::##############    :::::::::::::::::::::::::::::       |
+   |           ::::::::::##########           ::::::::::::::::::::::           |
+   |               ::::::######                   ::::::::::::::               |
+   |                   ::##                           :::::::                  |
+   |                                                                           |
+   |     @@      @@      @@@@@      @@@@@@     @@@@@@@     @@      @@@@@       |
+   |     @@@@    @@    @@     @@    @@    @@   @@    @@    @@    @@     @@     |
+   |     @@  @@  @@   @@       @@   @@@@@@     @@     @@   @@   @@             |
+   |     @@    @@@@    @@     @@    @@  @@     @@    @@    @@    @@     @@     |
+   |     @@      @@      @@@@@      @@    @@   @@@@@@@     @@      @@@@@       |
+   |                                                                           |
+   |       S    E    M    I    C    O    N    D    U    C    T    O    R       |
+   |                                                                           |
+   +---------------------------------------------------------------------------+
 
    Done
-   [local] sent 612684 bytes (598 KB) in 3890 ms at 1260 kbps
-   [peer] received 612684 bytes (598 KB) in 2511 GATT writes at 1395626 bps
+   [local] sent 1242945 bytes (1213 KB) in 7292 ms at 1363 kbps
+   [peer] received 1242945 bytes (1213 KB) in 2511 GATT writes at 1415583 bps
 
    Type 'config' to change the configuration parameters.
    You can use the Tab key to autocomplete your input.
@@ -226,30 +223,29 @@ For the tester::
 
 For the peer::
 
-   *** Booting Zephyr OS build v2.4.0-ncs1-1715-g3366927a5498  ***
+   *** Booting Zephyr OS build v3.0.99-ncs1  ***
    Starting Bluetooth Throughput example
    I: SoftDevice Controller build revision:
-   I: 7a 01 b4 17 68 14 99 b6 |z...h...
-   I: 6a d1 f2 fd fe 59 63 e3 |j....Yc.
-   I: 43 ca fb 5c             |C..\
-   I: HW Platform: Nordic Semiconductor (0x0002)
+   I: 33 78 2a 18 20 f5 61 61 |3x*. .aa
+   I: a6 8b 77 60 62 83 39 2a |..w`b.9*
+   I: 7c f1 14 e4             ||...
+
+
+   : HW Platform: Nordic Semiconductor (0x0002)
    I: HW Variant: nRF52x (0x0002)
-   I: Firmware: Standard Bluetooth controller (0x00) Version 122.46081 Build 256825
-   I: Identity: D2:71:97:84:DE:B2 (random)
-   I: HCI: version 5.2 (0x0b) revision 0x1154, manufacturer 0x0059
-   I: LMP: version 5.2 (0x0b) subver 0x1154
+   I: Firmware: Standard Bluetooth controller (0x00) Version 51.10872 Build 1643454488
+   I: Identity: DC:D6:E5:EE:75:9A (random)
+   I: HCI: version 5.3 (0x0c) revision 0x1136, manufacturer 0x0059
+   I: LMP: version 5.3 (0x0c) subver 0x1136
    Bluetooth initialized
 
-   Press button 1 on the master board.
-   Press button 2 on the slave board.
-
-
+   Press button 1 or type "central" on the central board.
+   Press button 2 or type "peripheral" on the peripheral board.
    uart:~$
-   Slave role. Starting advertising
-   Connected as slave
+   Peripheral. Starting advertising
+   Connected as peripheral
    Conn. interval is 320 units
    LE PHY updated: TX PHY LE 2M, RX PHY LE 2M
-
 
    =============================================================================
    =============================================================================
@@ -259,7 +255,7 @@ For the peer::
    =============================================================================
    =============================================================================
    ===========================================================
-   [local] received 612684 bytes (598 KB) in 2511 GATT writes at 1261557 bps
+   [local] received 1242945 bytes (1213 KB) in 2511 GATT writes at 1415583 bps
 
 
 Dependencies
@@ -271,24 +267,27 @@ This sample uses the following |NCS| libraries:
 
 In addition, it uses the following Zephyr libraries:
 
-* ``include/console.h``
+* :file:`include/console.h`
 * :ref:`zephyr:kernel_api`:
 
-  * ``include/kernel.h``
+  * :file:`include/kernel.h`
 
-* ``include/sys/printk.h``
-* ``include/zephyr/types.h``
+* :file:`include/sys/printk.h`
+* :file:`include/zephyr/types.h`
 * :ref:`zephyr:bluetooth_api`:
 
-  * ``include/bluetooth/bluetooth.h``
-  * ``include/bluetooth/conn.h``
-  * ``include/bluetooth/gatt.h``
-  * ``include/bluetooth/hci.h``
-  * ``include/bluetooth/uuid.h``
+  * :file:`include/bluetooth/bluetooth.h`
+  * :file:`include/bluetooth/conn.h`
+  * :file:`include/bluetooth/gatt.h`
+  * :file:`include/bluetooth/hci.h`
+  * :file:`include/bluetooth/uuid.h`
 * :ref:`zephyr:shell_api`:
 
-  * ``include/shell/shell.h``
+  * :file:`include/shell/shell.h`
 
+The sample also uses the following secure firmware component:
+
+* :ref:`Trusted Firmware-M <ug_tfm>`
 
 References
 ***********

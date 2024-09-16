@@ -4,15 +4,13 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <stdio.h>
-#include <drivers/sensor.h>
-#include <drivers/uart.h>
+#include <zephyr/drivers/sensor.h>
+#include <zephyr/drivers/uart.h>
 
-#define SENSOR_LABEL		CONFIG_SENSOR_SIM_DEV_NAME
 #define SAMPLE_PERIOD_MS	100
 
-#define UART_LABEL		DT_LABEL(DT_NODELABEL(uart0))
 #define UART_BUF_SIZE		64
 
 const static enum sensor_channel sensor_channels[] = {
@@ -21,8 +19,8 @@ const static enum sensor_channel sensor_channels[] = {
 	SENSOR_CHAN_ACCEL_Z
 };
 
-static const struct device *sensor_dev;
-static const struct device *uart_dev;
+static const struct device *sensor_dev = DEVICE_DT_GET(DT_NODELABEL(sensor_sim));
+static const struct device *uart_dev = DEVICE_DT_GET(DT_NODELABEL(uart0));
 static atomic_t uart_busy;
 
 
@@ -30,24 +28,20 @@ static void uart_cb(const struct device *dev, struct uart_event *evt,
 		    void *user_data)
 {
 	if (evt->type == UART_TX_DONE) {
-		atomic_cas(&uart_busy, true, false);
+		(void)atomic_set(&uart_busy, false);
 	}
 }
 
 static int init(void)
 {
-	sensor_dev = device_get_binding(SENSOR_LABEL);
-
-	if (!sensor_dev) {
-		printk("Cannot bind sensor\n");
-		return -ENXIO;
+	if (!device_is_ready(sensor_dev)) {
+		printk("Sensor device not ready\n");
+		return -ENODEV;
 	}
 
-	uart_dev = device_get_binding(UART_LABEL);
-
-	if (!uart_dev) {
-		printk("Cannot bind UART\n");
-		return -ENXIO;
+	if (!device_is_ready(uart_dev)) {
+		printk("UART device not ready\n");
+		return -ENODEV;
 	}
 
 	int err = uart_callback_set(uart_dev, uart_cb, NULL);
@@ -87,7 +81,7 @@ static int provide_sensor_data(void)
 		return -EBUSY;
 	}
 
-	int res = snprintf(buf, sizeof(buf), "%.2f,%.2f,%.2f\r\n",
+	int res = snprintf((char *)buf, sizeof(buf), "%.2f,%.2f,%.2f\r\n",
 			   sensor_value_to_double(&data[0]),
 			   sensor_value_to_double(&data[1]),
 			   sensor_value_to_double(&data[2]));
@@ -112,10 +106,10 @@ static int provide_sensor_data(void)
 	return err;
 }
 
-void main(void)
+int main(void)
 {
 	if (init()) {
-		return;
+		return 0;
 	}
 	printk("Initialized\n");
 
@@ -137,4 +131,6 @@ void main(void)
 		k_sleep(K_MSEC(next_timeout - uptime));
 		next_timeout += SAMPLE_PERIOD_MS;
 	}
+
+	return 0;
 }

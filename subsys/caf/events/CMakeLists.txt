@@ -55,3 +55,9 @@ zephyr_sources_ifdef(CONFIG_CAF_SENSOR_EVENTS
 zephyr_sources_ifdef(CONFIG_CAF_BLE_SMP_TRANSFER_EVENTS
 	ble_smp_event.c
 )
+
+zephyr_sources_ifdef(CONFIG_CAF_SENSOR_DATA_AGGREGATOR_EVENTS
+	sensor_data_aggregator_event.c
+)
+
+zephyr_linker_sources(SECTIONS module_id_list.ld)

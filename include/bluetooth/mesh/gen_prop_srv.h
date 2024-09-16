@@ -15,7 +15,7 @@
 
 #include <bluetooth/mesh/gen_prop.h>
 #include <bluetooth/mesh/model_types.h>
-#include <sys/util.h>
+#include <zephyr/sys/util.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -163,10 +163,6 @@ struct bt_mesh_prop_srv {
 	/** Which state is currently being published. */
 	enum bt_mesh_prop_srv_state pub_state;
 
-#if CONFIG_BT_SETTINGS
-	/** Storage timer */
-	struct k_work_delayable store_timer;
-#endif
 	/** List of properties supported by the server. */
 	struct bt_mesh_prop *const properties;
 	/** Number of properties supported by the server. */
@@ -192,7 +188,7 @@ struct bt_mesh_prop_srv {
 	 *
 	 * @param[in] srv Property Server instance whose property to set.
 	 * @param[in] ctx Message context for the message that triggered the
-	 * change, or NULL if the change is not coming from a messge.
+	 * change, or NULL if the change is not coming from a message.
 	 * @param[in,out] val Property value to set. Any changes to the value
 	 * will be reflected in the response message.
 	 */
@@ -209,7 +205,7 @@ struct bt_mesh_prop_srv {
 	 *
 	 * @param[in] srv Property Server instance whose property to set.
 	 * @param[in] ctx Message context for the message that triggered the
-	 * change, or NULL if the change is not coming from a messge.
+	 * change, or NULL if the change is not coming from a message.
 	 * @param[in,out] val Property value to get. Any changes to the value
 	 * will be reflected in the response message.
 	 */

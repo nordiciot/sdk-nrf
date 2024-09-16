@@ -5,19 +5,19 @@
  */
 #include <stddef.h>
 #include <string.h>
-#include <zephyr.h>
-#include <init.h>
-#include <device.h>
+#include <zephyr/kernel.h>
+#include <zephyr/init.h>
+#include <zephyr/device.h>
 #include <nrf_modem_at.h>
 #include <modem/at_monitor.h>
-#include <toolchain/common.h>
-#include <logging/log.h>
+#include <zephyr/toolchain/common.h>
+#include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(at_monitor);
+LOG_MODULE_REGISTER(at_monitor, CONFIG_AT_MONITOR_LOG_LEVEL);
 
 struct at_notif_fifo {
 	void *fifo_reserved;
-	char data[];
+	char data[]; /* Null-terminated AT notification string */
 };
 
 static void at_monitor_task(struct k_work *work);
@@ -26,17 +26,57 @@ static K_FIFO_DEFINE(at_monitor_fifo);
 static K_HEAP_DEFINE(at_monitor_heap, CONFIG_AT_MONITOR_HEAP_SIZE);
 static K_WORK_DEFINE(at_monitor_work, at_monitor_task);
 
-static void at_monitor_dispatch(const char *notif)
+static bool is_paused(const struct at_monitor_entry *mon)
 {
+	return mon->flags.paused;
+}
+
+static bool is_direct(const struct at_monitor_entry *mon)
+{
+	return mon->flags.direct;
+}
+
+static bool has_match(const struct at_monitor_entry *mon, const char *notif)
+{
+	return (mon->filter == ANY || strstr(notif, mon->filter));
+}
+
+/* Dispatch AT notifications immediately, or schedules a workqueue task to do that.
+ * Keep this function public so that it can be called by tests.
+ * This function is called from an ISR.
+ */
+void at_monitor_dispatch(const char *notif)
+{
+	bool monitored;
 	struct at_notif_fifo *at_notif;
 	size_t sz_needed;
+
+	__ASSERT_NO_MSG(notif != NULL);
+
+	monitored = false;
+	STRUCT_SECTION_FOREACH(at_monitor_entry, e) {
+		if (!is_paused(e) && has_match(e, notif)) {
+			if (is_direct(e)) {
+				LOG_DBG("Dispatching to %p (ISR)", e->handler);
+				e->handler(notif);
+			} else {
+				/* Copy and schedule work-queue task */
+				monitored = true;
+			}
+		}
+	}
+
+	if (!monitored) {
+		/* Only copy monitored notifications to save heap */
+		return;
+	}
 
 	sz_needed = sizeof(struct at_notif_fifo) + strlen(notif) + sizeof(char);
 
 	at_notif = k_heap_alloc(&at_monitor_heap, sz_needed, K_NO_WAIT);
 	if (!at_notif) {
 		LOG_WRN("No heap space for incoming notification: %s",
-			log_strdup(notif));
+			notif);
 		return;
 	}
 
@@ -52,10 +92,9 @@ static void at_monitor_task(struct k_work *work)
 
 	while ((at_notif = k_fifo_get(&at_monitor_fifo, K_NO_WAIT))) {
 		/* Match notification with all monitors */
-		LOG_DBG("AT notif: %s", at_notif->data);
-		Z_STRUCT_SECTION_FOREACH(at_monitor_entry, e) {
-			if (!e->paused &&
-			   (e->filter == ANY || strstr(at_notif->data, e->filter))) {
+		LOG_DBG("AT notif: %.*s", strlen(at_notif->data) - strlen("\r\n"), at_notif->data);
+		STRUCT_SECTION_FOREACH(at_monitor_entry, e) {
+			if (!is_paused(e) && !is_direct(e) && has_match(e, at_notif->data)) {
 				LOG_DBG("Dispatching to %p", e->handler);
 				e->handler(at_notif->data);
 			}
@@ -64,7 +103,7 @@ static void at_monitor_task(struct k_work *work)
 	}
 }
 
-static int at_monitor_sys_init(const struct device *unused)
+static int at_monitor_sys_init(void)
 {
 	int err;
 
@@ -76,12 +115,5 @@ static int at_monitor_sys_init(const struct device *unused)
 	return 0;
 }
 
-#if defined(CONFIG_AT_MONITOR_SYS_INIT)
 /* Initialize during SYS_INIT */
 SYS_INIT(at_monitor_sys_init, APPLICATION, 0);
-#endif
-
-void at_monitor_init(void)
-{
-	at_monitor_sys_init(NULL);
-}

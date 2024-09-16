@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <caf/click_detector.h>
 
 /* This configuration file is included only once from click_detector module
@@ -18,7 +18,7 @@ const struct {} click_detector_def_include_once;
 
 static const struct click_detector_config click_detector_config[] = {
 	{
-		.key_id = CONFIG_ML_APP_ML_STATE_CONTROL_BUTTON_ID,
+		.key_id = CONFIG_ML_APP_MODE_CONTROL_BUTTON_ID,
 		.consume_button_event = true,
 	},
 };

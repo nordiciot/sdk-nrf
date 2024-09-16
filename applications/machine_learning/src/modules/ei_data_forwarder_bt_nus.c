@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <bluetooth/services/nus.h>
 
 #include "ei_data_forwarder.h"
@@ -12,12 +12,12 @@
 
 #include <caf/events/ble_common_event.h>
 #include <caf/events/sensor_event.h>
-#include "ml_state_event.h"
+#include "ml_app_mode_event.h"
 
 #define MODULE ei_data_forwarder
 #include <caf/events/module_state_event.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_ML_APP_EI_DATA_FORWARDER_LOG_LEVEL);
 
 #define MIN_CONN_INT		CONFIG_BT_PERIPHERAL_PREF_MIN_INT
@@ -25,10 +25,10 @@ LOG_MODULE_REGISTER(MODULE, CONFIG_ML_APP_EI_DATA_FORWARDER_LOG_LEVEL);
 
 #define DATA_BUF_SIZE		CONFIG_ML_APP_EI_DATA_FORWARDER_BUF_SIZE
 #define DATA_BUF_COUNT		CONFIG_ML_APP_EI_DATA_FORWARDER_BUF_COUNT
+#define PIPELINE_MAX_CNT	CONFIG_ML_APP_EI_DATA_FORWARDER_PIPELINE_COUNT
 #define BUF_SLAB_ALIGN		4
-#define PIPELINE_MAX_CNT	2
 
-#define ML_STATE_CONTROL	IS_ENABLED(CONFIG_ML_APP_ML_STATE_EVENTS)
+#define ML_APP_MODE_CONTROL	IS_ENABLED(CONFIG_ML_APP_MODE_EVENTS)
 
 enum {
 	CONN_SECURED			= BIT(0),
@@ -57,7 +57,7 @@ static const char *handled_sensor_event_descr = CONFIG_ML_APP_EI_DATA_FORWARDER_
 static uint8_t conn_state;
 static struct bt_conn *nus_conn;
 
-static enum state state = ML_STATE_CONTROL ? STATE_DISABLED_SUSPENDED : STATE_DISABLED_ACTIVE;
+static enum state state = ML_APP_MODE_CONTROL ? STATE_DISABLED_SUSPENDED : STATE_DISABLED_ACTIVE;
 
 BUILD_ASSERT(sizeof(struct ei_data_packet) % BUF_SLAB_ALIGN == 0);
 K_MEM_SLAB_DEFINE(buf_slab, sizeof(struct ei_data_packet), DATA_BUF_COUNT, BUF_SLAB_ALIGN);
@@ -75,7 +75,7 @@ static void broadcast_ei_data_forwarder_state(enum ei_data_forwarder_state forwa
 	struct ei_data_forwarder_event *event = new_ei_data_forwarder_event();
 
 	event->state = forwarder_state;
-	EVENT_SUBMIT(event);
+	APP_EVENT_SUBMIT(event);
 }
 
 static bool is_nus_conn_valid(struct bt_conn *conn, uint8_t conn_state)
@@ -257,7 +257,7 @@ static bool handle_sensor_event(const struct sensor_event *event)
 	return false;
 }
 
-static bool handle_ml_state_event(const struct ml_state_event *event)
+static bool handle_ml_app_mode_event(const struct ml_app_mode_event *event)
 {
 	if (state == STATE_ERROR) {
 		return false;
@@ -266,7 +266,7 @@ static bool handle_ml_state_event(const struct ml_state_event *event)
 	bool disabled = ((state == STATE_DISABLED_ACTIVE) || (state == STATE_DISABLED_SUSPENDED));
 	enum state new_state;
 
-	if (event->state == ML_STATE_DATA_FORWARDING) {
+	if (event->mode == ML_APP_MODE_DATA_FORWARDING) {
 		new_state = disabled ? STATE_DISABLED_ACTIVE : STATE_ACTIVE;
 
 		clean_buffered_data();
@@ -287,7 +287,7 @@ static void bt_nus_sent_cb(struct bt_conn *conn)
 
 static void send_enabled(enum bt_nus_send_status status)
 {
-	/* Make sure callback and Event Manager event handler will not be preempted. */
+	/* Make sure callback and Application Event Manager event handler will not be preempted. */
 	BUILD_ASSERT(CONFIG_SYSTEM_WORKQUEUE_PRIORITY < 0);
 	__ASSERT_NO_MSG(!k_is_in_isr());
 	__ASSERT_NO_MSG(!k_is_preempt_thread());
@@ -407,27 +407,27 @@ static bool handle_ble_peer_conn_params_event(const struct ble_peer_conn_params_
 	return false;
 }
 
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
-	if (is_sensor_event(eh)) {
-		return handle_sensor_event(cast_sensor_event(eh));
+	if (is_sensor_event(aeh)) {
+		return handle_sensor_event(cast_sensor_event(aeh));
 	}
 
-	if (ML_STATE_CONTROL &&
-	    is_ml_state_event(eh)) {
-		return handle_ml_state_event(cast_ml_state_event(eh));
+	if (ML_APP_MODE_CONTROL &&
+	    is_ml_app_mode_event(aeh)) {
+		return handle_ml_app_mode_event(cast_ml_app_mode_event(aeh));
 	}
 
-	if (is_module_state_event(eh)) {
-		return handle_module_state_event(cast_module_state_event(eh));
+	if (is_module_state_event(aeh)) {
+		return handle_module_state_event(cast_module_state_event(aeh));
 	}
 
-	if (is_ble_peer_event(eh)) {
-		return handle_ble_peer_event(cast_ble_peer_event(eh));
+	if (is_ble_peer_event(aeh)) {
+		return handle_ble_peer_event(cast_ble_peer_event(aeh));
 	}
 
-	if (is_ble_peer_conn_params_event(eh)) {
-		return handle_ble_peer_conn_params_event(cast_ble_peer_conn_params_event(eh));
+	if (is_ble_peer_conn_params_event(aeh)) {
+		return handle_ble_peer_conn_params_event(cast_ble_peer_conn_params_event(aeh));
 	}
 
 	/* If event is unhandled, unsubscribe. */
@@ -436,11 +436,11 @@ static bool event_handler(const struct event_header *eh)
 	return false;
 }
 
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
-EVENT_SUBSCRIBE(MODULE, sensor_event);
-EVENT_SUBSCRIBE(MODULE, ble_peer_event);
-EVENT_SUBSCRIBE(MODULE, ble_peer_conn_params_event);
-#if ML_STATE_CONTROL
-EVENT_SUBSCRIBE(MODULE, ml_state_event);
-#endif /* ML_STATE_CONTROL */
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
+APP_EVENT_SUBSCRIBE(MODULE, sensor_event);
+APP_EVENT_SUBSCRIBE(MODULE, ble_peer_event);
+APP_EVENT_SUBSCRIBE(MODULE, ble_peer_conn_params_event);
+#if ML_APP_MODE_CONTROL
+APP_EVENT_SUBSCRIBE(MODULE, ml_app_mode_event);
+#endif /* ML_APP_MODE_CONTROL */

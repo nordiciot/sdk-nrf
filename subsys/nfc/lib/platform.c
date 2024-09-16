@@ -3,16 +3,19 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <drivers/clock_control.h>
-#include <drivers/clock_control/nrf_clock_control.h>
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/clock_control.h>
+#include <zephyr/drivers/clock_control/nrf_clock_control.h>
 #include <nrfx_nfct.h>
 #include <nrfx_timer.h>
+#include <nfc_platform.h>
+#include "platform_internal.h"
 
-#ifdef CONFIG_TRUSTED_EXECUTION_NONSECURE
-#include <secure_services.h>
+#if defined(CONFIG_BUILD_WITH_TFM)
+#include <tfm_ioctl_api.h>
 #endif
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(nfc_platform, CONFIG_NFC_PLATFORM_LOG_LEVEL);
 
@@ -25,12 +28,11 @@ LOG_MODULE_REGISTER(nfc_platform, CONFIG_NFC_PLATFORM_LOG_LEVEL);
 
 #define DT_DRV_COMPAT nordic_nrf_clock
 
-/* Number of NFC Tag Header registers in the FICR register space. */
-#define NFC_TAGHEADER_REGISTERS_NUM	3
-/* Default values of NFC Tag Header registers when they are not available
- * in the FICR space.
- */
-#define NFC_TAGHEADER_DEFAULT_VAL	{0x5F, 0x00, 0x00}
+#ifdef CONFIG_NFC_ZERO_LATENCY_IRQ
+#define NFCT_IRQ_FLAGS	IRQ_ZERO_LATENCY
+#else
+#define NFCT_IRQ_FLAGS	0
+#endif /* CONFIG_NFC_ZERO_LATENCY_IRQ */
 
 static struct onoff_manager *hf_mgr;
 static struct onoff_client cli;
@@ -53,57 +55,65 @@ static void clock_handler(struct onoff_manager *mgr, int res)
 	nrfx_nfct_state_force(NRFX_NFCT_STATE_ACTIVATED);
 }
 
-nrfx_err_t nfc_platform_setup(void)
+nrfx_err_t nfc_platform_setup(nfc_lib_cb_resolve_t nfc_lib_cb_resolve)
 {
+	int err;
+
 	hf_mgr = z_nrf_clock_control_get_onoff(CLOCK_CONTROL_NRF_SUBSYS_HF);
 	__ASSERT_NO_MSG(hf_mgr);
 
 	IRQ_DIRECT_CONNECT(NFCT_IRQn, CONFIG_NFCT_IRQ_PRIORITY,
-			   nfc_isr_wrapper, 0);
+			   nfc_isr_wrapper, NFCT_IRQ_FLAGS);
 	IRQ_CONNECT(NFC_TIMER_IRQn, CONFIG_NFCT_IRQ_PRIORITY,
-			   nfc_timer_irq_handler, NULL,  0);
+		    nfc_timer_irq_handler, NULL,  0);
+
+	err = nfc_platform_internal_init(nfc_lib_cb_resolve);
+	if (err) {
+		LOG_ERR("NFC platform init fail: callback resolution function pointer is invalid");
+		return NRFX_ERROR_NULL;
+	}
 
 	LOG_DBG("NFC platform initialized");
 	return NRFX_SUCCESS;
 }
 
 
-static nrfx_err_t nfc_platform_tagheader_get(uint8_t index,
-					     uint32_t *tag_header)
+static nrfx_err_t nfc_platform_tagheaders_get(uint32_t tag_header[3])
 {
-	const uint32_t tag_header_addresses[] = {
-#ifdef CONFIG_TRUSTED_EXECUTION_NONSECURE
-		(uint32_t) &NRF_FICR_S->NFC.TAGHEADER0,
-		(uint32_t) &NRF_FICR_S->NFC.TAGHEADER1,
-		(uint32_t) &NRF_FICR_S->NFC.TAGHEADER2
+	__IOM FICR_NFC_Type *ficr_nfc =
+#if defined(NRF_TRUSTZONE_NONSECURE)
+				&NRF_FICR_S->NFC;
 #else
-		(uint32_t) &NRF_FICR->NFC.TAGHEADER0,
-		(uint32_t) &NRF_FICR->NFC.TAGHEADER1,
-		(uint32_t) &NRF_FICR->NFC.TAGHEADER2
+				&NRF_FICR->NFC;
 #endif
-	};
 
-	if (index >= ARRAY_SIZE(tag_header_addresses)) {
-		LOG_ERR("Tag Header index out of bounds");
-		return NRFX_ERROR_INVALID_ADDR;
-	}
 
 #ifdef CONFIG_TRUSTED_EXECUTION_NONSECURE
-	int err;
+#if defined(CONFIG_BUILD_WITH_TFM)
+	uint32_t err = 0;
+	enum tfm_platform_err_t plt_err;
+	FICR_NFC_Type ficr_nfc_ns;
 
-	err = spm_request_read(tag_header, tag_header_addresses[index],
-			       sizeof(uint32_t));
-	if (err != 0) {
-		LOG_ERR("Could not read NFC Tag Header FICR (err: %d)", err);
-		return NRFX_ERROR_INVALID_ADDR;
+	plt_err = tfm_platform_mem_read(&ficr_nfc_ns, (uint32_t)ficr_nfc,
+					sizeof(ficr_nfc_ns), &err);
+	if (plt_err != TFM_PLATFORM_ERR_SUCCESS || err != 0) {
+		LOG_ERR("Could not read FICR NFC Tag Header (plt_err %d, err: %d)",
+			plt_err, err);
+		return NRFX_ERROR_INTERNAL;
 	}
+
+	ficr_nfc = &ficr_nfc_ns;
 #else
-	*tag_header = *((uint32_t *) tag_header_addresses[index]);
+#error "Cannot read FICR NFC Tag Header in current configuration"
 #endif
+#endif /* CONFIG_TRUSTED_EXECUTION_NONSECURE */
+
+	tag_header[0] = ficr_nfc->TAGHEADER0;
+	tag_header[1] = ficr_nfc->TAGHEADER1;
+	tag_header[2] = ficr_nfc->TAGHEADER2;
 
 	return NRFX_SUCCESS;
 }
-
 
 nrfx_err_t nfc_platform_nfcid1_default_bytes_get(uint8_t * const buf,
 						 uint32_t        buf_len)
@@ -118,20 +128,13 @@ nrfx_err_t nfc_platform_nfcid1_default_bytes_get(uint8_t * const buf,
 		return NRFX_ERROR_INVALID_LENGTH;
 	}
 
-#if defined(FICR_NFC_TAGHEADER0_MFGID_Msk)
 	nrfx_err_t err;
-	uint32_t nfc_tag_header[NFC_TAGHEADER_REGISTERS_NUM];
+	uint32_t nfc_tag_header[3];
 
-	for (int i = 0; i < ARRAY_SIZE(nfc_tag_header); i++) {
-		err = nfc_platform_tagheader_get(i, &nfc_tag_header[i]);
-		if (err != NRFX_SUCCESS) {
-			return err;
-		}
+	err = nfc_platform_tagheaders_get(nfc_tag_header);
+	if (err != NRFX_SUCCESS) {
+		return err;
 	}
-#else
-	const uint32_t nfc_tag_header[NFC_TAGHEADER_REGISTERS_NUM] =
-		NFC_TAGHEADER_DEFAULT_VAL;
-#endif
 
 	buf[0] = (uint8_t) (nfc_tag_header[0] >> 0);
 	buf[1] = (uint8_t) (nfc_tag_header[0] >> 8);

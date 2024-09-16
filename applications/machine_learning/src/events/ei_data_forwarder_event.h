@@ -4,6 +4,10 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
+/** @file
+ * @brief Edge Impulse Data Forwarder event header file.
+ */
+
 #ifndef _EI_DATA_FORWARDER_EVENT_H_
 #define _EI_DATA_FORWARDER_EVENT_H_
 
@@ -13,7 +17,8 @@
  * @{
  */
 
-#include "event_manager.h"
+#include <app_event_manager.h>
+#include <app_event_manager_profiler_tracer.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,12 +36,14 @@ enum ei_data_forwarder_state {
 
 /** @brief Edge Impulse data forwarder event. */
 struct ei_data_forwarder_event {
-	struct event_header header; /**< Event header. */
+	/** Event header. */
+	struct app_event_header header;
 
-	enum ei_data_forwarder_state state; /**< Edge Impulse data forwarder state. */
+	/** Edge Impulse data forwarder state. */
+	enum ei_data_forwarder_state state;
 };
 
-EVENT_TYPE_DECLARE(ei_data_forwarder_event);
+APP_EVENT_TYPE_DECLARE(ei_data_forwarder_event);
 
 #ifdef __cplusplus
 }

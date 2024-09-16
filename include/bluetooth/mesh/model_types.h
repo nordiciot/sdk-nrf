@@ -13,7 +13,7 @@
 #ifndef BT_MESH_MODEL_TYPES_H__
 #define BT_MESH_MODEL_TYPES_H__
 
-#include <bluetooth/mesh.h>
+#include <zephyr/bluetooth/mesh.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,8 +30,8 @@ extern "C" {
 
 /** Generic Transition parameters for the model messages.
  *
- * @note Time can not be larger than @ref BT_MESH_MODEL_TRANSITION_TIME_MAX_MS
- *       and delay can not be larger than @ref BT_MESH_MODEL_DELAY_TIME_MAX_MS.
+ * @note Time cannot be larger than @ref BT_MESH_MODEL_TRANSITION_TIME_MAX_MS
+ *       and delay cannot be larger than @ref BT_MESH_MODEL_DELAY_TIME_MAX_MS.
  */
 struct bt_mesh_model_transition {
 	uint32_t time; /**< Transition time value in milliseconds */
@@ -87,10 +87,9 @@ bt_mesh_model_transition_time(const struct bt_mesh_model_transition *trans)
 	return trans->delay + trans->time;
 }
 
-/** @cond INTERNAL_HIDDEN
- * @def BT_MESH_MODEL_USER_DATA
+/** @def BT_MESH_MODEL_USER_DATA
  *
- * @brief Internal utility macro for type checking model user data.
+ * @brief Utility macro for type checking of model user data.
  *
  * Produces a "Comparison of distinct pointer types" warning if @p _user_data
  * is of the wrong type.
@@ -99,7 +98,7 @@ bt_mesh_model_transition_time(const struct bt_mesh_model_transition *trans)
  * @c BT_MESH_MODEL_ macros, it generates a compiler warning for a bug that is
  * otherwise very hard to detect, and relatively easy to make:
  *
- * As the @ref bt_mesh_model::user_data is a void pointer, it does not have
+ * As the @em bt_mesh_model::user_data is a void pointer, it does not have
  * any type checking. The mesh model implementations wrap this macro, often
  * taking a pointer parameter to a context structure, passing it to the model
  * user data. As the @c BT_MESH_MODEL_ macros are used in listing of models,
@@ -112,7 +111,6 @@ bt_mesh_model_transition_time(const struct bt_mesh_model_transition *trans)
  */
 #define BT_MESH_MODEL_USER_DATA(_type, _user_data)                             \
 	(((_user_data) == (_type *)0) ? NULL : (_user_data))
-/** @endcond */
 
 #ifdef __cplusplus
 }

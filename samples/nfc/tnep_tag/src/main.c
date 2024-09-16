@@ -5,8 +5,8 @@
  */
 #include <stdbool.h>
 #include <string.h>
-#include <zephyr.h>
-#include <sys/util.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/util.h>
 
 #include <dk_buttons_and_leds.h>
 
@@ -119,7 +119,7 @@ NFC_TNEP_TAG_SERVICE_DEF(svc_two, svc_two_uri, (ARRAY_SIZE(svc_two_uri) - 1),
 		     tnep_svc_two_selected, tnep_svc_two_deselected,
 		     tnep_svc_two_msg_received, tnep_svc_error);
 
-static void nfc_callback(void *context, enum nfc_t4t_event event,
+static void nfc_callback(void *context, nfc_t4t_event_t event,
 			 const uint8_t *data, size_t data_length, uint32_t flags)
 {
 	switch (event) {
@@ -183,7 +183,7 @@ static void button_pressed(uint32_t button_state, uint32_t has_changed)
 	}
 }
 
-void main(void)
+int main(void)
 {
 	int err;
 
@@ -192,13 +192,13 @@ void main(void)
 	err = dk_leds_init();
 	if (err) {
 		printk("led init error %d", err);
-		return;
+		return 0;
 	}
 
 	err = dk_buttons_init(button_pressed);
 	if (err) {
 		printk("buttons init error %d", err);
-		return;
+		return 0;
 	}
 
 	/* TNEP init */
@@ -206,21 +206,21 @@ void main(void)
 						  sizeof(tag_buffer));
 	if (err) {
 		printk("Cannot register tnep buffer, err: %d\n", err);
-		return;
+		return 0;
 	}
 
 	err = nfc_tnep_tag_init(events, ARRAY_SIZE(events),
 				nfc_t4t_ndef_rwpayload_set);
 	if (err) {
 		printk("Cannot initialize TNEP protocol, err: %d\n", err);
-		return;
+		return 0;
 	}
 
 	/* Type 4 Tag setup */
 	err = nfc_t4t_setup(nfc_callback, NULL);
 	if (err) {
 		printk("NFC T4T setup err: %d\n", err);
-		return;
+		return 0;
 	}
 
 /** .. include_startingpoint_initial_msg_rst */
@@ -234,7 +234,7 @@ void main(void)
 	err = nfc_t4t_emulation_start();
 	if (err) {
 		printk("NFC T4T emulation start err: %d\n", err);
-		return;
+		return 0;
 	}
 
 	dk_set_led_on(LED_INIT);

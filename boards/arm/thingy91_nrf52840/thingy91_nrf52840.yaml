@@ -5,8 +5,12 @@ arch: arm
 toolchain:
   - zephyr
   - gnuarmemb
+ram: 256
+flash: 1024
 supported:
   - adc
   - usb_device
   - ble
+  - gpio
   - ieee802154
+  - netif:openthread

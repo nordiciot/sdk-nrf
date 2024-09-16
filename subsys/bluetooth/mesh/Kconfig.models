@@ -31,18 +31,6 @@ config BT_MESH_MOD_ACKD_TIMEOUT_PER_HOP
 
 endmenu
 
-if BT_SETTINGS
-
-config BT_MESH_MODEL_SRV_STORE_TIMEOUT
-	int "Delay (in seconds) before storing changes to mesh model servers"
-	range 0 1000000
-	default 0
-	help
-	  Time to wait before storing changes to the mesh model servers.
-	  Effectively the minimum interval of changes.
-
-endif
-
 rsource "vnd/Kconfig"
 
 config BT_MESH_ONOFF_SRV
@@ -277,6 +265,44 @@ endchoice
 endmenu
 endif
 
+menuconfig BT_MESH_LIGHT_CTRL_REG
+	bool "Lightness PI Regulator"
+	help
+	  Enable the lightness PI regulator module
+
+if BT_MESH_LIGHT_CTRL_REG
+
+config BT_MESH_LIGHT_CTRL_REG_SPEC
+	bool "Spec Lightness PI Regulator"
+	select FPU
+	default y
+	help
+	  Enable specification-defined lightness PI regulator implementation.
+
+if BT_MESH_LIGHT_CTRL_REG_SPEC
+
+config BT_MESH_LIGHT_CTRL_REG_SPEC_INTERVAL
+	int "Update interval"
+	default 100
+	range 10 100
+	help
+	  Update interval of the specification-defined illuminance regulator (in milliseconds).
+
+endif #BT_MESH_LIGHT_CTRL_REG_SPEC
+
+config BT_MESH_LIGHT_CTRL_AMB_LIGHT_LEVEL_TIMEOUT
+	int "Ambient light level report timeout (seconds)"
+	default 300
+	range 0 16777
+	help
+	  Defines time in seconds the Light Lightness Control Server waits after receiving the
+	  Sensor Status message with the present ambient light level property ID before setting
+	  the ambient light level to zero and passing it to the regulator. This option helps
+	  avoiding an issue with the regulator getting stuck with an old output value, and not
+	  triggering new report from the sensor. When set to zero, the timeout is disabled.
+
+endif #BT_MESH_LIGHT_CTRL_REG
+
 menuconfig BT_MESH_LIGHT_CTRL_SRV
 	bool "Light Lightness Control (LC) Server"
 	select BT_MESH_NRF_MODELS
@@ -290,21 +316,13 @@ if BT_MESH_LIGHT_CTRL_SRV
 
 menuconfig BT_MESH_LIGHT_CTRL_SRV_REG
 	bool "Lightness Regulator"
-	depends on FPU
+	select BT_MESH_LIGHT_CTRL_REG
 	default y
 	help
-	  Enable the Lightness PI Regulator for controlling the lightness level
+	  Enable the use of a PI regulator for controlling the lightness level
 	  through an illuminance sensor feedback loop.
 
 if BT_MESH_LIGHT_CTRL_SRV_REG
-
-config BT_MESH_LIGHT_CTRL_SRV_REG_INTERVAL
-	int "Update interval"
-	default 100
-	range 10 100
-	help
-	  Update interval of the Light LC Server model's internal PI regulator
-	  (in milliseconds).
 
 config BT_MESH_LIGHT_CTRL_SRV_REG_KIU
 	int "Default Kiu coefficient"
@@ -592,6 +610,7 @@ menuconfig BT_MESH_SENSOR_SRV
 	bool "Sensor Server"
 	select BT_MESH_NRF_MODELS
 	select BT_MESH_SENSOR
+	select BT_MESH_MODEL_EXTENSIONS
 	help
 	  Enable mesh Sensor Server model.
 
@@ -635,11 +654,14 @@ menuconfig BT_MESH_SCENE_SRV
 
 config BT_MESH_SCENES_MAX
 	int "Max number of scenes"
-	default 4
+	default 16
 	range 1 65535
 	depends on BT_MESH_SCENE_SRV
 	help
-	  Max number of scenes that can be stored by a single Scene Server.
+	  Maximum number of scenes that can be stored by a single Scene Server.
+	  According to the specification, this value should be 16.
+	  The Bluetooth Mesh Model specification v1.0.1 (MshMDLv1.0.1) defines the
+	  Scene Register state as a 16-element array of 16-bit values representing a Scene Number.
 
 config BT_MESH_SCENE_CLI
 	bool "Scene Client"

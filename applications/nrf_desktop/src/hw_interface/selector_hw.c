@@ -4,21 +4,21 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 
-#include <device.h>
-#include <drivers/gpio.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
 
 #include "selector_hw_def.h"
 
-#include "event_manager.h"
+#include <app_event_manager.h>
 #include "selector_event.h"
 #include <caf/events/power_event.h>
 
 #define MODULE selector
 #include <caf/events/module_state_event.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_DESKTOP_SELECTOR_HW_LOG_LEVEL);
 
 #define DEFAULT_POSITION UCHAR_MAX
@@ -31,14 +31,18 @@ enum state {
 	STATE_OFF,
 };
 
+static const struct device * const gpio_dev[] = {
+	DEVICE_DT_GET_OR_NULL(DT_NODELABEL(gpio0)),
+	DEVICE_DT_GET_OR_NULL(DT_NODELABEL(gpio1)),
+};
+
 struct selector {
 	const struct selector_config *config;
-	struct gpio_callback gpio_cb[ARRAY_SIZE(port_map)];
+	struct gpio_callback gpio_cb[ARRAY_SIZE(gpio_dev)];
 	struct k_work_delayable work;
 	uint8_t position;
 };
 
-static const struct device *gpio_dev[ARRAY_SIZE(port_map)];
 static struct selector selectors[ARRAY_SIZE(selector_config)];
 static enum state state;
 
@@ -52,7 +56,7 @@ static void selector_event_send(const struct selector *selector)
 	event->selector_id = selector->config->id;
 	event->position = selector->position;
 
-	EVENT_SUBMIT(event);
+	APP_EVENT_SUBMIT(event);
 }
 
 static int read_state(struct selector *selector)
@@ -96,7 +100,7 @@ static int read_state(struct selector *selector)
 static int enable_interrupts_lock(struct selector *selector)
 {
 	const struct gpio_pin *sel_pins = selector->config->pins;
-	int err;
+	int err = 0;
 
 	int key = irq_lock();
 
@@ -122,7 +126,7 @@ static int enable_interrupts_lock(struct selector *selector)
 static int disable_interrupts_nolock(struct selector *selector)
 {
 	const struct gpio_pin *sel_pins = selector->config->pins;
-	int err;
+	int err = 0;
 
 	for (size_t i = 0; i < selector->config->pins_size; i++) {
 		err = gpio_pin_interrupt_configure(gpio_dev[sel_pins[i].port],
@@ -141,8 +145,15 @@ static int disable_interrupts_nolock(struct selector *selector)
 static void selector_isr(const struct device *dev, struct gpio_callback *cb,
 			 uint32_t pins_mask)
 {
-	uint8_t port = dev - gpio_dev[0];
 	struct selector *sel;
+	size_t port;
+
+	for (port = 0; port < ARRAY_SIZE(gpio_dev); port++) {
+		if (dev == gpio_dev[port]) {
+			break;
+		}
+	}
+	__ASSERT_NO_MSG(port != ARRAY_SIZE(gpio_dev));
 
 	sel = CONTAINER_OF((uint8_t *)cb - port * sizeof(sel->gpio_cb[0]),
 			   struct selector,
@@ -269,16 +280,14 @@ static int init(void)
 	BUILD_ASSERT(ARRAY_SIZE(selector_config) > 0,
 			 "There is no active selector");
 
-	for (size_t i = 0; i < ARRAY_SIZE(port_map); i++) {
-		if (!port_map[i]) {
+	for (size_t i = 0; i < ARRAY_SIZE(gpio_dev); i++) {
+		if (gpio_dev[i] == NULL) {
 			continue;
 		}
 
-		gpio_dev[i] = device_get_binding(port_map[i]);
-
-		if (!gpio_dev[i]) {
-			LOG_ERR("Cannot get GPIO%u dev binding", i);
-			return -ENXIO;
+		if (!device_is_ready(gpio_dev[i])) {
+			LOG_ERR("GPIO port %u not ready", i);
+			return -ENODEV;
 		}
 	}
 
@@ -297,11 +306,11 @@ static int init(void)
 	return err;
 }
 
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
-	if (is_module_state_event(eh)) {
+	if (is_module_state_event(aeh)) {
 		const struct module_state_event *event =
-			cast_module_state_event(eh);
+			cast_module_state_event(aeh);
 
 		if (check_state(event, MODULE_ID(main), MODULE_STATE_READY)) {
 			__ASSERT_NO_MSG(state == STATE_DISABLED);
@@ -319,7 +328,7 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_power_down_event(eh)) {
+	if (is_power_down_event(aeh)) {
 		if (state == STATE_ACTIVE) {
 			int err = sleep();
 
@@ -334,7 +343,7 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_wake_up_event(eh)) {
+	if (is_wake_up_event(aeh)) {
 		if (state == STATE_OFF) {
 			int err = wake_up();
 
@@ -354,7 +363,7 @@ static bool event_handler(const struct event_header *eh)
 
 	return false;
 }
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
-EVENT_SUBSCRIBE(MODULE, power_down_event);
-EVENT_SUBSCRIBE(MODULE, wake_up_event);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
+APP_EVENT_SUBSCRIBE(MODULE, power_down_event);
+APP_EVENT_SUBSCRIBE(MODULE, wake_up_event);

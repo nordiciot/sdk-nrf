@@ -4,17 +4,17 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <ztest.h>
+#include <zephyr/ztest.h>
 #include <bl_validation.h>
 #include <fw_info.h>
 #include <pm_config.h>
-#include <sys/util.h>
+#include <zephyr/sys/util.h>
 #include <nrfx_nvmc.h>
-#include <linker/linker-defs.h>
-#include <devicetree.h>
+#include <zephyr/linker/linker-defs.h>
+#include <zephyr/devicetree.h>
 
 
-void test_key_looping(void)
+ZTEST(bl_validation_test, test_key_looping)
 {
 	/* If this boots, the test passed. The public key is at the end of the
 	 * list, so the bootloader looped through all to validate this app.
@@ -27,7 +27,7 @@ void test_key_looping(void)
  * 4. Validate copy against wrong address. Expect failure.
  * 5. Validate mangled copy. Expect failure
  */
-void test_validation(void)
+ZTEST(bl_validation_test, test_validation)
 {
 	zassert_true(bl_validate_firmware(PM_ADDRESS, PM_ADDRESS),
 		"Fail 1. Failed to validate current app.\r\n");
@@ -69,11 +69,36 @@ void test_validation(void)
 		"Fail 5. Incorrectly validated mangled app.\r\n");
 }
 
-void test_main(void)
+
+ZTEST(bl_validation_test, test_s1)
 {
-	ztest_test_suite(test_bl_validation,
-			 ztest_unit_test(test_key_looping),
-			 ztest_unit_test(test_validation)
-	);
-	ztest_run_test_suite(test_bl_validation);
+	zassert_true(bl_validate_firmware(PM_S1_ADDRESS, PM_S1_ADDRESS), NULL);
+
+	/* 0x2000 to account for validation info and differences s0 <-> s1. */
+	uint32_t move_len = (uint32_t)_flash_used + 0x2000;
+
+	/* Round up to at least the next SPU region. */
+	uint32_t new_addr = ROUND_UP(PM_S1_ADDRESS + move_len, 0x8000);
+
+	for (uint32_t erase_addr = new_addr; erase_addr < (new_addr + move_len);
+	     erase_addr += DT_PROP(DT_CHOSEN(zephyr_flash), erase_block_size)) {
+		uint32_t ret = nrfx_nvmc_page_erase(erase_addr);
+
+		zassert_equal(NRFX_SUCCESS, ret, "Erase failed.\r\n");
+	}
+
+	nrfx_nvmc_words_write(new_addr, (const uint32_t *)PM_S1_ADDRESS,
+			      (move_len + 3) / 4);
+
+	for (uint32_t erase_addr = PM_S1_ADDRESS; erase_addr < new_addr;
+	     erase_addr += DT_PROP(DT_CHOSEN(zephyr_flash), erase_block_size)) {
+		uint32_t ret = nrfx_nvmc_page_erase(erase_addr);
+
+		zassert_equal(NRFX_SUCCESS, ret, "Erase failed.\r\n");
+	}
+
+	zassert_true(bl_validate_firmware(PM_S1_ADDRESS, new_addr), NULL);
 }
+
+
+ZTEST_SUITE(bl_validation_test, NULL, NULL, NULL, NULL, NULL);

@@ -22,7 +22,7 @@
 extern "C" {
 #endif
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <cJSON.h>
 
 #include "cloud_codec.h"
@@ -33,11 +33,11 @@ extern "C" {
  */
 enum json_common_buffer_type {
 	JSON_COMMON_UI,
+	JSON_COMMON_IMPACT,
 	JSON_COMMON_MODEM_STATIC,
 	JSON_COMMON_MODEM_DYNAMIC,
-	JSON_COMMON_GPS,
+	JSON_COMMON_GNSS,
 	JSON_COMMON_SENSOR,
-	JSON_COMMON_ACCELEROMETER,
 	JSON_COMMON_BATTERY,
 
 	JSON_COMMON_COUNT
@@ -120,7 +120,7 @@ int json_common_sensor_data_add(cJSON *parent,
 				cJSON **parent_ref);
 
 /**
- * @brief Encode and add GPS data to the parent object.
+ * @brief Encode and add GNSS data to the parent object.
  *
  * @param[out] parent Pointer to object that the encoded data is added to.
  * @param[in] data Pointer to data that is to be encoded.
@@ -134,32 +134,11 @@ int json_common_sensor_data_add(cJSON *parent,
  * @return 0 on success. -ENODATA if the passed in data is not valid. Otherwise a negative error
  *         code is returned.
  */
-int json_common_gps_data_add(cJSON *parent,
-			     struct cloud_data_gps *data,
+int json_common_gnss_data_add(cJSON *parent,
+			     struct cloud_data_gnss *data,
 			     enum json_common_op_code op,
 			     const char *object_label,
 			     cJSON **parent_ref);
-
-/**
- * @brief Encode and add accelerometer data to the parent object.
- *
- * @param[out] parent Pointer to object that the encoded data is added to.
- * @param[in] data Pointer to data that is to be encoded.
- * @param[in] op Operation that is to be carried out.
- * @param[in] object_label Name of the encoded object.
- * @param[out] parent_ref Reference to an unallocated parent object pointer. Used when getting the
- *			  pointer to the encoded data object when setting
- *			  JSON_COMMON_GET_POINTER_TO_OBJECT as the opcode. The cJSON object pointed
- *			  to after this function call must be manually freed after use.
- *
- * @return 0 on success. -ENODATA if the passed in data is not valid. Otherwise a negative error
- *         code is returned.
- */
-int json_common_accel_data_add(cJSON *parent,
-			       struct cloud_data_accelerometer *data,
-			       enum json_common_op_code op,
-			       const char *object_label,
-			       cJSON **parent_ref);
 
 /**
  * @brief Encode and add User Interface data to the parent object.
@@ -183,6 +162,27 @@ int json_common_ui_data_add(cJSON *parent,
 			    cJSON **parent_ref);
 
 /**
+ * @brief Encode and add Impact data to the parent object.
+ *
+ * @param[out] parent Pointer to object that the encoded data is added to.
+ * @param[in] data Pointer to data that is to be encoded.
+ * @param[in] op Operation that is to be carried out.
+ * @param[in] object_label Name of the encoded object.
+ * @param[out] parent_ref Reference to an unallocated parent object pointer. Used when getting the
+ *			  pointer to the encoded data object when setting
+ *			  JSON_COMMON_GET_POINTER_TO_OBJECT as the opcode. The cJSON object pointed
+ *			  to after this function call must be manually freed after use.
+ *
+ * @return 0 on success. -ENODATA if the passed in data is not valid. Otherwise a negative error
+ *         code is returned.
+ */
+int json_common_impact_data_add(cJSON *parent,
+				struct cloud_data_impact *data,
+				enum json_common_op_code op,
+				const char *object_label,
+				cJSON **parent_ref);
+
+/**
  * @brief Encode and add neighbor cell data to the parent object.
  *
  * @param[out] parent Pointer to object that the encoded data is added to.
@@ -197,6 +197,24 @@ int json_common_ui_data_add(cJSON *parent,
 int json_common_neighbor_cells_data_add(cJSON *parent,
 					struct cloud_data_neighbor_cells *data,
 					enum json_common_op_code op);
+
+#if defined(CONFIG_LOCATION_METHOD_WIFI)
+/**
+ * @brief Encode and add wifi survey data to the parent object.
+ *
+ * @param[out] parent Pointer to object that the encoded data is added to.
+ * @param[in] data Pointer to data that is to be encoded.
+ * @param[in] op Operation that is to be carried out.
+ *
+ * @retval 0 on success.
+ * @retval -ENODATA if the passed in data is not queued or has an invalid timestamp value.
+ * @retval -ENOMEM if the function fails to allocate memory.
+ * @retval -EFAULT if an error occurs in the call to snprintk.
+ */
+int json_common_wifi_ap_data_add(cJSON *parent,
+				 struct cloud_data_wifi_access_points *data,
+				 enum json_common_op_code op);
+#endif
 
 /**
  * @brief Encode and add A-GPS request data to the parent object.

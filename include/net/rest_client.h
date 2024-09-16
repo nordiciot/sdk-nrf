@@ -17,7 +17,9 @@
 #ifndef REST_CLIENT_H__
 #define REST_CLIENT_H__
 
-#include <net/http_parser.h>
+#include <zephyr/kernel.h>
+#include <zephyr/net/http/client.h>
+#include <zephyr/net/http/parser.h>
 
 /** @brief TLS is not used. */
 #define REST_CLIENT_SEC_TAG_NO_SEC -1
@@ -81,7 +83,13 @@ struct rest_client_req_context {
 	/** Payload/body, may be NULL. */
 	const char *body;
 
-	/** User-defined timeout value for receiving response data.
+	/** Payload/body length */
+	size_t body_len;
+
+	/** User-defined timeout value for REST request. The timeout is set individually
+	 *  for socket connection creation and data transfer meaning REST request can take
+	 *  longer than this given timeout. To disable, set the timeout duration to SYS_FOREVER_MS.
+	 *  A value of zero will result in an immediate timeout.
 	 *  Default: CONFIG_REST_CLIENT_REST_REQUEST_TIMEOUT.
 	 */
 	int32_t timeout_ms;
@@ -111,6 +119,12 @@ struct rest_client_resp_context {
 
 	/** Numeric HTTP status code. */
 	uint16_t http_status_code;
+
+	/** HTTP status code as a textual description, i.e. the reason-phrase element.
+	 * https://tools.ietf.org/html/rfc7230#section-3.1.2
+	 * Copied here from http_status[] of http_response.
+	 */
+	char http_status_code_str[HTTP_STATUS_STR_SIZE];
 
 	/** Used socket identifier. Use this for keepalive connections as
 	 *  connect_socket for upcoming requests.

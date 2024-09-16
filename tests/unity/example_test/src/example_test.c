@@ -6,7 +6,7 @@
 #include <unity.h>
 #include <uut.h>
 #include <stdbool.h>
-#include "foo/mock_foo.h"
+#include "foo/cmock_foo.h"
 
 bool runtime_CONFIG_UUT_PARAM_CHECK;
 
@@ -17,23 +17,12 @@ void setUp(void)
 	runtime_CONFIG_UUT_PARAM_CHECK = false;
 }
 
-/* Suite teardown shall finalize with mandatory call to generic_suiteTearDown. */
-extern int generic_suiteTearDown(int num_failures);
-
-int test_suiteTearDown(int num_failures)
-{
-	return generic_suiteTearDown(num_failures);
-}
-
 void test_uut_init(void)
 {
 	int err;
 
-	__wrap_foo_init_ExpectAndReturn(NULL, 0);
-	__wrap_foo_syscall_Expect();
-	__wrap_foo_execute_ExpectAndReturn(0);
-	__wrap_foo_execute2_ExpectAndReturn(0);
-	__wrap_foo_execute3_ExpectAndReturn(0);
+	__cmock_foo_init_ExpectAndReturn(NULL, 0);
+	__cmock_foo_execute_ExpectAndReturn(0);
 
 	err = uut_init(NULL);
 	TEST_ASSERT_EQUAL(0, err);
@@ -50,13 +39,15 @@ void test_uut_init_with_param_check(void)
 	TEST_ASSERT_EQUAL(-1, err);
 }
 
-/* It is required to be added to each test. That is because unity is using
- * different main signature (returns int) and zephyr expects main which does
- * not return value.
+/* It is required to be added to each test. That is because unity's
+ * main may return nonzero, while zephyr's main currently must
+ * return 0 in all cases (other values are reserved).
  */
 extern int unity_main(void);
 
-void main(void)
+int main(void)
 {
 	(void)unity_main();
+
+	return 0;
 }

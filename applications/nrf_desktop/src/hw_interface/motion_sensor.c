@@ -4,18 +4,18 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
-#include <sys/atomic.h>
-#include <spinlock.h>
-#include <sys/byteorder.h>
-#include <settings/settings.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/atomic.h>
+#include <zephyr/spinlock.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/settings/settings.h>
 
-#include <device.h>
-#include <drivers/sensor.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/sensor.h>
 
 #include "motion_sensor.h"
 
-#include "event_manager.h"
+#include <app_event_manager.h>
 #include "motion_event.h"
 #include <caf/events/power_event.h>
 #include "hid_event.h"
@@ -25,7 +25,7 @@
 #define MODULE motion
 #include <caf/events/module_state_event.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_DESKTOP_MOTION_LOG_LEVEL);
 
 
@@ -70,7 +70,8 @@ static K_SEM_DEFINE(sem, 1, 1);
 static K_THREAD_STACK_DEFINE(thread_stack, THREAD_STACK_SIZE);
 static struct k_thread thread;
 
-static const struct device *sensor_dev;
+static const struct device *sensor_dev =
+	DEVICE_DT_GET_ONE(MOTION_SENSOR_COMPATIBLE);
 
 static struct sensor_state state;
 
@@ -154,7 +155,7 @@ static int settings_set(const char *key, size_t len_rd,
 SETTINGS_STATIC_HANDLER_DEFINE(motion_sensor, MODULE_NAME, NULL, settings_set,
 			       NULL, NULL);
 
-static void data_ready_handler(const struct device *dev, struct sensor_trigger *trig);
+static void data_ready_handler(const struct device *dev, const struct sensor_trigger *trig);
 
 
 static int enable_trigger(void)
@@ -181,7 +182,7 @@ static int disable_trigger(void)
 	return err;
 }
 
-static void data_ready_handler(const struct device *dev, struct sensor_trigger *trig)
+static void data_ready_handler(const struct device *dev, const struct sensor_trigger *trig)
 {
 	k_spinlock_key_t key = k_spin_lock(&state.lock);
 
@@ -200,9 +201,12 @@ static void data_ready_handler(const struct device *dev, struct sensor_trigger *
 
 	case STATE_SUSPENDED:
 	case STATE_SUSPENDED_DISCONNECTED:
-		/* Wake up system - this will wake up thread */
-		EVENT_SUBMIT(new_wake_up_event());
-		break;
+		if (IS_ENABLED(CONFIG_DESKTOP_MOTION_PM_EVENTS)) {
+			/* Wake up system - this will wake up thread */
+			APP_EVENT_SUBMIT(new_wake_up_event());
+			break;
+		}
+		/* Fall-through */
 
 	case STATE_FETCHING:
 	case STATE_DISABLED:
@@ -256,7 +260,7 @@ static int motion_read(bool send_event)
 
 	event->dx = value_x.val1;
 	event->dy = value_y.val1;
-	EVENT_SUBMIT(event);
+	APP_EVENT_SUBMIT(event);
 
 	return err;
 }
@@ -321,12 +325,11 @@ static void set_default_configuration(void)
 
 static int init(void)
 {
-	int err = -ENXIO;
+	int err;
 
-	sensor_dev = device_get_binding(MOTION_SENSOR_DEV_NAME);
-	if (!sensor_dev) {
-		LOG_ERR("Cannot get motion sensor device");
-		return err;
+	if (!device_is_ready(sensor_dev)) {
+		LOG_ERR("Sensor device not ready");
+		return -ENODEV;
 	}
 
 	k_spinlock_key_t key = k_spin_lock(&state.lock);
@@ -374,7 +377,7 @@ static void fetch_config(const uint8_t opt_id, uint8_t *data, size_t *size)
 		*size = strlen(CONFIG_DESKTOP_MOTION_SENSOR_TYPE);
 		__ASSERT_NO_MSG((*size != 0) &&
 				(*size < CONFIG_CHANNEL_FETCHED_DATA_MAX_SIZE));
-		strcpy(data, CONFIG_DESKTOP_MOTION_SENSOR_TYPE);
+		strcpy((char *)data, CONFIG_DESKTOP_MOTION_SENSOR_TYPE);
 	} else {
 		enum motion_sensor_option option = config_opt_id_2_option(opt_id);
 
@@ -419,8 +422,11 @@ static void update_config(const uint8_t opt_id, const uint8_t *data,
 			return;
 		}
 
-		if (set_option(option, sys_get_le32(data))) {
+		uint32_t value = sys_get_le32(data);
+
+		if (set_option(option, value)) {
 			store_config(opt_id, data, size);
+			LOG_INF("Option: %s set to %" PRIu32, opt_descr[opt_id], value);
 		}
 	} else {
 		LOG_WRN("Unsupported set opt_id: %" PRIu8, opt_id);
@@ -528,11 +534,11 @@ static bool handle_usb_state_event(const struct usb_state_event *event)
 	return false;
 }
 
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
-	if (is_hid_report_sent_event(eh)) {
+	if (is_hid_report_sent_event(aeh)) {
 		const struct hid_report_sent_event *event =
-			cast_hid_report_sent_event(eh);
+			cast_hid_report_sent_event(aeh);
 
 		if ((event->report_id == REPORT_ID_MOUSE) ||
 		    (event->report_id == REPORT_ID_BOOT_MOUSE)) {
@@ -547,9 +553,9 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_hid_report_subscription_event(eh)) {
+	if (is_hid_report_subscription_event(aeh)) {
 		const struct hid_report_subscription_event *event =
-			cast_hid_report_subscription_event(eh);
+			cast_hid_report_subscription_event(aeh);
 
 		if ((event->report_id == REPORT_ID_MOUSE) ||
 		    (event->report_id == REPORT_ID_BOOT_MOUSE)) {
@@ -603,9 +609,9 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_module_state_event(eh)) {
+	if (is_module_state_event(aeh)) {
 		const struct module_state_event *event =
-			cast_module_state_event(eh);
+			cast_module_state_event(aeh);
 
 		if (check_state(event, MODULE_ID(main), MODULE_STATE_READY)) {
 			/* Start state machine thread */
@@ -626,7 +632,8 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_wake_up_event(eh)) {
+	if (IS_ENABLED(CONFIG_DESKTOP_MOTION_PM_EVENTS) &&
+	    is_wake_up_event(aeh)) {
 		k_spinlock_key_t key = k_spin_lock(&state.lock);
 		if ((state.state == STATE_SUSPENDED) ||
 		    (state.state == STATE_SUSPENDED_DISCONNECTED)) {
@@ -648,7 +655,8 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_power_down_event(eh)) {
+	if (IS_ENABLED(CONFIG_DESKTOP_MOTION_PM_EVENTS) &&
+	    is_power_down_event(aeh)) {
 		k_spinlock_key_t key = k_spin_lock(&state.lock);
 
 		switch (state.state) {
@@ -693,8 +701,8 @@ static bool event_handler(const struct event_header *eh)
 	}
 
 	if (IS_ENABLED(CONFIG_DESKTOP_MOTION_SENSOR_SLEEP_DISABLE_ON_USB) &&
-	    is_usb_state_event(eh)) {
-		return handle_usb_state_event(cast_usb_state_event(eh));
+	    is_usb_state_event(aeh)) {
+		return handle_usb_state_event(cast_usb_state_event(aeh));
 	}
 
 	GEN_CONFIG_EVENT_HANDLERS(STRINGIFY(MODULE), opt_descr, update_config,
@@ -705,15 +713,17 @@ static bool event_handler(const struct event_header *eh)
 
 	return false;
 }
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
-EVENT_SUBSCRIBE(MODULE, wake_up_event);
-EVENT_SUBSCRIBE(MODULE, hid_report_sent_event);
-EVENT_SUBSCRIBE(MODULE, hid_report_subscription_event);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
+APP_EVENT_SUBSCRIBE(MODULE, hid_report_sent_event);
+APP_EVENT_SUBSCRIBE(MODULE, hid_report_subscription_event);
 #if CONFIG_DESKTOP_CONFIG_CHANNEL_ENABLE
-EVENT_SUBSCRIBE_EARLY(MODULE, config_event);
+APP_EVENT_SUBSCRIBE_EARLY(MODULE, config_event);
 #endif
 #if CONFIG_DESKTOP_MOTION_SENSOR_SLEEP_DISABLE_ON_USB
-EVENT_SUBSCRIBE(MODULE, usb_state_event);
+APP_EVENT_SUBSCRIBE(MODULE, usb_state_event);
 #endif
-EVENT_SUBSCRIBE_EARLY(MODULE, power_down_event);
+#if CONFIG_DESKTOP_MOTION_PM_EVENTS
+APP_EVENT_SUBSCRIBE(MODULE, wake_up_event);
+APP_EVENT_SUBSCRIBE_EARLY(MODULE, power_down_event);
+#endif

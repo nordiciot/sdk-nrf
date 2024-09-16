@@ -19,7 +19,7 @@ It issues AT commands to retrieve the following data:
 * The battery voltage and temperature level, measured by the modem
 * The modem firmware version
 * The modem serial number
-* The LTE-M, NB-IoT, and GPS support mode
+* The LTE-M, NB-IoT, and GNSS support mode
 * Mobile network time and date
 
 The modem information library uses the :ref:`at_cmd_parser_readme`.
@@ -29,7 +29,6 @@ To obtain a data value, call :c:func:`modem_info_string_get` (to retrieve the va
 
 You can also retrieve all available data.
 To do so, call :c:func:`modem_info_params_init` to initialize a structure that stores all retrieved information, then populate it by calling :c:func:`modem_info_params_get`.
-To retrieve the data as a single JSON string, call :c:func:`modem_info_json_string_encode`.
 
 Note, however, that signal strength data (RSRP) is only available by registering a subscription. To do so, call :c:func:`modem_info_rsrp_register`.
 

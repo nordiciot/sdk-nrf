@@ -11,9 +11,11 @@
  * have been set up to be protected by SPU/ACL etc. depending on the chip used
  */
 
-#include <ztest.h>
-#include <device.h>
-#include <drivers/flash.h>
+#include <zephyr/ztest.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/flash.h>
+
+static const struct device *flash_dev = DEVICE_DT_GET(DT_NODELABEL(flash_controller));
 
 static uint8_t write_data[] = "Hello World";
 static uint32_t valid_write_addr = 0x1C000;
@@ -21,12 +23,8 @@ static uint32_t control_read_addr = 0x6032;
 static uint8_t read_data_before[sizeof(write_data)];
 static uint8_t read_data_after[sizeof(write_data)];
 
-#define SOC_NV_FLASH_CONTROLLER_NODE DT_NODELABEL(flash_controller)
-#define FLASH_DEV_NAME DT_LABEL(SOC_NV_FLASH_CONTROLLER_NODE)
-
-static void test_flash_write(void)
+ZTEST(test_fprotect_positive, test_1_flash_write)
 {
-	const struct device *flash_dev = device_get_binding(FLASH_DEV_NAME);
 	int retval = flash_read(flash_dev, control_read_addr, read_data_before,
 				ARRAY_SIZE(read_data_before));
 
@@ -36,10 +34,9 @@ static void test_flash_write(void)
 	zassert_true(retval == 0, "flash_write failed");
 }
 
-static void test_flash_read(void)
+ZTEST(test_fprotect_positive, test_2_flash_read)
 {
 	int retval = 0;
-	const struct device *flash_dev = device_get_binding(FLASH_DEV_NAME);
 
 	retval = flash_read(flash_dev, valid_write_addr, read_data_after,
 			    ARRAY_SIZE(read_data_after));
@@ -59,22 +56,13 @@ static void test_flash_read(void)
 	}
 }
 
-static void test_flash_read_protected(void)
+ZTEST(test_fprotect_positive, test_3_flash_read_protected)
 {
 	int retval;
 	uint8_t rd[256];
-	const struct device *flash_dev = device_get_binding(FLASH_DEV_NAME);
 
 	retval = flash_read(flash_dev, 0, rd, sizeof(rd));
 	zassert_true(retval == 0, "flash read to protected area failed");
 }
 
-void test_main(void)
-{
-	ztest_test_suite(test_fprotect_positive,
-			ztest_unit_test(test_flash_write),
-			ztest_unit_test(test_flash_read),
-			ztest_unit_test(test_flash_read_protected)
-			);
-	ztest_run_test_suite(test_fprotect_positive);
-}
+ZTEST_SUITE(test_fprotect_positive, NULL, NULL, NULL, NULL, NULL);

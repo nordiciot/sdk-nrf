@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/bluetooth.h>
 #include <bluetooth/mesh/models.h>
 #include <dk_buttons_and_leds.h>
 #include "model_handler.h"
@@ -18,7 +18,7 @@ struct lightness_ctx {
 	uint16_t target_lvl;
 	uint16_t current_lvl;
 	uint32_t time_per;
-	uint16_t rem_time;
+	uint32_t rem_time;
 };
 
 /* Set up a repeating delayed work to blink the DK's LEDs when attention is
@@ -31,10 +31,18 @@ static void attention_blink(struct k_work *work)
 {
 	static int idx;
 	const uint8_t pattern[] = {
-		BIT(0) | BIT(1),
-		BIT(1) | BIT(2),
-		BIT(2) | BIT(3),
-		BIT(3) | BIT(0),
+#if DT_NODE_EXISTS(DT_ALIAS(led0))
+		BIT(0),
+#endif
+#if DT_NODE_EXISTS(DT_ALIAS(led1))
+		BIT(1),
+#endif
+#if DT_NODE_EXISTS(DT_ALIAS(led2))
+		BIT(2),
+#endif
+#if DT_NODE_EXISTS(DT_ALIAS(led3))
+		BIT(3),
+#endif
 	};
 
 	if (attention) {
@@ -77,7 +85,7 @@ static void start_new_light_trans(const struct bt_mesh_lightness_set *set,
 
 	ctx->target_lvl = set->lvl;
 	ctx->time_per = (step_cnt ? time / step_cnt : 0);
-	ctx->rem_time = bt_mesh_model_transition_time(set->transition);
+	ctx->rem_time = time;
 	k_work_reschedule(&ctx->per_work, K_MSEC(delay));
 
 	printk("New light transition-> Lvl: %d, Time: %d, Delay: %d\n",
@@ -92,8 +100,16 @@ static void periodic_led_work(struct k_work *work)
 
 	if ((l_ctx->rem_time <= l_ctx->time_per) ||
 	    (abs(l_ctx->target_lvl - l_ctx->current_lvl) <= PWM_SIZE_STEP)) {
+		struct bt_mesh_lightness_status status = {
+			.current = l_ctx->target_lvl,
+			.target = l_ctx->target_lvl,
+		};
+
 		l_ctx->current_lvl = l_ctx->target_lvl;
 		l_ctx->rem_time = 0;
+
+		bt_mesh_lightness_srv_pub(&l_ctx->lightness_srv, NULL, &status);
+
 		goto apply_and_print;
 	} else if (l_ctx->target_lvl > l_ctx->current_lvl) {
 		l_ctx->current_lvl += PWM_SIZE_STEP;
@@ -118,7 +134,7 @@ static void light_set(struct bt_mesh_lightness_srv *srv,
 	start_new_light_trans(set, l_ctx);
 	rsp->current = l_ctx->current_lvl;
 	rsp->target = l_ctx->target_lvl;
-	rsp->remaining_time = bt_mesh_model_transition_time(set->transition);
+	rsp->remaining_time = set->transition ? set->transition->time : 0;
 }
 
 static void light_get(struct bt_mesh_lightness_srv *srv,
@@ -143,6 +159,54 @@ static struct lightness_ctx my_ctx = {
 
 };
 
+static int dummy_energy_use;
+
+static int energy_use_get(struct bt_mesh_sensor_srv *srv,
+			 struct bt_mesh_sensor *sensor,
+			 struct bt_mesh_msg_ctx *ctx,
+			 struct sensor_value *rsp)
+{
+	/* Report energy usage as dummy value, and increase it by one every time
+	 * a get callback is triggered. The logic and hardware for mesuring
+	 * the actual energy usage of the device should be implemented here.
+	 */
+	rsp[0].val1 = dummy_energy_use;
+	rsp[0].val2 = 0;
+
+	dummy_energy_use++;
+
+	return 0;
+}
+
+static const struct bt_mesh_sensor_descriptor energy_use_desc = {
+	.tolerance = {
+		.negative = {
+			.val1 = 0,
+		},
+		.positive = {
+			.val1 = 0,
+		}
+	},
+	.sampling_type = BT_MESH_SENSOR_SAMPLING_UNSPECIFIED,
+	.period = 0,
+	.update_interval = 0,
+};
+
+static struct bt_mesh_sensor energy_use = {
+	.type = &bt_mesh_sensor_precise_tot_dev_energy_use,
+	.get = energy_use_get,
+	.descriptor = &energy_use_desc,
+};
+
+static struct bt_mesh_sensor *const sensors[] = {
+	&energy_use,
+};
+
+static struct bt_mesh_sensor_srv sensor_srv =
+	BT_MESH_SENSOR_SRV_INIT(sensors, ARRAY_SIZE(sensors));
+
+static struct bt_mesh_scene_srv scene_srv;
+
 static struct bt_mesh_light_ctrl_srv light_ctrl_srv =
 	BT_MESH_LIGHT_CTRL_SRV_INIT(&my_ctx.lightness_srv);
 
@@ -152,7 +216,9 @@ static struct bt_mesh_elem elements[] = {
 			     BT_MESH_MODEL_CFG_SRV,
 			     BT_MESH_MODEL_HEALTH_SRV(&health_srv, &health_pub),
 			     BT_MESH_MODEL_LIGHTNESS_SRV(
-					 &my_ctx.lightness_srv)),
+					 &my_ctx.lightness_srv),
+			     BT_MESH_MODEL_SCENE_SRV(&scene_srv),
+			     BT_MESH_MODEL_SENSOR_SRV(&sensor_srv)),
 		     BT_MESH_MODEL_NONE),
 	BT_MESH_ELEM(2,
 		     BT_MESH_MODEL_LIST(
@@ -168,15 +234,25 @@ static const struct bt_mesh_comp comp = {
 
 const struct bt_mesh_comp *model_handler_init(void)
 {
-	int err;
-
 	k_work_init_delayable(&attention_blink_work, attention_blink);
 	k_work_init_delayable(&my_ctx.per_work, periodic_led_work);
+
+	return &comp;
+}
+
+void model_handler_start(void)
+{
+	int err;
+
+	if (bt_mesh_is_provisioned()) {
+		return;
+	}
+
+	bt_mesh_ponoff_srv_set(&light_ctrl_srv.lightness->ponoff,
+			       BT_MESH_ON_POWER_UP_RESTORE);
 
 	err = bt_mesh_light_ctrl_srv_enable(&light_ctrl_srv);
 	if (!err) {
 		printk("Successfully enabled LC server\n");
 	}
-
-	return &comp;
 }

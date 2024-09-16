@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
-#include <sys/reboot.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/reboot.h>
 
 #include <nfc_t2t_lib.h>
 #include <nfc/ndef/msg.h>
@@ -42,7 +42,7 @@ static uint8_t ndef_msg_buf[NDEF_MSG_BUF_SIZE];
 
 
 static void nfc_callback(void *context,
-			 enum nfc_t2t_event event,
+			 nfc_t2t_event_t event,
 			 const uint8_t *data,
 			 size_t data_length)
 {

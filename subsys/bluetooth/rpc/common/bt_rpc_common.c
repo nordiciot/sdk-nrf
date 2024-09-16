@@ -4,21 +4,23 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <device.h>
+#include <zephyr/device.h>
 #include <zephyr/types.h>
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 
+#include <nrf_rpc/nrf_rpc_ipc.h>
 #include <nrf_rpc_cbor.h>
 
 #include "bt_rpc_common.h"
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(BT_RPC, CONFIG_BT_RPC_LOG_LEVEL);
 
 BUILD_ASSERT(!IS_ENABLED(CONFIG_BT_BREDR), "BT_RPC does not support BR/EDR");
 
-NRF_RPC_GROUP_DEFINE(bt_rpc_grp, "bt_rpc", NULL, NULL, NULL);
+NRF_RPC_IPC_TRANSPORT(bt_rpc_tr, DEVICE_DT_GET(DT_NODELABEL(ipc0)), "bt_rpc_ept");
+NRF_RPC_GROUP_DEFINE(bt_rpc_grp, "bt_rpc", &bt_rpc_tr, NULL, NULL, NULL);
 
 #if CONFIG_BT_RPC_INITIALIZE_NRF_RPC
 static void err_handler(const struct nrf_rpc_err_report *report)
@@ -28,9 +30,8 @@ static void err_handler(const struct nrf_rpc_err_report *report)
 	k_oops();
 }
 
-static int serialization_init(const struct device *dev)
+static int serialization_init(void)
 {
-	ARG_UNUSED(dev);
 
 	int err;
 
@@ -198,7 +199,7 @@ static const CHECK_LIST_ENTRY_TYPE check_table[] = {
 		1,
 		CONFIG_BT_CENTRAL,
 		CONFIG_BT_PERIPHERAL,
-		CONFIG_BT_WHITELIST,
+		CONFIG_BT_FILTER_ACCEPT_LIST,
 		CONFIG_BT_USER_PHY_UPDATE,
 		CONFIG_BT_USER_DATA_LEN_UPDATE,
 		CONFIG_BT_PRIVACY,
@@ -220,12 +221,22 @@ static const CHECK_LIST_ENTRY_TYPE check_table[] = {
 		CONFIG_BT_PER_ADV_SYNC,
 		CONFIG_BT_MAX_PAIRED,
 		CONFIG_BT_SETTINGS_CCC_LAZY_LOADING,
+		CONFIG_BT_BROADCASTER),
+	CHECK_FLAGS(
+		CONFIG_BT_SETTINGS,
+		CONFIG_BT_GATT_CLIENT,
+		CONFIG_BT_RPC_INTERNAL_FUNCTIONS,
+		CONFIG_BT_DEVICE_APPEARANCE_DYNAMIC,
+		0,
+		0,
+		0,
 		0),
 	CHECK_UINT8(CONFIG_BT_MAX_CONN),
 	CHECK_UINT8(CONFIG_BT_ID_MAX),
 	CHECK_UINT8(CONFIG_BT_EXT_ADV_MAX_ADV_SET),
 	CHECK_UINT8(CONFIG_BT_DEVICE_NAME_MAX),
 	CHECK_UINT8(CONFIG_BT_PER_ADV_SYNC_MAX),
+	CHECK_UINT16(CONFIG_BT_DEVICE_APPEARANCE),
 	CHECK_UINT16_PAIR(CONFIG_CBKPROXY_OUT_SLOTS, CONFIG_CBKPROXY_IN_SLOTS),
 };
 

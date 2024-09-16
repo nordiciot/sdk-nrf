@@ -5,24 +5,24 @@
  */
 
 #include <string.h>
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
 
 #if defined(CONFIG_POSIX_API)
-#include <posix/arpa/inet.h>
-#include <posix/unistd.h>
-#include <posix/netdb.h>
-#include <posix/sys/socket.h>
+#include <zephyr/posix/arpa/inet.h>
+#include <zephyr/posix/unistd.h>
+#include <zephyr/posix/netdb.h>
+#include <zephyr/posix/sys/socket.h>
 #else
-#include <net/socket.h>
+#include <zephyr/net/socket.h>
 #endif
-#include <net/tls_credentials.h>
-#include <net/http_client.h>
-#include <net/http_parser.h>
+#include <zephyr/net/tls_credentials.h>
+#include <zephyr/net/http/client.h>
+#include <zephyr/net/http/parser.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 #include <net/rest_client.h>
 
@@ -46,8 +46,8 @@ static void rest_client_http_response_cb(struct http_response *rsp,
 	 * which will be the start of the body.
 	 */
 	if (resp_ctx) {
-		if (!resp_ctx->response && rsp->body_found && rsp->body_start) {
-			resp_ctx->response = rsp->body_start;
+		if (!resp_ctx->response && rsp->body_found && rsp->body_frag_start) {
+			resp_ctx->response = rsp->body_frag_start;
 		}
 		resp_ctx->total_response_len += rsp->data_len;
 	}
@@ -60,13 +60,14 @@ static void rest_client_http_response_cb(struct http_response *rsp,
 			return;
 		}
 		resp_ctx->http_status_code = rsp->http_status_code;
-		resp_ctx->response_len = rsp->content_length;
+		resp_ctx->response_len = rsp->processed;
+		strcpy(resp_ctx->http_status_code_str, rsp->http_status);
 
 		LOG_DBG("HTTP: All data received (content/total: %d/%d), status: %u %s",
-			rsp->content_length,
+			resp_ctx->response_len,
 			resp_ctx->total_response_len,
 			rsp->http_status_code,
-			log_strdup(rsp->http_status));
+			rsp->http_status);
 	}
 }
 
@@ -120,23 +121,21 @@ static int rest_client_sckt_tls_setup(int fd, const char *const tls_hostname,
 	return 0;
 }
 
-static int rest_client_sckt_timeouts_set(int fd)
+static int rest_client_sckt_timeouts_set(int fd, int32_t timeout_ms)
 {
 	int err;
 	struct timeval timeout = { 0 };
 
-	if (CONFIG_REST_CLIENT_SCKT_SEND_TIMEOUT > 0) {
+	if (timeout_ms != SYS_FOREVER_MS && timeout_ms > 0) {
 		/* Send TO also affects TCP connect */
-		timeout.tv_sec = CONFIG_REST_CLIENT_SCKT_SEND_TIMEOUT;
+		timeout.tv_sec = timeout_ms / MSEC_PER_SEC;
+		timeout.tv_usec = (timeout_ms % MSEC_PER_SEC) * USEC_PER_MSEC;
 		err = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 		if (err) {
 			LOG_ERR("Failed to set socket send timeout, error: %d", errno);
 			return err;
 		}
-	}
 
-	if (CONFIG_REST_CLIENT_SCKT_RECV_TIMEOUT > 0) {
-		timeout.tv_sec = CONFIG_REST_CLIENT_SCKT_RECV_TIMEOUT;
 		err = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 		if (err) {
 			LOG_ERR("Failed to set socket recv timeout, error: %d", errno);
@@ -146,10 +145,13 @@ static int rest_client_sckt_timeouts_set(int fd)
 	return 0;
 }
 
-static int rest_client_sckt_connect(int *const fd, const char *const hostname,
-				     const uint16_t port_num,
-				     const sec_tag_t sec_tag,
-				     int tls_peer_verify)
+/* The time taken in this function is deducted from the given timeout value. */
+static int rest_client_sckt_connect(int *const fd,
+				    const char *const hostname,
+				    const uint16_t port_num,
+				    const sec_tag_t sec_tag,
+				    int tls_peer_verify,
+				    int32_t *timeout_ms)
 {
 	int ret;
 	struct addrinfo *addr_info;
@@ -163,15 +165,17 @@ static int rest_client_sckt_connect(int *const fd, const char *const hostname,
 	};
 	struct sockaddr *sa;
 	int proto = 0;
+	int64_t sckt_connect_start_time;
+	int64_t time_used = 0;
+
+	sckt_connect_start_time = k_uptime_get();
 
 	/* Make sure fd is always initialized when this function is called */
 	*fd = -1;
 
 	snprintf(portstr, 6, "%d", port_num);
 
-	LOG_DBG("Doing getaddrinfo() with connect addr %s port %s",
-		log_strdup(hostname),
-		log_strdup(portstr));
+	LOG_DBG("Doing getaddrinfo() with connect addr %s port %s", hostname, portstr);
 
 	ret = getaddrinfo(hostname, portstr, &hints, &addr_info);
 	if (ret) {
@@ -184,7 +188,18 @@ static int rest_client_sckt_connect(int *const fd, const char *const hostname,
 		  (void *)&((struct sockaddr_in *)sa)->sin_addr,
 		  peer_addr,
 		  INET6_ADDRSTRLEN);
-	LOG_DBG("getaddrinfo() %s", log_strdup(peer_addr));
+	LOG_DBG("getaddrinfo() %s", peer_addr);
+
+	if (*timeout_ms != SYS_FOREVER_MS) {
+		/* Take time used for DNS query into account */
+		time_used = k_uptime_get() - sckt_connect_start_time;
+
+		/* Check if timeout has already elapsed */
+		if (time_used >= *timeout_ms) {
+			LOG_WRN("Timeout occurred during DNS query");
+			return -ETIMEDOUT;
+		}
+	}
 
 	proto = (sec_tag == REST_CLIENT_SEC_TAG_NO_SEC) ? IPPROTO_TCP : IPPROTO_TLS_1_2;
 	*fd = socket(addr_info->ai_family, SOCK_STREAM, proto);
@@ -202,22 +217,36 @@ static int rest_client_sckt_connect(int *const fd, const char *const hostname,
 		}
 	}
 
-	ret = rest_client_sckt_timeouts_set(*fd);
+	ret = rest_client_sckt_timeouts_set(*fd, *timeout_ms - time_used);
 	if (ret) {
 		LOG_ERR("Failed to set socket timeouts, error: %d", errno);
 		ret = -EINVAL;
 		goto clean_up;
 	}
 
-	LOG_DBG("Connecting to %s port %s",
-		log_strdup(hostname),
-		log_strdup(portstr));
+	LOG_DBG("Connecting to %s port %s", hostname, portstr);
 
 	ret = connect(*fd, addr_info->ai_addr, addr_info->ai_addrlen);
 	if (ret) {
 		LOG_ERR("Failed to connect socket, error: %d", errno);
-		ret = -ECONNREFUSED;
+		if (errno == ETIMEDOUT) {
+			ret = -ETIMEDOUT;
+		} else {
+			ret = -ECONNREFUSED;
+		}
 		goto clean_up;
+	}
+
+	if (*timeout_ms != SYS_FOREVER_MS) {
+		/* Take time used for socket connect into account */
+		time_used = k_uptime_get() - sckt_connect_start_time;
+
+		/* Check if timeout has already elapsed */
+		if (time_used >= *timeout_ms) {
+			LOG_WRN("Timeout occurred during socket connect");
+			return -ETIMEDOUT;
+		}
+		*timeout_ms -= time_used;
 	}
 
 clean_up:
@@ -273,7 +302,9 @@ static int rest_client_do_api_call(struct http_request *http_req,
 		err = rest_client_sckt_connect(&req_ctx->connect_socket,
 						http_req->host,
 						req_ctx->port,
-						req_ctx->sec_tag, req_ctx->tls_peer_verify);
+						req_ctx->sec_tag,
+						req_ctx->tls_peer_verify,
+						&req_ctx->timeout_ms);
 		if (err) {
 			return err;
 		}
@@ -292,6 +323,7 @@ static int rest_client_do_api_call(struct http_request *http_req,
 	resp_ctx->response_len = 0;
 	resp_ctx->total_response_len = 0;
 	resp_ctx->used_socket_id = req_ctx->connect_socket;
+	resp_ctx->http_status_code_str[0] = '\0';
 
 	err = http_client_req(req_ctx->connect_socket, http_req, req_ctx->timeout_ms, resp_ctx);
 	if (err < 0) {
@@ -317,7 +349,10 @@ void rest_client_request_defaults_set(struct rest_client_req_context *req_ctx)
 	req_ctx->sec_tag = REST_CLIENT_SEC_TAG_NO_SEC;
 	req_ctx->tls_peer_verify = REST_CLIENT_TLS_DEFAULT_PEER_VERIFY;
 	req_ctx->http_method = HTTP_GET;
-	req_ctx->timeout_ms = CONFIG_REST_CLIENT_REQUEST_TIMEOUT * 1000;
+	req_ctx->timeout_ms = CONFIG_REST_CLIENT_REQUEST_TIMEOUT * MSEC_PER_SEC;
+	if (req_ctx->timeout_ms == 0) {
+		req_ctx->timeout_ms = SYS_FOREVER_MS;
+	}
 }
 
 int rest_client_request(struct rest_client_req_context *req_ctx,
@@ -337,14 +372,20 @@ int rest_client_request(struct rest_client_req_context *req_ctx,
 	http_req.url = req_ctx->url;
 
 	LOG_DBG("Requesting destination HOST: %s at port %d, URL: %s",
-		log_strdup(req_ctx->host), req_ctx->port, log_strdup(http_req.url));
+		req_ctx->host, req_ctx->port, http_req.url);
 
 	http_req.header_fields = req_ctx->header_fields;
 
 	if (req_ctx->body != NULL) {
 		http_req.payload = req_ctx->body;
-		http_req.payload_len = strlen(http_req.payload);
-		LOG_DBG("Payload: %s", log_strdup(http_req.payload));
+		http_req.payload_len =
+			req_ctx->body_len ? req_ctx->body_len : strlen(http_req.payload);
+
+		if (req_ctx->body_len) {
+			LOG_HEXDUMP_DBG(req_ctx->body, req_ctx->body_len, "Payload:");
+		} else {
+			LOG_DBG("Payload: %s", http_req.payload);
+		}
 	}
 
 	ret = rest_client_do_api_call(&http_req, req_ctx, resp_ctx);
@@ -354,10 +395,12 @@ int rest_client_request(struct rest_client_req_context *req_ctx,
 	}
 
 	if (!resp_ctx->response || !resp_ctx->response_len) {
-		LOG_WRN("No data in a response body");
+		char *end_ptr = &req_ctx->resp_buff[resp_ctx->total_response_len];
+
+		LOG_DBG("No data in a response body");
 		/* Make it as zero length string */
-		*req_ctx->resp_buff = '\0';
-		resp_ctx->response = req_ctx->resp_buff;
+		*end_ptr = '\0';
+		resp_ctx->response = end_ptr;
 		resp_ctx->response_len = 0;
 	}
 	LOG_DBG("API call response len: http status: %d, %u bytes", resp_ctx->http_status_code,

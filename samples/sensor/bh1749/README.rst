@@ -10,15 +10,12 @@ BH1749: Ambient Light Sensor IC
 This sample application sets up the BH1749 color sensor to provide 8-bit measurement data every time a set threshold value (>50) is reached for the RED color channel.
 It also shows how to enable interrupt every time data is ready, instead of threshold trigging.
 
-
 Requirements
 ************
 
 The sample supports the following nRF9160-based device:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: thingy91_nrf9160_ns
+.. table-from-sample-yaml::
 
 Building and running
 ********************
@@ -34,8 +31,10 @@ The example below uses the Thingy:91.
 
 .. include:: /includes/build_and_run.txt
 
-Sample Output
+Sample output
 =============
+
+The following output is displayed in the terminal:
 
 .. code-block:: console
 
@@ -58,4 +57,4 @@ Sample Output
 References
 **********
 
-* `BH1749NUC-E`_
+`BH1749NUC-E`_

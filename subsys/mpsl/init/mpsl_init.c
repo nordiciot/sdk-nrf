@@ -4,14 +4,15 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <init.h>
-#include <irq.h>
-#include <kernel.h>
-#include <logging/log.h>
-#include <sys/__assert.h>
+#include <zephyr/init.h>
+#include <zephyr/irq.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/sys/__assert.h>
 #include <mpsl.h>
 #include <mpsl_timeslot.h>
 #include <mpsl/mpsl_assert.h>
+#include <mpsl/mpsl_work.h>
 #include "multithreading_lock.h"
 #if defined(CONFIG_NRFX_DPPI)
 #include <nrfx_dppi.h>
@@ -25,17 +26,22 @@ LOG_MODULE_REGISTER(mpsl_init, CONFIG_MPSL_LOG_LEVEL);
 const uint32_t z_mpsl_used_nrf_ppi_channels = MPSL_RESERVED_PPI_CHANNELS;
 const uint32_t z_mpsl_used_nrf_ppi_groups;
 
-#if IS_ENABLED(CONFIG_SOC_SERIES_NRF52X)
+#if IS_ENABLED(CONFIG_SOC_COMPATIBLE_NRF52X)
 	#define MPSL_LOW_PRIO_IRQn SWI5_IRQn
 #elif IS_ENABLED(CONFIG_SOC_SERIES_NRF53X)
 	#define MPSL_LOW_PRIO_IRQn SWI0_IRQn
 #endif
 #define MPSL_LOW_PRIO (4)
 
-static K_SEM_DEFINE(sem_signal, 0, 1);
-static struct k_thread signal_thread_data;
-static K_THREAD_STACK_DEFINE(signal_thread_stack,
-			     CONFIG_MPSL_SIGNAL_STACK_SIZE);
+#if IS_ENABLED(CONFIG_ZERO_LATENCY_IRQS)
+#define IRQ_CONNECT_FLAGS IRQ_ZERO_LATENCY
+#else
+#define IRQ_CONNECT_FLAGS 0
+#endif
+
+static struct k_work mpsl_low_prio_work;
+struct k_work_q mpsl_work_q;
+static K_THREAD_STACK_DEFINE(mpsl_work_stack, CONFIG_MPSL_WORK_STACK_SIZE);
 
 #define MPSL_TIMESLOT_SESSION_COUNT (\
 	CONFIG_MPSL_TIMESLOT_SESSION_COUNT + \
@@ -50,35 +56,80 @@ BUILD_ASSERT(MPSL_TIMESLOT_SESSION_COUNT <= MPSL_TIMESLOT_CONTEXT_COUNT_MAX,
 static uint8_t __aligned(4) timeslot_context[TIMESLOT_MEM_SIZE];
 #endif
 
-static void mpsl_low_prio_irq_handler(void)
+static void mpsl_low_prio_irq_handler(const void *arg)
 {
-	k_sem_give(&sem_signal);
+	k_work_submit_to_queue(&mpsl_work_q, &mpsl_low_prio_work);
 }
 
-static void signal_thread(void *p1, void *p2, void *p3)
+static void mpsl_low_prio_work_handler(struct k_work *item)
 {
-	ARG_UNUSED(p1);
-	ARG_UNUSED(p2);
-	ARG_UNUSED(p3);
+	ARG_UNUSED(item);
 
 	int errcode;
 
-	while (true) {
-		k_sem_take(&sem_signal, K_FOREVER);
-
-		errcode = MULTITHREADING_LOCK_ACQUIRE();
-		__ASSERT_NO_MSG(errcode == 0);
-		mpsl_low_priority_process();
-		MULTITHREADING_LOCK_RELEASE();
-	}
+	errcode = MULTITHREADING_LOCK_ACQUIRE();
+	__ASSERT_NO_MSG(errcode == 0);
+	mpsl_low_priority_process();
+	MULTITHREADING_LOCK_RELEASE();
 }
 
+#if IS_ENABLED(CONFIG_MPSL_DYNAMIC_INTERRUPTS)
+static void mpsl_timer0_isr_wrapper(const void *args)
+{
+	ARG_UNUSED(args);
+
+	MPSL_IRQ_TIMER0_Handler();
+
+	ISR_DIRECT_PM();
+}
+
+static void mpsl_rtc0_isr_wrapper(const void *args)
+{
+	ARG_UNUSED(args);
+
+	MPSL_IRQ_RTC0_Handler();
+
+	ISR_DIRECT_PM();
+}
+
+static void mpsl_radio_isr_wrapper(const void *args)
+{
+	ARG_UNUSED(args);
+
+	MPSL_IRQ_RADIO_Handler();
+
+	ISR_DIRECT_PM();
+}
+
+static void mpsl_lib_irq_disable(void)
+{
+	irq_disable(TIMER0_IRQn);
+	irq_disable(RTC0_IRQn);
+	irq_disable(RADIO_IRQn);
+}
+
+static void mpsl_lib_irq_connect(void)
+{
+	/* Ensure IRQs are disabled before attaching. */
+	mpsl_lib_irq_disable();
+
+	irq_connect_dynamic(TIMER0_IRQn, MPSL_HIGH_IRQ_PRIORITY,
+			mpsl_timer0_isr_wrapper, NULL, IRQ_CONNECT_FLAGS);
+	irq_connect_dynamic(RTC0_IRQn, MPSL_HIGH_IRQ_PRIORITY,
+			mpsl_rtc0_isr_wrapper, NULL, IRQ_CONNECT_FLAGS);
+	irq_connect_dynamic(RADIO_IRQn, MPSL_HIGH_IRQ_PRIORITY,
+			mpsl_radio_isr_wrapper, NULL, IRQ_CONNECT_FLAGS);
+
+	irq_enable(TIMER0_IRQn);
+	irq_enable(RTC0_IRQn);
+	irq_enable(RADIO_IRQn);
+}
+#else /* !IS_ENABLED(CONFIG_MPSL_DYNAMIC_INTERRUPTS) */
 ISR_DIRECT_DECLARE(mpsl_timer0_isr_wrapper)
 {
 	MPSL_IRQ_TIMER0_Handler();
 
 	ISR_DIRECT_PM();
-
 
 	/* We may need to reschedule in case a radio timeslot callback
 	 * accesses zephyr primitives.
@@ -109,6 +160,7 @@ ISR_DIRECT_DECLARE(mpsl_radio_isr_wrapper)
 	 */
 	return 1;
 }
+#endif /* IS_ENABLED(CONFIG_MPSL_DYNAMIC_INTERRUPTS) */
 
 #if IS_ENABLED(CONFIG_MPSL_ASSERT_HANDLER)
 void m_assert_handler(const char *const file, const uint32_t line)
@@ -119,7 +171,7 @@ void m_assert_handler(const char *const file, const uint32_t line)
 #else /* !IS_ENABLED(CONFIG_MPSL_ASSERT_HANDLER) */
 static void m_assert_handler(const char *const file, const uint32_t line)
 {
-	LOG_ERR("MPSL ASSERT: %s, %d", log_strdup(file), line);
+	LOG_ERR("MPSL ASSERT: %s, %d", file, line);
 	k_oops();
 }
 #endif /* IS_ENABLED(CONFIG_MPSL_ASSERT_HANDLER) */
@@ -142,9 +194,8 @@ static uint8_t m_config_clock_source_get(void)
 #endif
 }
 
-static int mpsl_lib_init(const struct device *dev)
+static int32_t mpsl_lib_init_internal(void)
 {
-	ARG_UNUSED(dev);
 	int err = 0;
 	mpsl_clock_lfclk_cfg_t clock_cfg;
 
@@ -181,26 +232,56 @@ static int mpsl_lib_init(const struct device *dev)
 	}
 #endif
 
+	return 0;
+}
+
+static int mpsl_lib_init_sys(void)
+{
+	int err = 0;
+
+	err = mpsl_lib_init_internal();
+	if (err) {
+		return err;
+	}
+
+#if IS_ENABLED(CONFIG_MPSL_DYNAMIC_INTERRUPTS)
+	/* Ensure IRQs are disabled before attaching. */
+	mpsl_lib_irq_disable();
+
+	/* We may need to reschedule in case a radio timeslot callback
+	 * accesses Zephyr primitives.
+	 * The RTC0 interrupt handler does not access zephyr primitives,
+	 * however, as this decision needs to be made during build-time,
+	 * rescheduling is performed to account for user-provided handlers.
+	 */
+	ARM_IRQ_DIRECT_DYNAMIC_CONNECT(TIMER0_IRQn, MPSL_HIGH_IRQ_PRIORITY,
+			IRQ_CONNECT_FLAGS, reschedule);
+	ARM_IRQ_DIRECT_DYNAMIC_CONNECT(RTC0_IRQn, MPSL_HIGH_IRQ_PRIORITY,
+			IRQ_CONNECT_FLAGS, reschedule);
+	ARM_IRQ_DIRECT_DYNAMIC_CONNECT(RADIO_IRQn, MPSL_HIGH_IRQ_PRIORITY,
+			IRQ_CONNECT_FLAGS, reschedule);
+
+	mpsl_lib_irq_connect();
+#else /* !IS_ENABLED(CONFIG_MPSL_DYNAMIC_INTERRUPTS) */
 	IRQ_DIRECT_CONNECT(TIMER0_IRQn, MPSL_HIGH_IRQ_PRIORITY,
-			   mpsl_timer0_isr_wrapper, IRQ_ZERO_LATENCY);
+			   mpsl_timer0_isr_wrapper, IRQ_CONNECT_FLAGS);
 	IRQ_DIRECT_CONNECT(RTC0_IRQn, MPSL_HIGH_IRQ_PRIORITY,
-			   mpsl_rtc0_isr_wrapper, IRQ_ZERO_LATENCY);
+			   mpsl_rtc0_isr_wrapper, IRQ_CONNECT_FLAGS);
 	IRQ_DIRECT_CONNECT(RADIO_IRQn, MPSL_HIGH_IRQ_PRIORITY,
-			   mpsl_radio_isr_wrapper, IRQ_ZERO_LATENCY);
+			   mpsl_radio_isr_wrapper, IRQ_CONNECT_FLAGS);
+#endif /* IS_ENABLED(CONFIG_MPSL_DYNAMIC_INTERRUPTS) */
 
 	return 0;
 }
 
-static int mpsl_signal_thread_init(const struct device *dev)
+static int mpsl_low_prio_init(void)
 {
-	ARG_UNUSED(dev);
 
-	k_thread_create(&signal_thread_data, signal_thread_stack,
-			K_THREAD_STACK_SIZEOF(signal_thread_stack),
-			signal_thread, NULL, NULL, NULL,
-			K_PRIO_COOP(CONFIG_MPSL_THREAD_COOP_PRIO),
-			0, K_NO_WAIT);
-	k_thread_name_set(&signal_thread_data, "MPSL signal");
+	k_work_queue_start(&mpsl_work_q, mpsl_work_stack,
+			   K_THREAD_STACK_SIZEOF(mpsl_work_stack),
+			   K_PRIO_COOP(CONFIG_MPSL_THREAD_COOP_PRIO), NULL);
+	k_thread_name_set(&mpsl_work_q.thread, "MPSL Work");
+	k_work_init(&mpsl_low_prio_work, mpsl_low_prio_work_handler);
 
 	IRQ_CONNECT(MPSL_LOW_PRIO_IRQn, MPSL_LOW_PRIO,
 		    mpsl_low_prio_irq_handler, NULL, 0);
@@ -208,6 +289,37 @@ static int mpsl_signal_thread_init(const struct device *dev)
 	return 0;
 }
 
-SYS_INIT(mpsl_lib_init, PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT);
-SYS_INIT(mpsl_signal_thread_init, POST_KERNEL,
+int32_t mpsl_lib_init(void)
+{
+#if IS_ENABLED(CONFIG_MPSL_DYNAMIC_INTERRUPTS)
+	int err = 0;
+
+	err = mpsl_lib_init_internal();
+	if (err) {
+		return err;
+	}
+
+	mpsl_lib_irq_connect();
+
+	return 0;
+#else /* !IS_ENABLED(CONFIG_MPSL_DYNAMIC_INTERRUPTS) */
+	return -NRF_EPERM;
+#endif /* IS_ENABLED(CONFIG_MPSL_DYNAMIC_INTERRUPTS) */
+}
+
+int32_t mpsl_lib_uninit(void)
+{
+#if IS_ENABLED(CONFIG_MPSL_DYNAMIC_INTERRUPTS)
+	mpsl_lib_irq_disable();
+
+	mpsl_uninit();
+
+	return 0;
+#else /* !IS_ENABLED(CONFIG_MPSL_DYNAMIC_INTERRUPTS) */
+	return -NRF_EPERM;
+#endif /* IS_ENABLED(CONFIG_MPSL_DYNAMIC_INTERRUPTS) */
+}
+
+SYS_INIT(mpsl_lib_init_sys, PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT);
+SYS_INIT(mpsl_low_prio_init, POST_KERNEL,
 	 CONFIG_KERNEL_INIT_PRIORITY_DEFAULT);

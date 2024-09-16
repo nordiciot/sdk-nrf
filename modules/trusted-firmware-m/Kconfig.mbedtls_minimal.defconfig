@@ -1,10 +1,30 @@
+#
+# Copyright (c) 2019 Nordic Semiconductor ASA
+#
+# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+#
+
+config MBEDTLS
+	bool
+	default n
+
+config MBEDTLS_TLS_VERSION_1_2
+	default n
+
+config MBEDTLS_MAC_SHA256_ENABLED
+	default n
+
+config MBEDTLS_CTR_DRBG_ENABLED
+	default n
+
 config MBEDTLS_SHA1_C
 	default n
 
 config MBEDTLS_SHA512_C
 	default n
 
-# SHA256 is enabled since we don't override its default
+config MBEDTLS_MD_C
+	default n if !MBEDTLS_LEGACY_CRYPTO_C
 
 config MBEDTLS_TLS_LIBRARY
 	default n
@@ -21,7 +41,7 @@ config MBEDTLS_DHM_C
 config MBEDTLS_ECP_C
 	default n
 
-config MBEDTLS_HMAC_DRBG_C
+config MBEDTLS_CTR_DRBG_C
 	default n
 
 config MBEDTLS_CIPHER_MODE_CBC
@@ -46,4 +66,7 @@ config MBEDTLS_POLY1305_C
 	default n
 
 config MBEDTLS_PSA_CRYPTO_STORAGE_C
+	default n
+
+config MBEDTLS_LEGACY_CRYPTO_C
 	default n

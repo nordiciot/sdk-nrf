@@ -1,11 +1,11 @@
 /*
  * Copyright (c) 2019 Nordic Semiconductor ASA
  *
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr/types.h>
-#include <drivers/gpio.h>
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/gpio.h>
 
 #ifndef ZEPHYR_DRIVERS_SENSOR_BH1749_H_
 #define ZEPHYR_DRIVERS_SENSOR_BH1749_H_
@@ -35,10 +35,10 @@
 /* BH1749_SYSTEM_CONTROL */
 #define BH1749_SYSTEM_CONTROL_PART_ID_Msk               GENMASK(5, 0)
 #define BH1749_SYSTEM_CONTROL_PART_ID                   0x0D
-#define BH1749_SYSTEM_CONTROL_SW_RESET_Msk              BIT(6)
-#define BH1749_SYSTEM_CONTROL_SW_RESET                  BIT(6)
-#define BH1749_SYSTEM_CONTROL_INT_RESET_Msk             BIT(7)
-#define BH1749_SYSTEM_CONTROL_INT_RESET                 BIT(7)
+#define BH1749_SYSTEM_CONTROL_INT_RESET_Msk             BIT(6)
+#define BH1749_SYSTEM_CONTROL_INT_RESET                 BIT(6)
+#define BH1749_SYSTEM_CONTROL_SW_RESET_Msk              BIT(7)
+#define BH1749_SYSTEM_CONTROL_SW_RESET                  BIT(7)
 
 /* BH1749_MODE_CONTROL1 */
 /* IR Gain: 1x, RGB Gain: 1x, Measurement mode: 120ms mode */
@@ -103,21 +103,36 @@ enum async_init_step {
 };
 
 struct bh1749_data {
-	const struct device *i2c;
-	const struct device *gpio;
 	struct gpio_callback gpio_cb;
+	struct k_work_delayable init_work;
 	struct k_work work;
 	const struct device *dev;
 	uint16_t sample_rgb_ir[BH1749_SAMPLES_TO_FETCH];
 	enum async_init_step async_init_step;
 	int err;
-	bool ready;
+	atomic_t ready;
 
 #ifdef CONFIG_BH1749_TRIGGER
 	sensor_trigger_handler_t trg_handler;
 	struct sensor_trigger trigger;
 #endif
 };
+
+struct bh1749_config {
+	const struct i2c_dt_spec i2c;
+	const struct gpio_dt_spec int_gpio;
+};
+
+static inline int bh1749_is_ready(const struct device *dev)
+{
+	const struct bh1749_data *data = dev->data;
+
+	if (unlikely(!atomic_get(&data->ready))) {
+		k_sleep(K_MSEC(CONFIG_BH1749_READY_WAIT_TIME_MSEC));
+	}
+
+	return atomic_get(&data->ready);
+}
 
 #ifdef CONFIG_BH1749_TRIGGER
 int bh1749_attr_set(const struct device *dev,

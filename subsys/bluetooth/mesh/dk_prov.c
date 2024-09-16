@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <bluetooth/mesh.h>
+#include <zephyr/bluetooth/mesh.h>
 #include <dk_buttons_and_leds.h>
-#include <drivers/hwinfo.h>
-#include <logging/log.h>
+#include <zephyr/drivers/hwinfo.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(dk_bt_mesh_prov, CONFIG_BT_MESH_DK_PROV_LOG_LEVEL);
 
@@ -199,7 +199,17 @@ const struct bt_mesh_prov *bt_mesh_dk_prov_init(void)
 	 *
 	 * https://tools.ietf.org/html/rfc4122
 	 */
-	hwinfo_get_device_id(dev_uuid, sizeof(dev_uuid));
+	size_t id_len = hwinfo_get_device_id(dev_uuid, sizeof(dev_uuid));
+
+	if (!IS_ENABLED(CONFIG_BT_MESH_DK_LEGACY_UUID_GEN)) {
+		/* If device ID is shorter than UUID size, fill rest of buffer with
+		 * inverted device ID.
+		 */
+		for (size_t i = id_len; i < sizeof(dev_uuid); i++) {
+			dev_uuid[i] = dev_uuid[i % id_len] ^ 0xff;
+		}
+	}
+
 	dev_uuid[6] = (dev_uuid[6] & BIT_MASK(4)) | BIT(6);
 	dev_uuid[8] = (dev_uuid[8] & BIT_MASK(6)) | BIT(7);
 

@@ -29,10 +29,6 @@ sys.path.insert(0, str(Path(__file__).absolute().parents[1] / "_utils"))
 import utils
 
 
-NO_MERGE = ("kconfig", )
-"""Docsets that should not be merged"""
-
-
 def load_search_index(file: Path, prefix: str) -> Dict:
     """Load search index from a file
 
@@ -150,18 +146,19 @@ def merge_objects(src: Dict, dst: Dict, offset: int) -> None:
             dst["objtypes"][str(index_cnt)] = src["objtypes"][src_index]
 
     # merge objects
-    for src_prefix, src_object in src["objects"].items():
+    for src_prefix, src_objects in src["objects"].items():
         if src_prefix not in dst["objects"]:
-            dst["objects"][src_prefix] = dict()
+            dst["objects"][src_prefix] = list()
 
-        dst_object = dst["objects"][src_prefix]
-        for src_name, src_value in src_object.items():
-            dst_object[src_name] = [
-                src_value[0] + offset,
-                obj_map[str(src_value[1])],
-                src_value[2],
-                src_value[3],
-            ]
+        dst_objects = dst["objects"][src_prefix]
+        for src_object in src_objects:
+            dst_objects.append([
+                src_object[0] + offset,
+                obj_map[str(src_object[1])],
+                src_object[2],
+                src_object[3],
+                src_object[4],
+            ])
 
 
 def main(build_dir: Path) -> None:
@@ -174,11 +171,7 @@ def main(build_dir: Path) -> None:
     # discover built docsets
     docsets = list()
     for entry in (build_dir / "html").iterdir():
-        if (
-            entry.is_dir()
-            and entry.name not in NO_MERGE
-            and entry.name in utils.ALL_DOCSETS
-        ):
+        if entry.is_dir() and entry.name in utils.ALL_DOCSETS:
             docsets.append(entry.name)
 
     # load indexes
@@ -207,7 +200,7 @@ def main(build_dir: Path) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
 
     parser.add_argument(
         "-b",

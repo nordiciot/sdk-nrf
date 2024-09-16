@@ -6,16 +6,18 @@
 
 #include <stdint.h>
 #include <stdio.h>
-#include <bluetooth/mesh/access.h>
+#include <zephyr/bluetooth/mesh/access.h>
 #include <bluetooth/mesh/models.h>
-#include <sys/byteorder.h>
+#include <zephyr/sys/byteorder.h>
 #include "model_utils.h"
 #include "mesh/net.h"
 #include "mesh/access.h"
 
-#define BT_DBG_ENABLED IS_ENABLED(CONFIG_BT_MESH_DEBUG_MODEL)
-#define LOG_MODULE_NAME bt_mesh_scene_srv
-#include "common/log.h"
+#define LOG_LEVEL CONFIG_BT_MESH_MODEL_LOG_LEVEL
+#include "zephyr/logging/log.h"
+LOG_MODULE_REGISTER(bt_mesh_scene_srv);
+
+#include "common/bt_str.h"
 
 #define SCENE_PAGE_SIZE SETTINGS_MAX_VAL_LEN
 /* Account for company ID in data: */
@@ -136,15 +138,17 @@ static void scene_status_encode(struct bt_mesh_scene_srv *srv, struct net_buf_si
 	}
 }
 
-static int scene_status_send(struct bt_mesh_scene_srv *srv, struct bt_mesh_msg_ctx *ctx,
+static int scene_status_send(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 			     const struct bt_mesh_scene_state *state)
 {
+	struct bt_mesh_scene_srv *srv = model->user_data;
+
 	BT_MESH_MODEL_BUF_DEFINE(buf, BT_MESH_SCENE_OP_STATUS,
 				 BT_MESH_SCENE_MSG_MAXLEN_STATUS);
 
 	scene_status_encode(srv, &buf, state);
 
-	return model_send(srv->model, ctx, &buf);
+	return bt_mesh_msg_send(model, ctx, &buf);
 }
 
 static void curr_scene_state_get(struct bt_mesh_scene_srv *srv, struct bt_mesh_scene_state *state)
@@ -162,7 +166,7 @@ static int handle_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 	struct bt_mesh_scene_state state;
 
 	curr_scene_state_get(srv, &state);
-	scene_status_send(srv, ctx, &state);
+	scene_status_send(model, ctx, &state);
 
 	return 0;
 }
@@ -187,9 +191,9 @@ static int scene_recall(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx
 	has_trans = !!model_transition_get(srv->model, &transition, buf);
 
 	if (tid_check_and_update(&srv->tid, tid, ctx)) {
-		BT_DBG("Duplicate TID");
+		LOG_DBG("Duplicate TID");
 		curr_scene_state_get(srv, &state);
-		scene_status_send(srv, ctx, &state);
+		scene_status_send(model, ctx, &state);
 		return 0;
 	}
 
@@ -207,12 +211,12 @@ static int scene_recall(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx
 	}
 
 	if (ack) {
-		scene_status_send(srv, ctx, &state);
+		scene_status_send(model, ctx, &state);
 	}
 
 	if (state.status == BT_MESH_SCENE_SUCCESS) {
 		/* Publish */
-		scene_status_send(srv, NULL, &state);
+		scene_status_send(model, NULL, &state);
 	}
 
 	return 0;
@@ -230,10 +234,12 @@ static int handle_recall_unack(struct bt_mesh_model *model, struct bt_mesh_msg_c
 	return scene_recall(model, ctx, buf, false);
 }
 
-static int scene_register_status_send(struct bt_mesh_scene_srv *srv,
+static int scene_register_status_send(struct bt_mesh_model *model,
 				      struct bt_mesh_msg_ctx *ctx,
 				      enum bt_mesh_scene_status status)
 {
+	struct bt_mesh_scene_srv *srv = model->user_data;
+
 	BT_MESH_MODEL_BUF_DEFINE(buf, BT_MESH_SCENE_OP_REGISTER_STATUS,
 				 BT_MESH_SCENE_MSG_MINLEN_REGISTER_STATUS +
 					 2 * CONFIG_BT_MESH_SCENES_MAX);
@@ -245,15 +251,13 @@ static int scene_register_status_send(struct bt_mesh_scene_srv *srv,
 		net_buf_simple_add_le16(&buf, srv->all[i]);
 	}
 
-	return model_send(srv->model, ctx, &buf);
+	return bt_mesh_msg_send(model, ctx, &buf);
 }
 
 static int handle_register_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 			       struct net_buf_simple *buf)
 {
-	struct bt_mesh_scene_srv *srv = model->user_data;
-
-	(void)scene_register_status_send(srv, ctx, BT_MESH_SCENE_SUCCESS);
+	(void)scene_register_status_send(model, ctx, BT_MESH_SCENE_SUCCESS);
 
 	return 0;
 }
@@ -308,7 +312,7 @@ static void entry_recover(struct bt_mesh_scene_srv *srv, bool vnd,
 	}
 
 	if (!mod) {
-		BT_WARN("No model @%s", bt_hex(&data->elem_idx, vnd ? 5 : 3));
+		LOG_WRN("No model @%s", bt_hex(&data->elem_idx, vnd ? 5 : 3));
 		return;
 	}
 
@@ -322,7 +326,7 @@ static void entry_recover(struct bt_mesh_scene_srv *srv, bool vnd,
 
 	entry = entry_find(mod, vnd);
 	if (!entry) {
-		BT_WARN("No scene entry for %s", bt_hex(&data->elem_idx, vnd ? 5 : 3));
+		LOG_WRN("No scene entry for %s", bt_hex(&data->elem_idx, vnd ? 5 : 3));
 		return;
 	}
 
@@ -362,13 +366,13 @@ static ssize_t entry_store(struct bt_mesh_model *mod,
 	}
 
 	if (size > entry->maxlen) {
-		BT_ERR("Entry %s:%u:%u: data too large (%u bytes)",
+		LOG_ERR("Entry %s:%u:%u: data too large (%u bytes)",
 		       vnd ? "vnd" : "sig", mod->elem_idx, mod->mod_idx, size);
 		return -EINVAL;
 	}
 
 	if (size < 0) {
-		BT_WARN("Failed storing %s:%u:%u (%d)", vnd ? "vnd" : "sig",
+		LOG_WRN("Failed storing %s:%u:%u (%d)", vnd ? "vnd" : "sig",
 			mod->elem_idx, mod->mod_idx, size);
 		return size;
 	}
@@ -397,7 +401,7 @@ static void page_store(struct bt_mesh_scene_srv *srv, uint16_t scene,
 
 	err = bt_mesh_model_data_store(srv->model, false, path, buf, len);
 	if (err) {
-		BT_ERR("Failed storing %s: %d", log_strdup(path), err);
+		LOG_ERR("Failed storing %s: %d", path, err);
 	}
 }
 
@@ -534,7 +538,7 @@ static enum bt_mesh_scene_status scene_store(struct bt_mesh_scene_srv *srv,
 
 	if (!existing) {
 		if (srv->count == ARRAY_SIZE(srv->all)) {
-			BT_ERR("Out of space");
+			LOG_ERR("Out of space");
 			return BT_MESH_SCENE_REGISTER_FULL;
 		}
 
@@ -556,7 +560,7 @@ static void scene_delete(struct bt_mesh_scene_srv *srv, uint16_t *scene)
 {
 	uint8_t path[9];
 
-	BT_DBG("0x%x", *scene);
+	LOG_DBG("0x%x", *scene);
 
 	for (int i = 0; i < srv->sigpages; i++) {
 		scene_path(path, *scene, false, i);
@@ -598,7 +602,7 @@ static int handle_store(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx
 	}
 
 	status = scene_store(srv, scene_number);
-	scene_register_status_send(srv, ctx, status);
+	scene_register_status_send(model, ctx, status);
 
 	return 0;
 }
@@ -643,7 +647,7 @@ static int handle_delete(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ct
 		return err;
 	}
 
-	scene_register_status_send(srv, ctx, BT_MESH_SCENE_SUCCESS);
+	scene_register_status_send(model, ctx, BT_MESH_SCENE_SUCCESS);
 
 	return 0;
 }
@@ -736,7 +740,7 @@ static int scene_srv_set(struct bt_mesh_model *model, const char *path,
 	uint8_t page;
 	bool vnd;
 
-	BT_DBG("path: %s", log_strdup(path));
+	LOG_DBG("path: %s", path);
 
 	/* The entire model data tree is loaded in this callback. Depending on
 	 * the path and whether we have started the mesh, we'll handle the data
@@ -747,7 +751,7 @@ static int scene_srv_set(struct bt_mesh_model *model, const char *path,
 	 */
 	scene = strtol(path, NULL, 16);
 	if (scene == BT_MESH_SCENE_NONE) {
-		BT_ERR("Unknown data %s", log_strdup(path));
+		LOG_ERR("Unknown data %s", path);
 		return 0;
 	}
 
@@ -770,22 +774,22 @@ static int scene_srv_set(struct bt_mesh_model *model, const char *path,
 		}
 
 		if (srv->count == ARRAY_SIZE(srv->all)) {
-			BT_WARN("No room for scene 0x%x", scene);
+			LOG_WRN("No room for scene 0x%x", scene);
 			return 0;
 		}
 
-		BT_DBG("Recovered scene 0x%x", scene);
+		LOG_DBG("Recovered scene 0x%x", scene);
 		srv->all[srv->count++] = scene;
 		return 0;
 	}
 
 	size = read_cb(cb_arg, &buf, sizeof(buf));
 	if (size < 0) {
-		BT_ERR("Failed loading scene 0x%x", scene);
+		LOG_ERR("Failed loading scene 0x%x", scene);
 		return -EINVAL;
 	}
 
-	BT_DBG("0x%x: %s", scene, bt_hex(buf, size));
+	LOG_DBG("0x%x: %s", scene, bt_hex(buf, size));
 	page_recover(srv, vnd, buf, size);
 	return 0;
 }
@@ -816,10 +820,8 @@ const struct bt_mesh_model_cb _bt_mesh_scene_srv_cb = {
 static int scene_setup_srv_init(struct bt_mesh_model *model)
 {
 	struct bt_mesh_scene_srv *srv = model->user_data;
-	const struct bt_mesh_comp *comp = bt_mesh_comp_get();
-	struct bt_mesh_model *dtt_srv = NULL;
+	struct bt_mesh_dtt_srv *dtt_srv = NULL;
 	int err;
-	int i;
 
 	if (!srv) {
 		return -EINVAL;
@@ -827,18 +829,16 @@ static int scene_setup_srv_init(struct bt_mesh_model *model)
 
 	srv->setup_mod = model;
 
-	for (i = model->elem_idx; (i >= 0) && (dtt_srv == NULL); --i) {
-		struct bt_mesh_elem *elem = &comp->elem[i];
-
-		dtt_srv = bt_mesh_model_find(elem, BT_MESH_MODEL_ID_GEN_DEF_TRANS_TIME_SRV);
+	if (IS_ENABLED(CONFIG_BT_MESH_DTT_SRV)) {
+		dtt_srv = bt_mesh_dtt_srv_get(bt_mesh_model_elem(model));
 	}
 
 	if (!dtt_srv) {
-		BT_ERR("Failed to find Generic DTT Server on element");
+		LOG_ERR("Failed to find Generic DTT Server on element");
 		return -EINVAL;
 	}
 
-	err = bt_mesh_model_extend(srv->setup_mod, dtt_srv);
+	err = bt_mesh_model_extend(srv->setup_mod, dtt_srv->model);
 	if (err) {
 		return err;
 	}
@@ -878,7 +878,7 @@ int bt_mesh_scene_srv_set(struct bt_mesh_scene_srv *srv, uint16_t scene,
 	}
 
 	if (!scene_find(srv, scene)) {
-		BT_WARN("Unknown scene 0x%x", scene);
+		LOG_WRN("Unknown scene 0x%x", scene);
 		return -ENOENT;
 	}
 
@@ -911,7 +911,7 @@ int bt_mesh_scene_srv_set(struct bt_mesh_scene_srv *srv, uint16_t scene,
 	sprintf(path, "bt/mesh/s/%x/data/%x",
 		(srv->model->elem_idx << 8) | srv->model->mod_idx, scene);
 
-	BT_DBG("Loading %s", log_strdup(path));
+	LOG_DBG("Loading %s", path);
 
 	err = settings_load_subtree(path);
 	if (!err) {
@@ -927,7 +927,7 @@ int bt_mesh_scene_srv_pub(struct bt_mesh_scene_srv *srv,
 	struct bt_mesh_scene_state state;
 
 	curr_scene_state_get(srv, &state);
-	return scene_status_send(srv, ctx, &state);
+	return scene_status_send(srv->model, ctx, &state);
 }
 
 uint16_t

@@ -3,8 +3,8 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <zephyr.h>
-#include <logging/log.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(coprocessor_sample, CONFIG_OT_COPROCESSOR_LOG_LEVEL);
 
@@ -15,7 +15,8 @@ LOG_MODULE_REGISTER(coprocessor_sample, CONFIG_OT_COPROCESSOR_LOG_LEVEL);
 	"OpenThread Coprocessor application is now running on NCS.\n\r"        \
 	"=========================================================\n\r"
 
-void main(void)
+int main(void)
 {
 	LOG_INF(WELCOME_TEXT);
+	return 0;
 }

@@ -5,17 +5,18 @@
  */
 
 #include "fw_info.h"
-#include <linker/sections.h>
-#include <sys/util.h>
-#include <init.h>
+#include <zephyr/linker/sections.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/init.h>
 #include <errno.h>
 #include <string.h>
 #include <nrfx_nvmc.h>
-#include <sys/printk.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/kernel.h>
 
 
 /* These symbols are defined in linker scripts. */
-extern const uint32_t _image_rom_start[];
+extern const uint32_t __rom_region_start[];
 extern const uint32_t _flash_used[];
 extern const struct fw_info _firmware_info_start[];
 extern const uint32_t _ext_apis_size[];
@@ -32,8 +33,8 @@ const struct fw_info m_firmware_info =
 	.total_size = (uint32_t)_fw_info_size,
 	.size = ((uint32_t)_flash_used),
 	.version = CONFIG_FW_INFO_FIRMWARE_VERSION,
-	.address = ((uint32_t)_image_rom_start),
-	.boot_address = (uint32_t)_image_rom_start,
+	.address = ((uint32_t)__rom_region_start),
+	.boot_address = (uint32_t)__rom_region_start,
 	.valid = CONFIG_FW_INFO_VALID_VAL,
 	.reserved = {0, 0, 0, 0},
 	.ext_api_num = (uint32_t)_ext_apis_size,
@@ -42,7 +43,7 @@ const struct fw_info m_firmware_info =
 
 
 Z_GENERIC_SECTION(.fw_info_images) __attribute__((used))
-const uint32_t self_image = ((uint32_t)&_image_rom_start - FW_INFO_VECTOR_OFFSET);
+const uint32_t self_image = ((uint32_t)&__rom_region_start - FW_INFO_VECTOR_OFFSET);
 
 #define NEXT_EXT_ABI(ext_api) ((const struct fw_info_ext_api *)\
 			(((const uint8_t *)(ext_api)) + (ext_api)->ext_api_len))
@@ -68,7 +69,7 @@ static bool ext_api_satisfies_req(const struct fw_info_ext_api * const ext_api,
 }
 
 
-static const struct fw_info_ext_api_request *skip_ext_apis(
+const struct fw_info_ext_api_request *skip_ext_apis(
 					const struct fw_info * const fw_info)
 {
 	const struct fw_info_ext_api *ext_api = &fw_info->ext_apis[0];
@@ -167,10 +168,8 @@ EXT_API(EXT_API_PROVIDE, struct ext_api_provide_ext_api,
 };
 #endif
 
-static int check_ext_api_requests(const struct device *dev)
+static int check_ext_api_requests(void)
 {
-	(void)dev;
-
 	const struct fw_info_ext_api_request *ext_api_req =
 			skip_ext_apis(&m_firmware_info);
 

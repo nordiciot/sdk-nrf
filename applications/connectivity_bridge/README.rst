@@ -15,7 +15,7 @@ Overview
 ********
 
 The Connectivity bridge acts as a USB composite device, exposing two UART interfaces to a USB host as two CDC ACM devices.
-The mapping of the UART interfaces are done in the following way:
+The mapping of the UART interfaces is done in the following way:
 
 .. list-table::
    :header-rows: 1
@@ -52,9 +52,7 @@ Requirements
 
 The sample supports the following nRF52840-based device:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: thingy91_nrf52840
+.. table-from-sample-yaml::
 
 The sample also requires a USB host which can communicate with CDC ACM devices, such as a Windows or Linux PC.
 
@@ -71,7 +69,7 @@ Testing
 
 After programming the sample to your kit, test it by performing the following steps:
 
-1. Connect the kit to the host via a USB cable.
+1. Connect the kit to the host using a USB cable.
 #. Observe that the CDC ACM devices enumerate on the USB host (COM ports on Windows, /dev/tty* on Linux).
 #. Use a serial client on the USB host to communicate over the kit's UART pins.
 
@@ -81,7 +79,7 @@ Dependencies
 
 This sample uses the following |NCS| libraries:
 
-* :ref:`event_manager`
+* :ref:`app_event_manager`
 * :ref:`nus_service_readme`
 
 In addition, it uses the following Zephyr libraries:

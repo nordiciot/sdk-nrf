@@ -6,12 +6,12 @@
 
 menuconfig EDGE_IMPULSE
 	bool "Enable Edge Impulse"
-	depends on CPLUSPLUS
+	depends on CPP
 	depends on STD_CPP11
-	depends on LIB_CPLUSPLUS
-	depends on NEWLIB_LIBC
-	depends on NEWLIB_LIBC_FLOAT_PRINTF
-	depends on FPU
+	depends on !FP16
+	select REQUIRES_FULL_LIBCPP
+	imply FPU
+	imply CBPRINTF_FP_SUPPORT
 	help
 	  Enable Edge Impulse library.
 
@@ -41,10 +41,12 @@ config EDGE_IMPULSE_URI
 	default ''
 	help
 	  Specify URI used to access archive with Edge Impulse library.
-	  The library will be downloaded into build directory. Make sure
-	  to specify the HTTP API key header as EI_API_KEY_HEADER variable
-	  during build if the HTTP server uses it.
-	  You can also specify absolute file path of a local file.
+	  The library will be downloaded into the build directory. You can specify
+	  more than one URI separated by a semicolon.
+	  Make sure to specify the HTTP API key header as EI_API_KEY_HEADER
+	  variable during build if the HTTP server uses it.
+	  You can also specify the absolute file path of a local file. In that
+	  case, only one URI has to be defined.
 
 endif # EDGE_IMPULSE
 
@@ -79,8 +81,19 @@ config EI_WRAPPER_THREAD_PRIORITY
 	  that the thread will not block other operations in system for
 	  a long time.
 
+config EI_WRAPPER_PROFILING
+	bool "Run Edge Impulse library with profiling logging"
+	depends on LOG
+	help
+	  EI wrapper provides logs with execution time in ms of the classifier
+	  with detailed information about time spent in the following stages:
+	  sampling, dsp, classification, and anomaly.
+
 config EI_WRAPPER_DEBUG_MODE
 	bool "Run Edge Impulse library in debug mode"
+	imply NEWLIB_LIBC_FLOAT_PRINTF
+	help
+	  Enables additional log information from Edge Impulse library.
 
 module=EI_WRAPPER
 module-dep=LOG

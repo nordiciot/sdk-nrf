@@ -24,14 +24,15 @@ Before using the wrapper, you need to :ref:`add the machine learning model <ug_e
 Configuration
 *************
 
-Enable the Edge Impulse wrapper by :kconfig:`CONFIG_EI_WRAPPER` option.
-The option is enabled by default if :kconfig:`CONFIG_EDGE_IMPULSE` is set.
+Enable the Edge Impulse wrapper by :kconfig:option:`CONFIG_EI_WRAPPER` option.
+The option is enabled by default if :kconfig:option:`CONFIG_EDGE_IMPULSE` is set.
 
-The Edge Impulse NCS library can be configured with the following Kconfig options:
+The Edge Impulse |NCS| library can be configured with the following Kconfig options:
 
-* :kconfig:`CONFIG_EI_WRAPPER_DATA_BUF_SIZE`
-* :kconfig:`CONFIG_EI_WRAPPER_THREAD_STACK_SIZE`
-* :kconfig:`CONFIG_EI_WRAPPER_THREAD_PRIORITY`
+* :kconfig:option:`CONFIG_EI_WRAPPER_DATA_BUF_SIZE`
+* :kconfig:option:`CONFIG_EI_WRAPPER_THREAD_STACK_SIZE`
+* :kconfig:option:`CONFIG_EI_WRAPPER_THREAD_PRIORITY`
+* :kconfig:option:`CONFIG_EI_WRAPPER_PROFILING`
 
 For more detailed description of these options, refer to the Kconfig help.
 
@@ -50,7 +51,7 @@ Use the following Edge Impulse wrapper API:
 
      * The number of provided input values is divisible by the input frame size for the machine learning model used.
        Otherwise, an error code is returned.
-     * The value for the :kconfig:`CONFIG_EI_WRAPPER_DATA_BUF_SIZE` Kconfig option is big enough to temporarily store the data provided by your application.
+     * The value for the :kconfig:option:`CONFIG_EI_WRAPPER_DATA_BUF_SIZE` Kconfig option is big enough to temporarily store the data provided by your application.
 
 * Call the :c:func:`ei_wrapper_start_prediction` function to shift the prediction window and start the prediction for the buffered data.
   If the whole input window is filled with data right after the shift operation, the prediction is started instantly.
@@ -62,7 +63,11 @@ Use the following Edge Impulse wrapper API:
 
 The Edge Impulse wrapper runs the machine learning model in a dedicated thread.
 Results are provided through a callback registered during the initialization of the wrapper.
-You can call :c:func:`ei_wrapper_get_classification_results` and :c:func:`ei_wrapper_get_timing` in the callback context to access the classification results and timings.
+You can call the following functions to access results:
+
+* :c:func:`ei_wrapper_get_next_classification_result`
+* :c:func:`ei_wrapper_get_anomaly`
+* :c:func:`ei_wrapper_get_timing`
 
 Refer to the API documentation for more detailed information about the API provided by the wrapper.
 

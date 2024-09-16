@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 #include <shell/shell_bt_nus.h>
-#include <bluetooth/gatt.h>
-#include <logging/log.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(shell_bt_nus, CONFIG_SHELL_BT_NUS_LOG_LEVEL);
 
@@ -177,7 +177,10 @@ void shell_bt_nus_enable(struct bt_conn *conn)
 	k_sem_reset(&shell_bt_nus_ready);
 
 	if (!is_init) {
-		err = shell_init(&shell_bt_nus, NULL, true, log_backend, level);
+		struct shell_backend_config_flags cfg_flags = SHELL_DEFAULT_BACKEND_CONFIG_FLAGS;
+
+		err = shell_init(&shell_bt_nus, NULL, cfg_flags, log_backend, level);
+
 		__ASSERT_NO_MSG(err == 0);
 		is_init = true;
 	}

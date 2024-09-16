@@ -8,6 +8,7 @@ Settings loader module
    :depth: 2
 
 Use the settings loader module to trigger loading the data from non-volatile memory.
+The settings loader module is by default enabled, along with all of the required dependencies for every nRF Desktop device.
 
 Module events
 *************
@@ -22,24 +23,27 @@ Module events
 Configuration
 *************
 
-The settings loader module is enabled for every nRF Desktop device with Zephyr's :ref:`zephyr:settings_api` enabled.
-The :ref:`zephyr:settings_api` subsystem is enabled with the :kconfig:`CONFIG_SETTINGS` Kconfig option.
+nRF Desktop uses the settings loader module from the :ref:`lib_caf` (CAF).
+The :ref:`CONFIG_DESKTOP_SETTINGS_LOADER <config_desktop_app_options>` Kconfig option selects :kconfig:option:`CONFIG_CAF_SETTINGS_LOADER` and aligns the module configuration to the application requirements.
+The :ref:`CONFIG_DESKTOP_SETTINGS_LOADER <config_desktop_app_options>` Kconfig option is implied by the :ref:`CONFIG_DESKTOP_COMMON_MODULES <config_desktop_app_options>` Kconfig option.
+The :ref:`CONFIG_DESKTOP_COMMON_MODULES <config_desktop_app_options>` option is enabled by default and is not user-assignable.
 
-Zephyr's Bluetooth® stack does not load the :ref:`zephyr:settings_api` data on its own.
-Zephyr assumes that the application will call :c:func:`settings_load` after completing all necessary initialization.
-This function is called on the settings loader module initialization.
+For details on the default configuration alignment, see the following sections.
 
-.. note::
-    Make sure that all settings handlers are registered and :c:func:`bt_enable` is called before the settings loader module is initialized.
+Settings backend
+================
 
-Settings are by default loaded in the system workqueue context.
-This blocks the workqueue until the operation is finished.
-You can set the :kconfig:`CONFIG_DESKTOP_SETTINGS_LOADER_USE_THREAD` Kconfig option to load the settings in a separate thread in the background instead of using the system workqueue for that purpose.
-This will prevent blocking the system workqueue, but it requires creating an additional thread.
-The stack size for the background thread is defined as :kconfig:`CONFIG_DESKTOP_SETTINGS_LOADER_THREAD_STACK_SIZE`.
+By default, nRF Desktop devices use non-volatile storage settings backend (:kconfig:option:`CONFIG_SETTINGS_NVS`).
+The storage partition is located in the internal flash.
 
-.. tip::
-   Using separate thread is recommended for nRF Desktop keyboards.
-   The :ref:`caf_buttons` uses the system workqueue to scan the keyboard matrix.
-   Loading the settings in the system workqueue context could block the workqueue and result in missing key presses on system reboot.
-   For this reason, :kconfig:`CONFIG_DESKTOP_SETTINGS_LOADER_USE_THREAD` is enabled for keyboard reference design (nRF52832 Desktop Keyboard)
+Settings load in a separate thread
+==================================
+
+Enabling the :kconfig:option:`CONFIG_CAF_SETTINGS_LOADER_USE_THREAD` option is recommended for the keyboard reference design (nRF52832 Desktop Keyboard).
+The :ref:`caf_buttons` uses the system workqueue to scan the keyboard matrix.
+Loading the settings in the system workqueue context could block the workqueue and result in missing key presses on system reboot.
+
+Implementation details
+**********************
+
+See the :ref:`CAF Settings loader module <caf_settings_loader>` page for implementation details.

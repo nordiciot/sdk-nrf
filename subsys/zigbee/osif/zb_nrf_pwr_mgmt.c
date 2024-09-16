@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <sys/atomic.h>
+#include <zephyr/sys/atomic.h>
 
 #include <zboss_api.h>
 #include "zb_nrf_platform.h"
@@ -25,7 +25,9 @@ void zb_timer_enable_stop(void);
 void zb_osif_sleep_init(void)
 {
 	/* Disable timer in inactivity periods on all device types. */
-	zb_timer_enable_stop();
+	if (IS_ENABLED(CONFIG_ZIGBEE_TIME_COUNTER)) {
+		zb_timer_enable_stop();
+	}
 }
 
 /**@brief Function which tries to put the MMCU into sleep mode,
@@ -72,7 +74,7 @@ __weak zb_uint32_t zb_osif_sleep(zb_uint32_t sleep_tmo)
 	 * in the time unit conversion.
 	 */
 	time_slept_ms = ZB_TIME_BEACON_INTERVAL_TO_MSEC(
-		ceiling_fraction(time_slept_us, ZB_BEACON_INTERVAL_USEC));
+		DIV_ROUND_UP(time_slept_us, ZB_BEACON_INTERVAL_USEC));
 
 	/* Unlock timer value updates. */
 	ZVUNUSED(atomic_set((atomic_t *)&is_sleeping, 0));
@@ -85,7 +87,7 @@ __weak zb_uint32_t zb_osif_sleep(zb_uint32_t sleep_tmo)
 }
 
 /**@brief Function which is called after zb_osif_sleep
- *        finished and ZBOSS timer is reenabled.
+ *        finished and ZBOSS timer is re-enabled.
  *
  * Function is defined as weak; to be redefined if someone
  * wants to implement their own going-to-deep-sleep policy/share resources

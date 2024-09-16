@@ -3,8 +3,8 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <logging/log.h>
-#include <zephyr.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/kernel.h>
 #include <stdio.h>
 #include <string.h>
 #include <modem/sms.h>
@@ -26,7 +26,6 @@ static int sms_handle;
 
 /* global variable defined in different files */
 extern struct at_param_list at_param_list;
-extern char rsp_buf[SLM_AT_CMD_RESPONSE_MAX_LEN];
 
 static void sms_callback(struct sms_data *const data, void *context)
 {
@@ -34,6 +33,7 @@ static void sms_callback(struct sms_data *const data, void *context)
 	static uint8_t total_msgs;
 	static uint8_t count;
 	static char messages[MAX_CONCATENATED_MESSAGE - 1][SMS_MAX_PAYLOAD_LEN_CHARS + 1];
+	char rsp_buf[MAX_CONCATENATED_MESSAGE * SMS_MAX_PAYLOAD_LEN_CHARS + 64] = {0};
 
 	ARG_UNUSED(context);
 
@@ -46,14 +46,17 @@ static void sms_callback(struct sms_data *const data, void *context)
 		struct sms_deliver_header *header = &data->header.deliver;
 
 		if (!header->concatenated.present) {
-			sprintf(rsp_buf, "\r\n#XSMS: \"%02d-%02d-%02d %02d:%02d:%02d\",\"",
+			sprintf(rsp_buf,
+				"\r\n#XSMS: \"%02d-%02d-%02d %02d:%02d:%02d UTC%+03d:%02d\",\"",
 				header->time.year, header->time.month, header->time.day,
-				header->time.hour, header->time.minute, header->time.second);
+				header->time.hour, header->time.minute, header->time.second,
+				header->time.timezone * 15 / 60,
+				abs(header->time.timezone) * 15 % 60);
 			strcat(rsp_buf, header->originating_address.address_str);
 			strcat(rsp_buf, "\",\"");
 			strcat(rsp_buf, data->payload);
 			strcat(rsp_buf, "\"\r\n");
-			rsp_send(rsp_buf, strlen(rsp_buf));
+			rsp_send("%s", rsp_buf);
 		} else {
 			LOG_DBG("concatenated message %d, %d, %d",
 				header->concatenated.ref_number,
@@ -106,7 +109,7 @@ static void sms_callback(struct sms_data *const data, void *context)
 					strcat(rsp_buf, messages[i]);
 				}
 				strcat(rsp_buf, "\"\r\n");
-				rsp_send(rsp_buf, strlen(rsp_buf));
+				rsp_send("%s", rsp_buf);
 			} else {
 				return;
 			}
@@ -214,9 +217,8 @@ int handle_at_sms(enum at_cmd_type cmd_type)
 		break;
 
 	case AT_CMD_TYPE_TEST_COMMAND:
-		sprintf(rsp_buf, "\r\n#XSMS: (%d,%d,%d),<number>,<message>\r\n",
+		rsp_send("\r\n#XSMS: (%d,%d,%d),<number>,<message>\r\n",
 			AT_SMS_STOP, AT_SMS_START, AT_SMS_SEND);
-		rsp_send(rsp_buf, strlen(rsp_buf));
 		err = 0;
 		break;
 

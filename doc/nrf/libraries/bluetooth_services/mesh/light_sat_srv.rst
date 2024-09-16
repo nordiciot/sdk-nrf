@@ -18,7 +18,7 @@ States
 
 Saturation: ``uint16_t``
     The Saturation controls the light's color saturation.
-    If the Saturation of a light is ``0``, the light's color is a completely gray scale, i.e. white light.
+    If the Saturation of a light is ``0``, the light's color is a completely gray scale, that is, white light.
     If the Saturation of a light is the maximum value of ``65535``, the color should be fully saturated.
 
     The Saturation state power-up behavior is determined by the On Power Up state of the extended :ref:`bt_mesh_ponoff_srv_readme`:
@@ -64,8 +64,16 @@ The Light Saturation Server stores the following information:
 
 This information is used to reestablish the correct Saturation level when the device powers up.
 
-If :kconfig:`CONFIG_BT_SETTINGS` is enabled, the Light Saturation Server stores all its states persistently using a configurable storage delay to stagger storing.
-See :kconfig:`CONFIG_BT_MESH_MODEL_SRV_STORE_TIMEOUT`.
+If :kconfig:option:`CONFIG_BT_SETTINGS` is enabled, the Light Saturation Server stores all its states persistently using a configurable storage delay to stagger storing.
+See :kconfig:option:`CONFIG_BT_MESH_STORE_TIMEOUT`.
+
+The Light Saturation Server can use the :ref:`emergency data storage (EMDS) <emds_readme>` together with persistent storage for the following purposes:
+
+* Extend the flash memory life expectancy.
+* Reduce the use of resources by reducing the number of writes to flash memory.
+
+If option :kconfig:option:`CONFIG_EMDS` is enabled, the Light Saturation Server continues to store the default saturation and saturation range states to the flash memory through the settings library, but the last known saturation level is stored by using the :ref:`EMDS <emds_readme>` library.
+This split is done so the values that may change often are stored on shutdown only, while the rarely changed values are immediately stored in flash memory.
 
 API documentation
 ******************

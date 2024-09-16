@@ -4,23 +4,23 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <ei_wrapper.h>
 
 #include <caf/events/sensor_event.h>
-#include "ml_state_event.h"
+#include "ml_app_mode_event.h"
 #include "ml_result_event.h"
 
 #define MODULE ml_runner
 #include <caf/events/module_state_event.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_ML_APP_ML_RUNNER_LOG_LEVEL);
 
 #define SHIFT_WINDOWS		CONFIG_ML_APP_ML_RUNNER_WINDOW_SHIFT
 #define SHIFT_FRAMES		CONFIG_ML_APP_ML_RUNNER_FRAME_SHIFT
 
-#define APP_CONTROLS_ML_STATE	IS_ENABLED(CONFIG_ML_APP_ML_STATE_EVENTS)
+#define APP_CONTROLS_ML_MODE	IS_ENABLED(CONFIG_ML_APP_MODE_EVENTS)
 
 /* Make sure that event handlers will not be preempted by the EI wrapper's callback. */
 BUILD_ASSERT(CONFIG_SYSTEM_WORKQUEUE_PRIORITY < CONFIG_EI_WRAPPER_THREAD_PRIORITY);
@@ -33,10 +33,6 @@ enum state {
 	 *  The state is used only before module is initialized.
 	 */
 	STATE_DISABLED,
-	/** Module is ready to work but no module is
-	 *  listening so data would not be processed.
-	 */
-	STATE_READY,
 	/** Module is currently processing the data. */
 	STATE_ACTIVE,
 	/** The module was suspended by user. */
@@ -57,7 +53,6 @@ static const char *handled_sensor_event_descr = CONFIG_ML_APP_ML_RUNNER_SENSOR_E
 
 static uint8_t ml_control;
 static enum state state;
-static struct module_flags active_listeners;
 
 
 static void report_error(void)
@@ -66,21 +61,20 @@ static void report_error(void)
 	module_set_state(MODULE_STATE_ERROR);
 }
 
-
-static enum state current_active_state(void)
-{
-	return module_flags_check_zero(&active_listeners) ? STATE_READY : STATE_ACTIVE;
-}
-
 static void submit_result(void)
 {
 	struct ml_result_event *evt = new_ml_result_event();
-	int err = ei_wrapper_get_classification_results(&evt->label, &evt->value, &evt->anomaly);
+
+	int err = ei_wrapper_get_next_classification_result(&evt->label, &evt->value, NULL);
+
+	if (!err) {
+		err = ei_wrapper_get_anomaly(&evt->anomaly);
+	}
 
 	__ASSERT_NO_MSG(!err);
 	ARG_UNUSED(err);
 
-	EVENT_SUBMIT(evt);
+	APP_EVENT_SUBMIT(evt);
 }
 
 static int buf_cleanup(void)
@@ -180,7 +174,7 @@ static int init(void)
 
 	if (err) {
 		LOG_ERR("Edge Impulse wrapper failed to initialize (err: %d)", err);
-	} else if (!APP_CONTROLS_ML_STATE) {
+	} else if (!APP_CONTROLS_ML_MODE) {
 		start_prediction();
 	}
 
@@ -198,26 +192,31 @@ static bool handle_sensor_event(const struct sensor_event *event)
 		return false;
 	}
 
-	int err = ei_wrapper_add_data(sensor_event_get_data_ptr(event),
-				      sensor_event_get_data_cnt(event));
+	size_t data_cnt = sensor_event_get_data_cnt(event);
+	float float_data[data_cnt];
+	const struct sensor_value *data_ptr = sensor_event_get_data_ptr(event);
+
+	for (size_t i = 0; i < data_cnt; i++) {
+		float_data[i] = sensor_value_to_double(&data_ptr[i]);
+	}
+
+	int err = ei_wrapper_add_data(float_data, data_cnt);
 
 	if (err) {
 		LOG_ERR("Cannot add data for EI wrapper (err %d)", err);
 		report_error();
+		return false;
 	}
 
 	return false;
 }
 
-static bool handle_ml_state_event(const struct ml_state_event *event)
+static bool handle_ml_app_mode_event(const struct ml_app_mode_event *event)
 {
-	if ((event->state == ML_STATE_MODEL_RUNNING) && (state == STATE_SUSPENDED)) {
-		state = current_active_state();
-		if (state == STATE_ACTIVE) {
-			start_prediction();
-		}
-	} else if ((event->state != ML_STATE_MODEL_RUNNING) &&
-		   ((state == STATE_ACTIVE) || (state == STATE_READY))) {
+	if ((event->mode == ML_APP_MODE_MODEL_RUNNING) && (state == STATE_SUSPENDED)) {
+		start_prediction();
+		state = STATE_ACTIVE;
+	} else if ((event->mode != ML_APP_MODE_MODEL_RUNNING) && (state == STATE_ACTIVE)) {
 		int err = buf_cleanup();
 
 		if (!err || (err == -EBUSY)) {
@@ -234,7 +233,7 @@ static bool handle_module_state_event(const struct module_state_event *event)
 		__ASSERT_NO_MSG(state == STATE_DISABLED);
 
 		if (!init()) {
-			state = APP_CONTROLS_ML_STATE ? STATE_SUSPENDED : current_active_state();
+			state = APP_CONTROLS_ML_MODE ? STATE_SUSPENDED : STATE_ACTIVE;
 			module_set_state(MODULE_STATE_READY);
 		} else {
 			report_error();
@@ -244,47 +243,19 @@ static bool handle_module_state_event(const struct module_state_event *event)
 	return false;
 }
 
-static bool handle_ml_result_signin_event(const struct ml_result_signin_event *event)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
-	__ASSERT_NO_MSG(module_check_id_valid(event->module_idx));
-	module_flags_set_bit_to(&active_listeners, event->module_idx, event->state);
-
-	if ((state == STATE_READY) || (state == STATE_ACTIVE)) {
-		enum state new_state = current_active_state();
-
-		if (state != new_state) {
-			LOG_INF("State changed because of active liseners, new state: %s",
-				new_state == STATE_READY ? "READY" : "ACTIVE");
-
-			if (new_state == STATE_ACTIVE) {
-				start_prediction();
-			} else {
-				(void)buf_cleanup();
-			}
-			state = new_state;
-		}
+	if (is_sensor_event(aeh)) {
+		return handle_sensor_event(cast_sensor_event(aeh));
 	}
 
-	return false;
-}
-
-static bool event_handler(const struct event_header *eh)
-{
-	if (is_sensor_event(eh)) {
-		return handle_sensor_event(cast_sensor_event(eh));
+	if (APP_CONTROLS_ML_MODE &&
+	    is_ml_app_mode_event(aeh)) {
+		return handle_ml_app_mode_event(cast_ml_app_mode_event(aeh));
 	}
 
-	if (APP_CONTROLS_ML_STATE &&
-	    is_ml_state_event(eh)) {
-		return handle_ml_state_event(cast_ml_state_event(eh));
-	}
-
-	if (is_module_state_event(eh)) {
-		return handle_module_state_event(cast_module_state_event(eh));
-	}
-
-	if (is_ml_result_signin_event(eh)) {
-		return handle_ml_result_signin_event(cast_ml_result_signin_event(eh));
+	if (is_module_state_event(aeh)) {
+		return handle_module_state_event(cast_module_state_event(aeh));
 	}
 
 	/* If event is unhandled, unsubscribe. */
@@ -293,10 +264,9 @@ static bool event_handler(const struct event_header *eh)
 	return false;
 }
 
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
-EVENT_SUBSCRIBE(MODULE, sensor_event);
-EVENT_SUBSCRIBE(MODULE, ml_result_signin_event);
-#if APP_CONTROLS_ML_STATE
-EVENT_SUBSCRIBE(MODULE, ml_state_event);
-#endif /* APP_CONTROLS_ML_STATE */
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
+APP_EVENT_SUBSCRIBE(MODULE, sensor_event);
+#if APP_CONTROLS_ML_MODE
+APP_EVENT_SUBSCRIBE(MODULE, ml_app_mode_event);
+#endif /* APP_CONTROLS_ML_MODE */

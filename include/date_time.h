@@ -8,8 +8,8 @@
 #define DATE_TIME_H__
 
 #include <zephyr/types.h>
-#include <time.h>
 #include <stdbool.h>
+#include <time.h>
 
 /**
  * @defgroup date_time Date Time Library
@@ -65,8 +65,8 @@ int date_time_set(const struct tm *new_date_time);
  *         passing variable uptime prior to the function call. In that case the uptime
  *         will not be too large or negative.
  *
- *  @warning If the function fails, the passed in variable retains its
- *           old value.
+ *  @note If the function fails, the passed in variable retains its
+ *        old value.
  *
  *  @param[in, out] uptime Pointer to a previously set uptime.
  *
@@ -79,8 +79,8 @@ int date_time_uptime_to_unix_time_ms(int64_t *uptime);
 
 /** @brief Get the current date time UTC.
  *
- *  @warning If the function fails, the passed in variable retains its
- *           old value.
+ *  @note If the function fails, the passed in variable retains its
+ *        old value.
  *
  *  @param[out] unix_time_ms Pointer to a variable to store the current date
  *                           time UTC.
@@ -106,9 +106,9 @@ bool date_time_is_valid(void);
 
 /** @brief Register an event handler for Date time library events.
  *
- *  @warning The library only allows for one event handler to be registered
- *           at a time. A passed in event handler in this function will
- *           overwrite the previously set event handler.
+ *  @note The library only allows for one event handler to be registered
+ *        at a time. A passed in event handler in this function will
+ *        overwrite the previously set event handler.
  *
  *  @param evt_handler Event handler. Handler is de-registered if parameter is
  *                     NULL.
@@ -130,10 +130,8 @@ void date_time_register_handler(date_time_evt_handler_t evt_handler);
 int date_time_update_async(date_time_evt_handler_t evt_handler);
 
 /** @brief Clear the current date time held by the library.
- *
- *  @return 0 If the operation was successful.
  */
-int date_time_clear(void);
+void date_time_clear(void);
 
 /** @brief Clear a timestamp in unix time ms.
  *

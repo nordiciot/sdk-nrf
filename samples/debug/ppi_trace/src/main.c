@@ -4,24 +4,33 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <debug/ppi_trace.h>
-#include <drivers/counter.h>
+#include <zephyr/drivers/counter.h>
 #include <hal/nrf_rtc.h>
 #include <hal/nrf_clock.h>
-#include <device.h>
-#include <logging/log.h>
+#include <zephyr/device.h>
+#include <zephyr/devicetree.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(app);
 
 #define ALARM_PERIOD_US 50000
 
-#if IS_ENABLED(CONFIG_USE_RTC2)
-#define RTC       NRF_RTC2
-#define RTC_LABEL DT_LABEL(DT_NODELABEL(rtc2))
+#define ZEPHYR_USER_NODE DT_PATH(zephyr_user)
+#if DT_NODE_HAS_PROP(ZEPHYR_USER_NODE, ppi_trace_rtc)
+#define RTC_NODE DT_PROP(ZEPHYR_USER_NODE, ppi_trace_rtc)
+#define RTC ((NRF_RTC_Type*)DT_REG_ADDR(RTC_NODE))
 #else
-#define RTC       NRF_RTC0
-#define RTC_LABEL DT_LABEL(DT_NODELABEL(rtc0))
+/*
+ * This sample now relies on the /zephyr,user node having a
+ * ppi-trace-rtc property that is a phandle to the RTC node you wish
+ * to use on your board. See the overlay files in the boards/
+ * subdirectory of this sample for examples.
+ */
+#error "Missing ppi-trace-rtc property in /zephyr,user; see source comments for details"
+#define RTC_NODE DT_INVALID_NODE
+#define RTC ((NRF_RTC_Type*)0)
 #endif
 
 static void alarm_callback(const struct device *dev, uint8_t chan_id, uint32_t ticks,
@@ -79,9 +88,9 @@ static void alarm_callback(const struct device *dev, uint8_t chan_id,
 static void counter_setup(void)
 {
 	int err;
-	const struct device *dev = device_get_binding(RTC_LABEL);
+	const struct device *dev = DEVICE_DT_GET(RTC_NODE);
 
-	__ASSERT(dev, "Sample cannot run on this board.");
+	__ASSERT(device_is_ready(dev), "RTC device not ready");
 
 	alarm_cfg.ticks = counter_us_to_ticks(dev, ALARM_PERIOD_US);
 	err = counter_set_channel_alarm(dev, 0, &alarm_cfg);
@@ -91,7 +100,7 @@ static void counter_setup(void)
 	__ASSERT_NO_MSG(err == 0);
 }
 
-void main(void)
+int main(void)
 {
 	ppi_trace_setup();
 	counter_setup();
@@ -99,4 +108,6 @@ void main(void)
 	if (IS_ENABLED(CONFIG_BT)) {
 		bluetooth_enable();
 	}
+
+	return 0;
 }

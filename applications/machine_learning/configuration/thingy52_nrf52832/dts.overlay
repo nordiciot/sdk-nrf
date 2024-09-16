@@ -1,6 +1,0 @@
-/ {
-	leds {
-		status = "okay";
-		label = "ML state LED";
-	};
-};

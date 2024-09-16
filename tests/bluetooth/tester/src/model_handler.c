@@ -6,10 +6,10 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/bluetooth.h>
 #include <bluetooth/mesh/models.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 #define LOG_MODULE_NAME bttester_model_handler
 LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
@@ -264,7 +264,7 @@ static void prop_get(struct bt_mesh_prop_srv *srv, struct bt_mesh_msg_ctx *ctx,
 	}
 
 	val->size = sizeof(property);
-	memcpy(val->value, &property.current, sizeof(property));
+	memcpy(val->value, &property, sizeof(property));
 }
 
 static void prop_mfr_get(struct bt_mesh_prop_srv *srv,
@@ -277,10 +277,11 @@ static void prop_mfr_get(struct bt_mesh_prop_srv *srv,
 	}
 
 	val->size = sizeof(property);
-	memcpy(val->value, &property.current, sizeof(property));
+	memcpy(val->value, &property, sizeof(property));
 }
 
-static int sensor_data_get(struct bt_mesh_sensor *sensor,
+static int sensor_data_get(struct bt_mesh_sensor_srv *srv,
+			   struct bt_mesh_sensor *sensor,
 			   struct bt_mesh_msg_ctx *ctx,
 			   struct sensor_value *rsp);
 
@@ -298,7 +299,8 @@ static struct sensor_value values[ARRAY_SIZE(sensors)];
 static struct bt_mesh_sensor_srv sensor_srv =
 	BT_MESH_SENSOR_SRV_INIT(sensors, ARRAY_SIZE(sensors));
 
-static int sensor_data_get(struct bt_mesh_sensor *sensor,
+static int sensor_data_get(struct bt_mesh_sensor_srv *srv,
+			   struct bt_mesh_sensor *sensor,
 			   struct bt_mesh_msg_ctx *ctx,
 			   struct sensor_value *rsp)
 {

@@ -4,16 +4,16 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 #include <bluetooth/mesh/gen_prop_srv.h>
-#include <sys/util.h>
+#include <zephyr/sys/util.h>
 #include <string.h>
 #include "gen_prop_internal.h"
 #include "model_utils.h"
 #include "mesh/net.h"
 #include "mesh/transport.h"
 
-#define BT_DBG_ENABLED IS_ENABLED(CONFIG_BT_MESH_DEBUG_MODEL)
-#define LOG_MODULE_NAME bt_mesh_gen_prop_srv
-#include "common/log.h"
+#define LOG_LEVEL CONFIG_BT_MESH_MODEL_LOG_LEVEL
+#include "zephyr/logging/log.h"
+LOG_MODULE_REGISTER(bt_mesh_gen_prop_srv);
 
 #define PROP_FOREACH(_srv, _prop)                                              \
 	for (_prop = &(_srv)->properties[0];                                   \
@@ -51,15 +51,13 @@ static struct bt_mesh_prop *prop_get(const struct bt_mesh_prop_srv *srv,
 }
 
 #if CONFIG_BT_SETTINGS
-static void store_timeout(struct k_work *work)
+static void bt_mesh_prop_srv_pending_store(struct bt_mesh_model *model)
 {
-	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-	struct bt_mesh_prop_srv *srv = CONTAINER_OF(
-		dwork, struct bt_mesh_prop_srv, store_timer);
+	struct bt_mesh_prop_srv *srv = model->user_data;
 
 	uint8_t user_access[CONFIG_BT_MESH_PROP_MAXCOUNT];
 
-	for (uint8_t i = 0; i < srv->property_count; ++i) {
+	for (uint32_t i = 0; i < srv->property_count; ++i) {
 		user_access[i] = srv->properties[i].user_access;
 	}
 
@@ -72,9 +70,7 @@ static void store_timeout(struct k_work *work)
 static void store_props(struct bt_mesh_prop_srv *srv)
 {
 #if CONFIG_BT_SETTINGS
-	k_work_schedule(
-		&srv->store_timer,
-		K_SECONDS(CONFIG_BT_MESH_MODEL_SRV_STORE_TIMEOUT));
+	bt_mesh_model_data_store_schedule(srv->model);
 #endif
 }
 
@@ -120,7 +116,7 @@ static int handle_owner_properties_get(struct bt_mesh_model *model, struct bt_me
 	BT_MESH_MODEL_BUF_DEFINE(rsp, BT_MESH_PROP_OP_ADMIN_PROPS_STATUS,
 				 BT_MESH_PROP_MSG_MAXLEN_PROPS_STATUS);
 
-	pub_list_build(model->user_data, &rsp, 0);
+	pub_list_build(model->user_data, &rsp, 1);
 	bt_mesh_model_send(model, ctx, &rsp, NULL, NULL);
 
 	return 0;
@@ -313,6 +309,10 @@ static int handle_client_properties_get(struct bt_mesh_model *model, struct bt_m
 					struct net_buf_simple *buf)
 {
 	uint16_t start_prop = net_buf_simple_pull_le16(buf);
+
+	if (start_prop == BT_MESH_PROP_ID_PROHIBITED) {
+		return -EINVAL;
+	}
 
 	BT_MESH_MODEL_BUF_DEFINE(rsp, BT_MESH_PROP_OP_CLIENT_PROPS_STATUS,
 				 BT_MESH_PROP_MSG_MAXLEN_PROPS_STATUS);
@@ -566,7 +566,7 @@ static int update_handler(struct bt_mesh_model *model)
 	case BT_MESH_PROP_SRV_STATE_NONE:
 		return 0;
 	case BT_MESH_PROP_SRV_STATE_LIST:
-		pub_list_build(srv, srv->pub.msg, 0);
+		pub_list_build(srv, srv->pub.msg, 1);
 		return 0;
 	case BT_MESH_PROP_SRV_STATE_PROP:
 		bt_mesh_model_msg_init(srv->pub.msg,
@@ -603,9 +603,20 @@ static int bt_mesh_prop_srv_init(struct bt_mesh_model *model)
 	net_buf_simple_init_with_data(&srv->pub_buf, srv->pub_data,
 				      sizeof(srv->pub_data));
 
-#if CONFIG_BT_SETTINGS
-	k_work_init_delayable(&srv->store_timer, store_timeout);
-#endif
+	if (srv->property_count > CONFIG_BT_MESH_PROP_MAXCOUNT) {
+		LOG_ERR("Property counter is larger than max allowed value");
+		return -EINVAL;
+	}
+
+	struct bt_mesh_prop *prop;
+
+	PROP_FOREACH(srv, prop)
+	{
+		if (prop->id == BT_MESH_PROP_ID_PROHIBITED) {
+			LOG_ERR("Property ID cannot be 0");
+			return -EINVAL;
+		}
+	}
 
 	if ((model->id == BT_MESH_MODEL_ID_GEN_MANUFACTURER_PROP_SRV ||
 	     model->id == BT_MESH_MODEL_ID_GEN_ADMIN_PROP_SRV)) {
@@ -614,7 +625,7 @@ static int bt_mesh_prop_srv_init(struct bt_mesh_model *model)
 			bt_mesh_model_elem(model), BT_MESH_MODEL_ID_GEN_USER_PROP_SRV);
 
 		if (!usr_prop_srv) {
-			BT_ERR("Failed to find Generic User Property Server on element");
+			LOG_ERR("Failed to find Generic User Property Server on element");
 			return -EINVAL;
 		}
 
@@ -666,7 +677,7 @@ static int bt_mesh_prop_srv_settings_set(struct bt_mesh_model *model,
 		return -EINVAL;
 	}
 
-	for (uint8_t i = 0; i < srv->property_count; ++i) {
+	for (uint32_t i = 0; i < srv->property_count; ++i) {
 		srv->properties[i].user_access = entries[i];
 	}
 
@@ -679,6 +690,7 @@ const struct bt_mesh_model_cb _bt_mesh_prop_srv_cb = {
 	.reset = bt_mesh_prop_srv_reset,
 #ifdef CONFIG_BT_SETTINGS
 	.settings_set = bt_mesh_prop_srv_settings_set,
+	.pending_store = bt_mesh_prop_srv_pending_store,
 #endif
 };
 
@@ -690,9 +702,9 @@ int bt_mesh_prop_srv_pub_list(struct bt_mesh_prop_srv *srv,
 	BT_MESH_MODEL_BUF_DEFINE(msg, BT_MESH_PROP_OP_MFR_PROPS_STATUS,
 				 BT_MESH_PROP_MSG_MAXLEN_PROPS_STATUS);
 
-	pub_list_build(srv, &msg, 0);
+	pub_list_build(srv, &msg, 1);
 
-	return model_send(srv->model, ctx, &msg);
+	return bt_mesh_msg_send(srv->model, ctx, &msg);
 }
 
 int bt_mesh_prop_srv_pub(struct bt_mesh_prop_srv *srv,
@@ -720,5 +732,5 @@ int bt_mesh_prop_srv_pub(struct bt_mesh_prop_srv *srv,
 	net_buf_simple_add_u8(&msg, val->meta.user_access);
 	net_buf_simple_add_mem(&msg, val->value, val->size);
 
-	return model_send(srv->model, ctx, &msg);
+	return bt_mesh_msg_send(srv->model, ctx, &msg);
 }

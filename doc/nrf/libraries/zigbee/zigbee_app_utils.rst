@@ -181,7 +181,7 @@ Once the BDB initialization procedure is finished, depending on the data stored 
 * `New device scenario`_: Generate the `ZB_BDB_SIGNAL_DEVICE_FIRST_START`_ signal for factory new devices.
 * `Commissioned device scenario`_: Perform a single attempt to rejoin the Zigbee network based on NVRAM contents and then generate the `ZB_BDB_SIGNAL_DEVICE_REBOOT`_ signal.
 
-Both scenarios cause different behavior of the the default signal handler.
+Both scenarios cause different behavior of the default signal handler.
 
 .. _zarco_signal_handler_bdb_initialization_new_devices:
 
@@ -276,7 +276,7 @@ Once :c:func:`start_network_rejoin` is called, the stack generates the `ZB_BDB_S
 Zigbee network rejoining
 ------------------------
 
-The Zigee network rejoin procedure is a mechanism that is similar to the ZDO rejoin back-off procedure.
+The Zigbee network rejoin procedure is a mechanism that is similar to the ZDO rejoin back-off procedure.
 It is implemented to work with both routers and end devices and simplify handling of cases such as device joining, rejoining, or leaving the network.
 It is used in :c:func:`zigbee_default_signal_handler` by default.
 
@@ -315,9 +315,9 @@ The rejoin procedure is different for routers and end devices in the following a
   It is safe to call this function from an interrupt and to call it multiple times.
 
   .. figure:: images/zigbee_signal_handler_10_rejoin_user_input.svg
-     :alt: User input restarting the the rejoin procedure
+     :alt: User input restarting the rejoin procedure
 
-     User input restarting the the rejoin procedure
+     User input restarting the rejoin procedure
 
 .. note::
     The Zigbee network rejoin procedure is managed from multiple signals in :c:func:`zigbee_default_signal_handler`.
@@ -461,9 +461,24 @@ Use the following code as reference, with a call to :c:func:`zigbee_default_sign
 Configuration
 *************
 
-To enable the Zigbee application utilities library, set the :kconfig:`CONFIG_ZIGBEE_APP_UTILS` Kconfig option.
+To enable the Zigbee application utilities library, set the :kconfig:option:`CONFIG_ZIGBEE_APP_UTILS` Kconfig option.
 
-To configure the logging level of the library, use the :kconfig:`CONFIG_ZIGBEE_APP_UTILS_LOG_LEVEL` Kconfig option.
+Logging
+    To configure the logging level of the library, use the :kconfig:option:`CONFIG_ZIGBEE_APP_UTILS_LOG_LEVEL` Kconfig option.
+
+Automatic PAN ID conflict resolution
+    To enable automatic PAN ID conflict resolution, use the :kconfig:option:`CONFIG_ZIGBEE_PANID_CONFLICT_RESOLUTION` Kconfig option.
+    This option is enabled by default.
+
+Factory reset button
+    To configure the time of the button press that initiates the device factory reset, use the :kconfig:option:`CONFIG_FACTORY_RESET_PRESS_TIME_SECONDS` Kconfig option.
+    This option is set to 5 seconds by default.
+
+    For more information about the factory reset, see the `Resetting to factory defaults`_ section in the ZBOSS stack documentation.
+
+Trust Center Rejoin
+    To enable the Trust Center Rejoin feature, use the :kconfig:option:`CONFIG_ZIGBEE_TC_REJOIN_ENABLED` Kconfig option.
+    This option is enabled by default.
 
 For detailed steps about configuring the library in a Zigbee sample or application, see :ref:`ug_zigbee_configuring_components_application_utilities`.
 

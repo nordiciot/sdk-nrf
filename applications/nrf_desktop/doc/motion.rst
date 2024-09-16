@@ -27,60 +27,63 @@ Configuration
 
 The motion module selects the source of movement based on the following configuration options:
 
-* :kconfig:`CONFIG_DESKTOP_MOTION_NONE` - Module is disabled.
-* :kconfig:`CONFIG_DESKTOP_MOTION_SENSOR_PMW3360_ENABLE` - Movement data is obtained from the gaming-grade ``PMW3360`` motion sensor.
-* :kconfig:`CONFIG_DESKTOP_MOTION_SENSOR_PAW3212_ENABLE` - Movement data is obtained from ``PAW3212`` motion sensor.
-* :kconfig:`CONFIG_DESKTOP_MOTION_BUTTONS_ENABLE` - Movement data is generated using buttons.
-* :kconfig:`CONFIG_DESKTOP_MOTION_SIMULATED_ENABLE` - Movement data is simulated (controlled from Zephyr's :ref:`zephyr:shell_api`).
+* :ref:`CONFIG_DESKTOP_MOTION_NONE <config_desktop_app_options>` - Module is disabled.
+* :ref:`CONFIG_DESKTOP_MOTION_SENSOR_PMW3360_ENABLE <config_desktop_app_options>` - Movement data is obtained from the gaming-grade ``PMW3360`` motion sensor.
+* :ref:`CONFIG_DESKTOP_MOTION_SENSOR_PAW3212_ENABLE <config_desktop_app_options>` - Movement data is obtained from ``PAW3212`` motion sensor.
+* :ref:`CONFIG_DESKTOP_MOTION_BUTTONS_ENABLE <config_desktop_app_options>` - Movement data is generated using buttons.
+* :ref:`CONFIG_DESKTOP_MOTION_SIMULATED_ENABLE <config_desktop_app_options>` - Movement data is simulated (controlled from Zephyr's :ref:`zephyr:shell_api`).
 
 See the following sections for more information.
 
-Depending on the selected configuration option, different implementation file is used during the build process.
+Depending on the selected configuration option, a different implementation file is used during the build process.
+
+You can use the :ref:`CONFIG_DESKTOP_MOTION_PM_EVENTS <config_desktop_app_options>` Kconfig option to enable or disable handling of the power management events, such as :c:struct:`power_down_event` and :c:struct:`wake_up_event`.
+The option is enabled by default and depends on the :kconfig:option:`CONFIG_CAF_PM_EVENTS` Kconfig option.
 
 Movement data from motion sensors
 =================================
 
-Selecting either of the motion sensors (:kconfig:`CONFIG_DESKTOP_MOTION_SENSOR_PMW3360_ENABLE` or :kconfig:`CONFIG_DESKTOP_MOTION_SENSOR_PAW3212_ENABLE`) adds the :file:`src/hw_interface/motion_sensor.c` file to the compilation.
+Selecting either of the motion sensors (:ref:`CONFIG_DESKTOP_MOTION_SENSOR_PMW3360_ENABLE <config_desktop_app_options>` or :ref:`CONFIG_DESKTOP_MOTION_SENSOR_PAW3212_ENABLE <config_desktop_app_options>`) adds the :file:`src/hw_interface/motion_sensor.c` file to the compilation.
 
 The motion sensor is sampled from the context of a dedicated thread.
-The option :kconfig:`CONFIG_DESKTOP_MOTION_SENSOR_THREAD_STACK_SIZE` is used to set the thread's stack size.
+The option :ref:`CONFIG_DESKTOP_MOTION_SENSOR_THREAD_STACK_SIZE <config_desktop_app_options>` is used to set the thread's stack size.
 
 The motion sensor default sensitivity and power saving switching times can be set with the following options:
 
-* :kconfig:`CONFIG_DESKTOP_MOTION_SENSOR_CPI` - Default CPI.
-* :kconfig:`CONFIG_DESKTOP_MOTION_SENSOR_SLEEP1_TIMEOUT_MS` - ``Sleep 1`` mode default switch time.
-* :kconfig:`CONFIG_DESKTOP_MOTION_SENSOR_SLEEP2_TIMEOUT_MS` - ``Sleep 2`` mode default switch time.
-* :kconfig:`CONFIG_DESKTOP_MOTION_SENSOR_SLEEP3_TIMEOUT_MS` - ``Sleep 3`` mode default switch time.
+* :ref:`CONFIG_DESKTOP_MOTION_SENSOR_CPI <config_desktop_app_options>` - Default CPI.
+* :ref:`CONFIG_DESKTOP_MOTION_SENSOR_SLEEP1_TIMEOUT_MS <config_desktop_app_options>` - ``Sleep 1`` mode default switch time.
+* :ref:`CONFIG_DESKTOP_MOTION_SENSOR_SLEEP2_TIMEOUT_MS <config_desktop_app_options>` - ``Sleep 2`` mode default switch time.
+* :ref:`CONFIG_DESKTOP_MOTION_SENSOR_SLEEP3_TIMEOUT_MS <config_desktop_app_options>` - ``Sleep 3`` mode default switch time.
 
 For more information, see the sensor documentation and the Kconfig help.
 
 Movement data from buttons
 ==========================
 
-Selecting the :kconfig:`CONFIG_DESKTOP_MOTION_BUTTONS_ENABLE` option adds the :file:`src/hw_interface/motion_buttons.c` file to the compilation.
+Selecting the :ref:`CONFIG_DESKTOP_MOTION_BUTTONS_ENABLE <config_desktop_app_options>` option adds the :file:`src/hw_interface/motion_buttons.c` file to the compilation.
 
 Simulated movement data
 =======================
 
-Selecting the :kconfig:`CONFIG_DESKTOP_MOTION_SIMULATED_ENABLE` option adds the :file:`src/hw_interface/motion_simulated.c` file to the compilation.
+Selecting the :ref:`CONFIG_DESKTOP_MOTION_SIMULATED_ENABLE <config_desktop_app_options>` option adds the :file:`src/hw_interface/motion_simulated.c` file to the compilation.
 
-If shell is available (:kconfig:`CONFIG_SHELL` option is set) the motion module registers a shell module ``motion_sim`` and links to it two commands: ``start`` and ``stop``.
-If shell is not available motion generation starts automatically when the device is connected to the USB or Bluetooth®.
+If the shell is available (the :kconfig:option:`CONFIG_SHELL` option is set), the motion module registers a shell module ``motion_sim`` and links to it two commands: ``start`` and ``stop``.
+If the shell is not available, motion generation starts automatically when the device is connected to USB or Bluetooth®.
 
 When started, the module will generate simulated motion events.
 The movement data in each event will be tracing the predefined path, an eight-sided polygon.
 
 You can configure the path with the following options:
 
-* :kconfig:`CONFIG_DESKTOP_MOTION_SIMULATED_EDGE_TIME` - Sets how long each edge is traced.
-* :kconfig:`CONFIG_DESKTOP_MOTION_SIMULATED_SCALE_FACTOR` - Scales the size of the polygon.
+* :ref:`CONFIG_DESKTOP_MOTION_SIMULATED_EDGE_TIME <config_desktop_app_options>` - Sets how long each edge is traced.
+* :ref:`CONFIG_DESKTOP_MOTION_SIMULATED_SCALE_FACTOR <config_desktop_app_options>` - Scales the size of the polygon.
 
 The ``stop`` command will cause the module to stop generating new events.
 
 Configuration channel
 *********************
 
-In a :ref:`configuration <nrf_desktop_motion_configuration>` where either :kconfig:`CONFIG_DESKTOP_MOTION_SENSOR_PMW3360_ENABLE` or :kconfig:`CONFIG_DESKTOP_MOTION_SENSOR_PAW3212_ENABLE` is used, you can configure the module through the :ref:`nrf_desktop_config_channel`.
+In a :ref:`configuration <nrf_desktop_motion_configuration>` where either :ref:`CONFIG_DESKTOP_MOTION_SENSOR_PMW3360_ENABLE <config_desktop_app_options>` or :ref:`CONFIG_DESKTOP_MOTION_SENSOR_PAW3212_ENABLE <config_desktop_app_options>` is used, you can configure the module through the :ref:`nrf_desktop_config_channel`.
 In these configurations, the module is a configuration channel listener and it provides the following configuration options:
 
 * :c:macro:`OPT_DESCR_MODULE_VARIANT`
@@ -93,7 +96,7 @@ In these configurations, the module is a configuration channel listener and it p
     The motion sensor CPI.
 * ``downshift``, ``rest1``, ``rest2``
     These firmware option names correspond to switch times of motion sensor modes, namely the sleep modes of ``PAW3212`` and the rest modes of ``PMW3360``.
-    This kind of modes is used by a motion sensor to reduce the power consumption, but it also increases the sensor's response time when a motion is detected after a period of inactivity.
+    These modes are used by a motion sensor to reduce the power consumption, but they also increase the sensor's response time when a motion is detected after a period of inactivity.
 
     The :ref:`nrf_desktop_config_channel_script` refers to these mode options using names that depend on the sensor variant:
 
@@ -119,8 +122,8 @@ Sampling thread
 
 The motion module uses a dedicated sampling thread to sample data from the motion sensor.
 The reason for using the sampling thread is the long time required for data to be ready.
-Using a dedicated thread also simplifies the module, because the interaction with the sensor becomes sequential.
-The sampling thread priority is set to 0 (the highest preemptive thread priority), because it is assumed that the data sampling will happen in the background.
+Using a dedicated thread also simplifies the module because the interaction with the sensor becomes sequential.
+The sampling thread priority is set to 0 (the highest preemptive thread priority) because it is assumed that the data sampling happens in the background.
 
 The sampling thread stays in the unready state blocked on a semaphore.
 The semaphore is triggered when the motion sensor trigger sends a notification that the data is available or when other application event requires the module interaction with the sensor (for example, when configuration is submitted from the host).
@@ -145,5 +148,5 @@ Upon connection, the following happens:
 #. At that point, a next motion sampling is performed and the next ``motion_event`` sent.
 
 The module continues to sample data until disconnection or when there is no motion detected.
-The ``motion`` module assumes no motion when a number of consecutive samples equal to :kconfig:`CONFIG_DESKTOP_MOTION_SENSOR_EMPTY_SAMPLES_COUNT` returns zero on both axis.
+The ``motion`` module assumes no motion when a number of consecutive samples equal to :ref:`CONFIG_DESKTOP_MOTION_SENSOR_EMPTY_SAMPLES_COUNT <config_desktop_app_options>` returns zero on both axis.
 In such case, the module will switch back to ``STATE_IDLE`` and wait for the motion sensor trigger.

@@ -13,7 +13,7 @@ from NrfHidManager import NrfHidManager
 from modules.module_config import MODULE_CONFIG
 from modules.config import change_config, fetch_config
 from modules.dfu import DfuImage
-from modules.dfu import fwinfo, fwreboot, dfu_transfer
+from modules.dfu import fwinfo, devinfo, fwreboot, dfu_transfer
 from modules.led_stream import send_continuous_led_stream
 try:
     from modules.music_led_stream import send_music_led_stream
@@ -45,7 +45,16 @@ def perform_dfu(dev, args):
         return
     img_ver_dev = info.get_fw_version()
 
-    img_file = DfuImage(args.dfu_image, info, dev.get_board_name())
+    complete_dfu_module_name = dev.get_complete_module_name('dfu')
+
+    if complete_dfu_module_name is None:
+        print('Dfu module not found')
+        return
+    if complete_dfu_module_name == 'dfu':
+        bootloader_variant = None
+    else:
+        bootloader_variant = complete_dfu_module_name[len('{}/'.format('dfu')):]
+    img_file = DfuImage(args.dfu_image, info, dev.get_board_name(), bootloader_variant)
 
     img_file_bin = img_file.get_dfu_image_bin_path()
     if img_file_bin is None:
@@ -58,6 +67,11 @@ def perform_dfu(dev, args):
     if img_ver_file is None:
         print('Cannot read image version from file')
         return
+
+    if bootloader_variant:
+        if bootloader_variant != img_file.get_dfu_image_bootloader_var():
+            print('Bootloader types does not match')
+            return
 
     print('Current FW version from device: ' +
           '.'.join([str(i) for i in img_ver_dev]))
@@ -133,8 +147,23 @@ def perform_fwinfo(dev, args):
 
     if info:
         print(info)
+        complete_dfu_module_name = dev.get_complete_module_name('dfu')
+        if complete_dfu_module_name is None:
+            print('Dfu module not found')
+            return
+        if complete_dfu_module_name != 'dfu':
+            print('  Bootloader variant: ' + complete_dfu_module_name[len('{}/'.format('dfu')):])
     else:
         print('FW info request failed')
+
+
+def perform_devinfo(dev, args):
+    info = devinfo(dev)
+
+    if info is not None:
+        print(info)
+    else:
+        print('Device information request failed')
 
 
 def perform_fwreboot(dev, args):
@@ -157,7 +186,12 @@ def perform_led_stream(dev, args):
 
 
 def parse_arguments():
-    parser = argparse.ArgumentParser()
+    try:
+        parser = argparse.ArgumentParser(allow_abbrev=False)
+    except TypeError:
+        # The allow_abbrev argument was added in Python 3.5.
+        # Skip setting the value if used Python version does not support it.
+        parser = argparse.ArgumentParser()
 
     parser.add_argument(dest='device', default=None, nargs='?',
                         help='Device specified by type, board name or HW ID '
@@ -176,6 +210,7 @@ def parse_arguments():
                             action='store_true')
 
     sp_commands.add_parser('fwinfo', help='Obtain information about FW image')
+    sp_commands.add_parser('devinfo', help='Obtain identification information about device')
     sp_commands.add_parser('fwreboot', help='Request FW reboot')
 
     parser_stream = sp_commands.add_parser('led_stream',
@@ -252,6 +287,7 @@ configurator.ALLOWED_COMMANDS = {
     'show' : perform_show,
     'dfu' : perform_dfu,
     'fwinfo' : perform_fwinfo,
+    'devinfo' : perform_devinfo,
     'fwreboot' : perform_fwreboot,
     'config' : perform_config,
     'led_stream' : perform_led_stream

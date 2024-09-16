@@ -32,6 +32,12 @@ if(NOT NO_BOILERPLATE)
     find_package(NcsToolchain ${NCS_TOOLCHAIN_MINIMUM_REQUIRED} ${EXACT} QUIET)
     if(${NcsToolchain_FOUND})
       message("-- Using NCS Toolchain ${NcsToolchain_VERSION} for building. (${NcsToolchain_DIR})")
+
+      set(CUSTOM_COMMAND_PATH ${NCS_TOOLCHAIN_BIN_PATH} $ENV{PATH})
+      cmake_path(CONVERT "${CUSTOM_COMMAND_PATH}" TO_NATIVE_PATH_LIST CUSTOM_COMMAND_PATH)
+      string(REPLACE ";" "\\\;" CUSTOM_COMMAND_PATH "${CUSTOM_COMMAND_PATH}")
+
+      set(CUSTOM_COMMAND_ENV       ${CMAKE_COMMAND} -E env "PATH=${CUSTOM_COMMAND_PATH}")
       set(GIT_EXECUTABLE           ${NCS_TOOLCHAIN_GIT}     CACHE FILEPATH "NCS Toolchain Git")
 
       set(DTC                      ${NCS_TOOLCHAIN_DTC}     CACHE FILEPATH "NCS Toolchain DTC")
@@ -41,18 +47,32 @@ if(NOT NO_BOILERPLATE)
       set(PYTHON_EXECUTABLE        ${NCS_TOOLCHAIN_PYTHON}  CACHE FILEPATH "NCS Toolchain Python")
       set(PYTHON_PREFER            ${NCS_TOOLCHAIN_PYTHON}  CACHE FILEPATH "NCS Toolchain Python")
 
+      if(DEFINED NCS_TOOLCHAIN_PROTOC)
+        set(PROTOC                     ${CUSTOM_COMMAND_ENV} ${NCS_TOOLCHAIN_PROTOC} CACHE STRING "NCS Toolchain protoc")
+        set(PROTOBUF_PROTOC_EXECUTABLE ${CUSTOM_COMMAND_ENV} ${NCS_TOOLCHAIN_PROTOC} CACHE STRING "NCS Toolchain protoc")
+      endif()
+
       set(ZEPHYR_TOOLCHAIN_VARIANT ${NCS_TOOLCHAIN_VARIANT}        CACHE STRING "NCS Toolchain Variant")
+      if(${ZEPHYR_TOOLCHAIN_VARIANT} AND ${ZEPHYR_TOOLCHAIN_VARIANT} STREQUAL zephyr)
+        set(ZEPHYR_SDK_INSTALL_DIR ${NCS_ZEPHYR_SDK_INSTALL_DIR} CACHE PATH "NCS Zephyr SDK install dir")
+      endif()
       set(GNUARMEMB_TOOLCHAIN_PATH ${NCS_GNUARMEMB_TOOLCHAIN_PATH} CACHE PATH "NCS GNU ARM emb path")
 
       if(${CMAKE_GENERATOR} STREQUAL Ninja)
         set(CMAKE_MAKE_PROGRAM ${NCS_TOOLCHAIN_NINJA} CACHE INTERNAL "NCS Toolchain ninja")
       endif()
 
+      if(${CMAKE_HOST_SYSTEM_NAME} STREQUAL Windows)
+        set(env_list_delimeter ";")
+      else()
+        set(env_list_delimeter ":")
+      endif()
+
       # If NCS_TOOLCHAIN_ENV_PATH is set, then we must ensure to prepend it
       # to ENV{PATH}. This is especially needed for west to work properly
       # in windows with MinGW64.
       if(NCS_TOOLCHAIN_ENV_PATH)
-        set(ENV{PATH} "${NCS_TOOLCHAIN_ENV_PATH};$ENV{PATH}")
+        set(ENV{PATH} "${NCS_TOOLCHAIN_ENV_PATH}${env_list_delimeter}$ENV{PATH}")
       endif()
 
       # If the NCS toolchain specifies a dedicated PYTHONPATH,

@@ -9,6 +9,8 @@ cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(lte_lc)
 
+test_runner_generate(src/main.c)
+
 FILE(GLOB app_sources src/*.c)
 target_sources(app PRIVATE ${app_sources})
 
@@ -26,4 +28,5 @@ target_include_directories(app
 target_compile_options(app
   PRIVATE
   -DCONFIG_LTE_LINK_CONTROL_LOG_LEVEL=0
+  -DCONFIG_LTE_NEIGHBOR_CELLS_MAX=10
 )

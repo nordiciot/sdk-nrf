@@ -127,7 +127,9 @@ struct bt_mesh_time_srv {
  * @param[in] ctx    Message context, or NULL to publish with the configured
  *                   parameters.
  *
- * @return 0              Successfully published the current Light state.
+ * @return 0              Successfully published the current Time state.
+ * @retval -EOPNOTSUPP    The server Time Role state does not support sending
+ *                        of unsolicited Time Status messages.
  * @retval -EADDRNOTAVAIL A message context was not provided and publishing is
  *                        not configured.
  * @retval -EAGAIN        The device has not been provisioned.
@@ -168,7 +170,7 @@ int bt_mesh_time_srv_status(struct bt_mesh_time_srv *srv, uint64_t uptime,
  * in time, i.e. for day light savings adjustments, we get a situation
  * where some points in time will occur twice on the local timeline.
  * If the user where to input a local time that is affected by these
- * changes the respons uptime will reflect the input local time added
+ * changes the response uptime will reflect the input local time added
  * with the new adjustment.
  * Example: A time zone change is scheduled 12:00:00 a clock an arbitrary
  * day to set the local clock forward by one hour. If the user requests
@@ -179,7 +181,7 @@ int bt_mesh_time_srv_status(struct bt_mesh_time_srv *srv, uint64_t uptime,
  * backwards in time, i.e. for day light savings adjustments, we get a
  * situation where some points in time never will on the local timeline.
  * If the user where to input a local time that is affected by these
- * changes the respons uptime will reflect the local time instance that
+ * changes the response uptime will reflect the local time instance that
  * happens last.
  * Example: A time zone change is scheduled 12:00:00 a clock an arbitrary
  * day to set the local clock back one hour. If the user requests the

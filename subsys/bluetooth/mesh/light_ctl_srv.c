@@ -4,28 +4,27 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <sys/byteorder.h>
+#include <zephyr/sys/byteorder.h>
 #include <bluetooth/mesh/light_ctl_srv.h>
 #include <bluetooth/mesh/light_temp_srv.h>
 #include <bluetooth/mesh/gen_dtt_srv.h>
 #include "light_ctl_internal.h"
 #include "lightness_internal.h"
 #include "model_utils.h"
-#define BT_DBG_ENABLED IS_ENABLED(CONFIG_BT_MESH_DEBUG_MODEL)
-#define LOG_MODULE_NAME bt_mesh_light_ctl_srv
-#include "common/log.h"
+
+#define LOG_LEVEL CONFIG_BT_MESH_MODEL_LOG_LEVEL
+#include "zephyr/logging/log.h"
+LOG_MODULE_REGISTER(bt_mesh_light_ctl_srv);
 
 static void ctl_encode_status(struct net_buf_simple *buf,
 			      struct bt_mesh_light_ctl_status *status)
 {
 	bt_mesh_model_msg_init(buf, BT_MESH_LIGHT_CTL_STATUS);
-	net_buf_simple_add_le16(buf,
-				light_to_repr(status->current_light, ACTUAL));
+	net_buf_simple_add_le16(buf, to_actual(status->current_light));
 	net_buf_simple_add_le16(buf, status->current_temp);
 
 	if (status->remaining_time) {
-		net_buf_simple_add_le16(buf, light_to_repr(status->target_light,
-							   ACTUAL));
+		net_buf_simple_add_le16(buf, to_actual(status->target_light));
 		net_buf_simple_add_le16(buf, status->target_temp);
 		net_buf_simple_add_u8(
 			buf, model_transition_encode(status->remaining_time));
@@ -67,7 +66,7 @@ static int ctl_set(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 	struct bt_mesh_light_temp_set temp;
 	uint8_t tid;
 
-	light.lvl = repr_to_light(net_buf_simple_pull_le16(buf), ACTUAL);
+	light.lvl = from_actual(net_buf_simple_pull_le16(buf));
 	temp.params.temp = net_buf_simple_pull_le16(buf);
 	temp.params.delta_uv = net_buf_simple_pull_le16(buf);
 	tid = net_buf_simple_pull_u8(buf);
@@ -215,8 +214,7 @@ static void default_encode_status(struct net_buf_simple *buf,
 				  struct bt_mesh_light_ctl_srv *srv)
 {
 	bt_mesh_model_msg_init(buf, BT_MESH_LIGHT_CTL_DEFAULT_STATUS);
-	net_buf_simple_add_le16(
-		buf, light_to_repr(srv->lightness_srv.default_light, ACTUAL));
+	net_buf_simple_add_le16(buf, to_actual(srv->lightness_srv.default_light));
 	net_buf_simple_add_le16(buf, srv->temp_srv.dflt.temp);
 	net_buf_simple_add_le16(buf, srv->temp_srv.dflt.delta_uv);
 }
@@ -239,7 +237,7 @@ static int default_set(struct bt_mesh_model *model,
 	struct bt_mesh_light_temp temp;
 	uint16_t light;
 
-	light = repr_to_light(net_buf_simple_pull_le16(buf), ACTUAL);
+	light = from_actual(net_buf_simple_pull_le16(buf));
 	temp.temp = net_buf_simple_pull_le16(buf);
 	temp.delta_uv = net_buf_simple_pull_le16(buf);
 
@@ -344,8 +342,7 @@ static ssize_t scene_store(struct bt_mesh_model *model, uint8_t data[])
 	}
 
 	srv->lightness_srv.handlers->light_get(&srv->lightness_srv, NULL, &light);
-	sys_put_le16(light_to_repr(light.remaining_time ? light.target : light.current, ACTUAL),
-		     &data[0]);
+	sys_put_le16(to_actual(light.remaining_time ? light.target : light.current), &data[0]);
 
 	return 2;
 }
@@ -363,7 +360,7 @@ static void scene_recall(struct bt_mesh_model *model, const uint8_t data[],
 
 	struct bt_mesh_lightness_status dummy_light_status;
 	struct bt_mesh_lightness_set light = {
-		.lvl = repr_to_light(sys_get_le16(data), ACTUAL),
+		.lvl = from_actual(sys_get_le16(data)),
 		.transition = transition,
 	};
 
@@ -437,7 +434,7 @@ static int bt_mesh_light_ctl_srv_start(struct bt_mesh_model *model)
 
 	if (!srv->temp_srv.model ||
 	    (srv->model->elem_idx > srv->temp_srv.model->elem_idx)) {
-		BT_ERR("Light CTL srv[%d]: Temp. srv not properly initialized",
+		LOG_ERR("Light CTL srv[%d]: Temp. srv not properly initialized",
 		       srv->model->elem_idx);
 		return -EINVAL;
 	}
@@ -454,7 +451,7 @@ static int bt_mesh_light_ctl_srv_start(struct bt_mesh_model *model)
 		break;
 
 	case BT_MESH_ON_POWER_UP_RESTORE:
-		temp.params = srv->temp_srv.last;
+		temp.params = srv->temp_srv.transient.last;
 		bt_mesh_light_temp_srv_set(&srv->temp_srv, NULL, &temp, &temp_status);
 		break;
 
@@ -496,7 +493,7 @@ int bt_mesh_light_ctl_pub(struct bt_mesh_light_ctl_srv *srv,
 				 BT_MESH_LIGHT_CTL_MSG_MAXLEN_STATUS);
 
 	ctl_encode_status(&msg, status);
-	return model_send(srv->model, ctx, &msg);
+	return bt_mesh_msg_send(srv->model, ctx, &msg);
 }
 
 int bt_mesh_light_ctl_range_pub(struct bt_mesh_light_ctl_srv *srv,
@@ -506,7 +503,7 @@ int bt_mesh_light_ctl_range_pub(struct bt_mesh_light_ctl_srv *srv,
 	BT_MESH_MODEL_BUF_DEFINE(msg, BT_MESH_LIGHT_TEMP_RANGE_STATUS,
 				 BT_MESH_LIGHT_CTL_MSG_LEN_TEMP_RANGE_STATUS);
 	range_encode_status(&msg, srv, status);
-	return model_send(srv->model, ctx, &msg);
+	return bt_mesh_msg_send(srv->model, ctx, &msg);
 }
 
 int bt_mesh_light_ctl_default_pub(struct bt_mesh_light_ctl_srv *srv,
@@ -515,5 +512,5 @@ int bt_mesh_light_ctl_default_pub(struct bt_mesh_light_ctl_srv *srv,
 	BT_MESH_MODEL_BUF_DEFINE(msg, BT_MESH_LIGHT_CTL_DEFAULT_STATUS,
 				 BT_MESH_LIGHT_CTL_MSG_LEN_DEFAULT_MSG);
 	default_encode_status(&msg, srv);
-	return model_send(srv->model, ctx, &msg);
+	return bt_mesh_msg_send(srv->model, ctx, &msg);
 }

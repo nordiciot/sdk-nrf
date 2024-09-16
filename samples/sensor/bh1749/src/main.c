@@ -1,15 +1,15 @@
 /*
- * Copyright (c) 2019 Nordic Semiconductor ASA
+ * Copyright (c) 2019 Nordic Semiconductor ASA.
  *
- * SPDX-License-Identifier: Apache-2.0
+ * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
 
-#include <zephyr.h>
-#include <device.h>
-#include <drivers/sensor.h>
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/sensor.h>
 #include <stdio.h>
-#include <sys/__assert.h>
+#include <zephyr/sys/__assert.h>
 
 #define THRESHOLD_UPPER                 50
 #define THRESHOLD_LOWER                 0
@@ -18,7 +18,7 @@
 static K_SEM_DEFINE(sem, 0, 1);
 
 static void trigger_handler(const struct device *dev,
-			    struct sensor_trigger *trigger)
+			    const struct sensor_trigger *trigger)
 {
 	ARG_UNUSED(dev);
 	switch (trigger->type) {
@@ -87,7 +87,11 @@ static void process(const struct device *dev)
 		if (IS_ENABLED(CONFIG_BH1749_TRIGGER)) {
 			/* Waiting for a trigger event */
 			k_sem_take(&sem, K_FOREVER);
+		} else {
+			/* Waiting some time for first fetch if trigger disabled*/
+			k_sleep(K_MSEC(1000));
 		}
+
 		ret = sensor_sample_fetch_chan(dev, SENSOR_CHAN_ALL);
 		/* The sensor does only support fetching SENSOR_CHAN_ALL */
 		if (ret) {
@@ -126,19 +130,22 @@ static void process(const struct device *dev)
 	}
 }
 
-void main(void)
+int main(void)
 {
-	const struct device *dev;
+	const struct device *dev = DEVICE_DT_GET_ONE(rohm_bh1749);
 
 	if (IS_ENABLED(CONFIG_LOG_BACKEND_RTT)) {
 		/* Give RTT log time to be flushed before executing tests */
 		k_sleep(K_MSEC(500));
 	}
-	dev = device_get_binding("BH1749");
-	if (dev == NULL) {
-		printk("Failed to get device binding\n");
-		return;
+
+	if (!device_is_ready(dev)) {
+		printk("Sensor device not ready\n");
+		return 0;
 	}
+
 	printk("device is %p, name is %s\n", dev, dev->name);
 	process(dev);
+
+	return 0;
 }

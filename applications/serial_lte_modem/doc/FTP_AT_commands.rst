@@ -47,7 +47,7 @@ The ``<cmd>`` command is a string, and can be used as follows:
 * ``AT#XFTP="mput",<file>[,<data>]``
 
 The values of the parameters depend on the command string used.
-When using the ``put``,``uput`` and ``mput`` commands, if the ``<data>`` attribute is not specified, SLM enters ``slm_data_mode``.
+When using the ``put``, ``uput`` and ``mput`` commands, if the ``<data>`` attribute is not specified, SLM enters ``slm_data_mode``.
 
 Response syntax
 ~~~~~~~~~~~~~~~
@@ -110,3 +110,118 @@ Test command
 ------------
 
 The test command is not supported.
+
+TFTP client #XTFTP
+==================
+
+The ``#XTFTP`` command allows you to send TFTP commands.
+
+Set command
+-----------
+
+The set command allows you to send TFTP commands based on RFC1350.
+
+Syntax
+~~~~~~
+
+::
+
+   AT#XTFTP=<op>,<url>,<port>,<file_path>[,<mode>,<data>]
+
+* The ``<op>`` parameter can accept one of the following values:
+
+  * ``1`` - TFTP read request using IP protocol family version 4.
+  * ``2`` - TFTP write request using IP protocol family version 4.
+  * ``3`` - TFTP read request using IP protocol family version 6.
+  * ``4`` - TFTP write request using IP protocol family version 6.
+
+* The ``<url>`` parameter is a string.
+  It indicates the hostname or the IP address of the TFTP server.
+  Its maximum size is 128 bytes.
+  When the parameter is an IP address, it supports both IPv4 and IPv6.
+* The ``<port>`` parameter is an unsigned 16-bit integer (0 - 65535).
+  It represents the TFTP service port on the remote server, which is usually port 69.
+* The ``<file_path>`` parameter is a string.
+  It indicates the file path on the TFTP server to read from or write to.
+  Its maximum size is 128 bytes.
+* The ``<mode>`` parameter is a string.
+  It indicates the three modes defined in TFTP protocol.
+  Valid values are ``netascii``, ``octet`` and ``mail``.
+  The default value ``octet`` is applied if this parameter is omitted.
+* The ``<data>`` parameter is a string.
+  When ``<op>`` has a value of ``2`` or ``4``, this is the data to be put to the remote server.
+
+   .. note::
+      The maximum data size supported in WRITE request is 1024 bytes.
+      The TFTP connection is terminated by writing less than 512 bytes, as defined in the protocol specification (RFC 1350).
+
+Response syntax
+~~~~~~~~~~~~~~~
+
+::
+
+   #XTFTP: <size>, "success"
+   <data>
+
+   #XTFTP: <error>, "<error_msg>"
+
+* The ``<size>`` value is an integer.
+  When positive, it indicates the size of data in bytes read from TFTP server.
+* The ``<data>`` value is the arbitrary data read from TFTP server.
+* The ``<error>`` value is an integer.
+  It is a negative integer based on the type of error.
+* The ``<error_msg>`` value is a string.
+  It is the description that corresponds to the ``<error>`` value.
+
+Examples
+~~~~~~~~
+
+::
+
+  AT#XTFTP=2,"tftp-server.com",69,"test_put_01.txt","octet","test send TFTP PUT"
+  #XTFTP: 18,"success"
+  OK
+
+  AT#XTFTP=1,"tftp-server.com",69,"test_put_01.txt"
+  test send TFTP PUT
+  #XTFTP: 18,"success"
+  OK
+
+  AT#XTFTP=2,"tftp-server.com",69,"test_put_02.txt""octet","012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
+  #XTFTP: 540,"success"
+  OK
+
+  AT#XTFTP=1,"tftp-server.com",69,"test_put_02.txt"
+  012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
+  #XTFTP: 540,"success"
+  OK
+
+  AT#XTFTP=1,"tftp-server.com",69,"test_put_not_exist.txt"
+  #XTFTP: -4, "remote error"
+  ERROR
+
+Read command
+------------
+
+The read command is not supported.
+
+Test command
+------------
+
+The test command tests the existence of the command and provides information about the type of its subparameters.
+
+Syntax
+~~~~~~
+
+::
+
+   AT#XTFTP=?
+
+Examples
+~~~~~~~~
+
+::
+
+   AT#XTFTP=?
+   #XTFTP: (1,2,3,4),<url>,<port>,<file_path>,<mode>
+   OK

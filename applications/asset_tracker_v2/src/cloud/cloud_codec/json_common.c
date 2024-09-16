@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <cJSON.h>
 #include <date_time.h>
 
@@ -12,9 +12,13 @@
 #include "json_common.h"
 #include "json_helpers.h"
 #include "json_protocol_names.h"
+#include <net/nrf_cloud_location.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(json_common, CONFIG_CLOUD_CODEC_LOG_LEVEL);
+
+/* MAC address string size including null character */
+#define AP_STRING_SIZE	13
 
 static int op_code_handle(cJSON *parent, enum json_common_op_code op,
 			  const char *object_label, cJSON *child, cJSON **parent_ref)
@@ -61,11 +65,6 @@ int json_common_modem_static_data_add(cJSON *parent,
 				      cJSON **parent_ref)
 {
 	int err;
-	char nw_mode[50] = {0};
-
-	static const char lte_string[] = "LTE-M";
-	static const char nbiot_string[] = "NB-IoT";
-	static const char gps_string[] = " GPS";
 
 	if (!data->queued) {
 		return -ENODATA;
@@ -85,23 +84,7 @@ int json_common_modem_static_data_add(cJSON *parent,
 		goto exit;
 	}
 
-	if (data->nw_lte_m) {
-		strcpy(nw_mode, lte_string);
-	} else if (data->nw_nb_iot) {
-		strcpy(nw_mode, nbiot_string);
-	}
-
-	if (data->nw_gps) {
-		strcat(nw_mode, gps_string);
-	}
-
-	err = json_add_number(modem_val_obj, MODEM_CURRENT_BAND, data->bnd);
-	if (err) {
-		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-		goto exit;
-	}
-
-	err = json_add_str(modem_val_obj, MODEM_NETWORK_MODE, nw_mode);
+	err = json_add_str(modem_val_obj, MODEM_IMEI, data->imei);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
 		goto exit;
@@ -165,7 +148,6 @@ int json_common_modem_dynamic_data_add(cJSON *parent,
 	int err;
 	uint32_t mccmnc;
 	char *end_ptr;
-	bool values_added = false;
 
 	if (!data->queued) {
 		return -ENODATA;
@@ -185,65 +167,57 @@ int json_common_modem_dynamic_data_add(cJSON *parent,
 		goto exit;
 	}
 
-	if (data->rsrp_fresh) {
-		err = json_add_number(modem_val_obj, MODEM_RSRP, data->rsrp);
-		if (err) {
-			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-			goto exit;
-		}
-		values_added = true;
+	err = json_add_number(modem_val_obj, MODEM_CURRENT_BAND, data->band);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
 	}
 
-	if (data->area_code_fresh) {
-		err = json_add_number(modem_val_obj, MODEM_AREA_CODE, data->area);
-		if (err) {
-			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-			goto exit;
-		}
-		values_added = true;
+	err = json_add_str(modem_val_obj, MODEM_NETWORK_MODE,
+			   (data->nw_mode == LTE_LC_LTE_MODE_LTEM) ? "LTE-M" :
+			   (data->nw_mode == LTE_LC_LTE_MODE_NBIOT) ? "NB-IoT" : "Unknown");
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
 	}
 
-	if (data->mccmnc_fresh) {
-		/* Convert mccmnc to unsigned long integer. */
-		errno = 0;
-		mccmnc = strtoul(data->mccmnc, &end_ptr, 10);
-
-		if ((errno == ERANGE) || (*end_ptr != '\0')) {
-			LOG_ERR("MCCMNC string could not be converted.");
-			err = -ENOTEMPTY;
-			goto exit;
-		}
-
-		err = json_add_number(modem_val_obj, MODEM_MCCMNC, mccmnc);
-		if (err) {
-			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-			goto exit;
-		}
-		values_added = true;
+	err = json_add_number(modem_val_obj, MODEM_RSRP, data->rsrp);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
 	}
 
-	if (data->cell_id_fresh) {
-		err = json_add_number(modem_val_obj, MODEM_CELL_ID, data->cell);
-		if (err) {
-			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-			goto exit;
-		}
-		values_added = true;
+	err = json_add_number(modem_val_obj, MODEM_AREA_CODE, data->area);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
 	}
 
-	if (data->ip_address_fresh) {
-		err = json_add_str(modem_val_obj, MODEM_IP_ADDRESS, data->ip);
-		if (err) {
-			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-			goto exit;
-		}
-		values_added = true;
+	/* Convert mccmnc to unsigned long integer. */
+	errno = 0;
+	mccmnc = strtoul(data->mccmnc, &end_ptr, 10);
+
+	if ((errno == ERANGE) || (*end_ptr != '\0')) {
+		LOG_ERR("MCCMNC string could not be converted.");
+		err = -ENOTEMPTY;
+		goto exit;
 	}
 
-	if (!values_added) {
-		err = -ENODATA;
-		data->queued = false;
-		LOG_WRN("No valid dynamic modem data values present, entry unqueued");
+	err = json_add_number(modem_val_obj, MODEM_MCCMNC, mccmnc);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
+	}
+
+	err = json_add_number(modem_val_obj, MODEM_CELL_ID, data->cell);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
+	}
+
+	err = json_add_str(modem_val_obj, MODEM_IP_ADDRESS, data->ip);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
 		goto exit;
 	}
 
@@ -298,16 +272,31 @@ int json_common_sensor_data_add(cJSON *parent,
 		goto exit;
 	}
 
-	err = json_add_number(sensor_val_obj, DATA_TEMPERATURE, data->temp);
+	err = json_add_number(sensor_val_obj, DATA_TEMPERATURE, data->temperature);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
 		goto exit;
 	}
 
-	err = json_add_number(sensor_val_obj, DATA_HUMID, data->hum);
+	err = json_add_number(sensor_val_obj, DATA_HUMIDITY, data->humidity);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
 		goto exit;
+	}
+
+	err = json_add_number(sensor_val_obj, DATA_PRESSURE, data->pressure);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
+	}
+
+	/* If air quality is negative, the value is not provided. */
+	if (data->bsec_air_quality >= 0) {
+		err = json_add_number(sensor_val_obj, DATA_BSEC_IAQ, data->bsec_air_quality);
+		if (err) {
+			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+			goto exit;
+		}
 	}
 
 	json_add_obj(sensor_obj, DATA_VALUE, sensor_val_obj);
@@ -335,11 +324,11 @@ exit:
 	return err;
 }
 
-int json_common_gps_data_add(cJSON *parent,
-			     struct cloud_data_gps *data,
-			     enum json_common_op_code op,
-			     const char *object_label,
-			     cJSON **parent_ref)
+int json_common_gnss_data_add(cJSON *parent,
+			      struct cloud_data_gnss *data,
+			      enum json_common_op_code op,
+			      const char *object_label,
+			      cJSON **parent_ref)
 {
 	int err;
 
@@ -347,86 +336,68 @@ int json_common_gps_data_add(cJSON *parent,
 		return -ENODATA;
 	}
 
-	err = date_time_uptime_to_unix_time_ms(&data->gps_ts);
+	err = date_time_uptime_to_unix_time_ms(&data->gnss_ts);
 	if (err) {
 		LOG_ERR("date_time_uptime_to_unix_time_ms, error: %d", err);
 		return err;
 	}
 
-	cJSON *gps_obj = cJSON_CreateObject();
-	cJSON *gps_val_obj = cJSON_CreateObject();
+	cJSON *gnss_obj = cJSON_CreateObject();
+	cJSON *gnss_val_obj = cJSON_CreateObject();
 
-	if (gps_obj == NULL || gps_val_obj == NULL) {
+	if (gnss_obj == NULL || gnss_val_obj == NULL) {
 		err = -ENOMEM;
 		goto exit;
 	}
 
-	switch (data->format) {
-	case CLOUD_CODEC_GPS_FORMAT_PVT:
-		err = json_add_number(gps_val_obj, DATA_GPS_LONGITUDE, data->pvt.longi);
-		if (err) {
-			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-			goto exit;
-		}
-
-		err = json_add_number(gps_val_obj, DATA_GPS_LATITUDE, data->pvt.lat);
-		if (err) {
-			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-			goto exit;
-		}
-
-		err = json_add_number(gps_val_obj, DATA_GPS_ACCURACY, data->pvt.acc);
-		if (err) {
-			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-			goto exit;
-		}
-
-		err = json_add_number(gps_val_obj, DATA_GPS_ALTITUDE, data->pvt.alt);
-		if (err) {
-			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-			goto exit;
-		}
-
-		err = json_add_number(gps_val_obj, DATA_GPS_SPEED, data->pvt.spd);
-		if (err) {
-			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-			goto exit;
-		}
-
-		err = json_add_number(gps_val_obj, DATA_GPS_HEADING, data->pvt.hdg);
-		if (err) {
-			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-			goto exit;
-		}
-
-		json_add_obj(gps_obj, DATA_VALUE, gps_val_obj);
-		break;
-	case CLOUD_CODEC_GPS_FORMAT_NMEA:
-		cJSON_Delete(gps_val_obj);
-		err = json_add_str(gps_obj, DATA_VALUE, data->nmea);
-		if (err) {
-			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-			goto exit;
-		}
-		break;
-	case CLOUD_CODEC_GPS_FORMAT_INVALID:
-		/* Fall through */
-	default:
-		err = -EINVAL;
-		LOG_WRN("GPS data format not set");
+	err = json_add_number(gnss_val_obj, DATA_GNSS_LONGITUDE, data->pvt.longi);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
 		goto exit;
 	}
 
-	err = json_add_number(gps_obj, DATA_TIMESTAMP, data->gps_ts);
+	err = json_add_number(gnss_val_obj, DATA_GNSS_LATITUDE, data->pvt.lat);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-		cJSON_Delete(gps_obj);
+		goto exit;
+	}
+
+	err = json_add_number(gnss_val_obj, DATA_GNSS_ACCURACY, data->pvt.acc);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
+	}
+
+	err = json_add_number(gnss_val_obj, DATA_GNSS_ALTITUDE, data->pvt.alt);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
+	}
+
+	err = json_add_number(gnss_val_obj, DATA_GNSS_SPEED, data->pvt.spd);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
+	}
+
+	err = json_add_number(gnss_val_obj, DATA_GNSS_HEADING, data->pvt.hdg);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
+	}
+
+	json_add_obj(gnss_obj, DATA_VALUE, gnss_val_obj);
+
+	err = json_add_number(gnss_obj, DATA_TIMESTAMP, data->gnss_ts);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		cJSON_Delete(gnss_obj);
 		return err;
 	}
 
-	err = op_code_handle(parent, op, object_label, gps_obj, parent_ref);
+	err = op_code_handle(parent, op, object_label, gnss_obj, parent_ref);
 	if (err) {
-		cJSON_Delete(gps_obj);
+		cJSON_Delete(gnss_obj);
 		return err;
 	}
 
@@ -435,77 +406,8 @@ int json_common_gps_data_add(cJSON *parent,
 	return 0;
 
 exit:
-	cJSON_Delete(gps_obj);
-	cJSON_Delete(gps_val_obj);
-	return err;
-}
-
-int json_common_accel_data_add(cJSON *parent,
-			       struct cloud_data_accelerometer *data,
-			       enum json_common_op_code op,
-			       const char *object_label,
-			       cJSON **parent_ref)
-{
-	int err;
-
-	if (!data->queued) {
-		return -ENODATA;
-	}
-
-	err = date_time_uptime_to_unix_time_ms(&data->ts);
-	if (err) {
-		LOG_ERR("date_time_uptime_to_unix_time_ms, error: %d", err);
-		return err;
-	}
-
-	cJSON *accel_obj = cJSON_CreateObject();
-	cJSON *accel_val_obj = cJSON_CreateObject();
-
-	if (accel_obj == NULL || accel_val_obj == NULL) {
-		err = -ENOMEM;
-		goto exit;
-	}
-
-	err = json_add_number(accel_val_obj, DATA_MOVEMENT_X, data->values[0]);
-	if (err) {
-		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-		goto exit;
-	}
-
-	err = json_add_number(accel_val_obj, DATA_MOVEMENT_Y, data->values[1]);
-	if (err) {
-		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-		goto exit;
-	}
-
-	err = json_add_number(accel_val_obj, DATA_MOVEMENT_Z, data->values[2]);
-	if (err) {
-		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-		goto exit;
-	}
-
-	json_add_obj(accel_obj, DATA_VALUE, accel_val_obj);
-
-	err = json_add_number(accel_obj, DATA_TIMESTAMP, data->ts);
-	if (err) {
-		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
-		cJSON_Delete(accel_obj);
-		return err;
-	}
-
-	err = op_code_handle(parent, op, object_label, accel_obj, parent_ref);
-	if (err) {
-		cJSON_Delete(accel_obj);
-		return err;
-	}
-
-	data->queued = false;
-
-	return 0;
-
-exit:
-	cJSON_Delete(accel_obj);
-	cJSON_Delete(accel_val_obj);
+	cJSON_Delete(gnss_obj);
+	cJSON_Delete(gnss_val_obj);
 	return err;
 }
 
@@ -560,9 +462,11 @@ exit:
 	return err;
 }
 
-int json_common_neighbor_cells_data_add(cJSON *parent,
-					struct cloud_data_neighbor_cells *data,
-					enum json_common_op_code op)
+int json_common_impact_data_add(cJSON *parent,
+				struct cloud_data_impact *data,
+				enum json_common_op_code op,
+				const char *object_label,
+				cJSON **parent_ref)
 {
 	int err;
 
@@ -576,61 +480,128 @@ int json_common_neighbor_cells_data_add(cJSON *parent,
 		return err;
 	}
 
-	err = json_add_number(parent, DATA_NEIGHBOR_CELLS_MCC, data->cell_data.current_cell.mcc);
+	cJSON *impact_obj = cJSON_CreateObject();
+
+	if (impact_obj == NULL) {
+		err = -ENOMEM;
+		goto exit;
+	}
+
+	err = json_add_number(impact_obj, DATA_VALUE, data->magnitude);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
+	}
+
+	err = json_add_number(impact_obj, DATA_TIMESTAMP, data->ts);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
+	}
+
+	err = op_code_handle(parent, op, object_label, impact_obj, parent_ref);
+	if (err) {
+		goto exit;
+	}
+
+	data->queued = false;
+
+	return 0;
+
+exit:
+	cJSON_Delete(impact_obj);
+	return err;
+}
+
+int json_common_neighbor_cells_data_add(cJSON *parent,
+					struct cloud_data_neighbor_cells *data,
+					enum json_common_op_code op)
+{
+	int err;
+
+	if (!data->queued) {
+		return -ENODATA;
+	}
+
+	cJSON *root = cJSON_CreateObject();
+
+	if (root == NULL) {
+		err = -ENOMEM;
 		return err;
 	}
 
-	err = json_add_number(parent, DATA_NEIGHBOR_CELLS_MNC, data->cell_data.current_cell.mnc);
+
+	err = date_time_uptime_to_unix_time_ms(&data->ts);
 	if (err) {
-		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		LOG_ERR("date_time_uptime_to_unix_time_ms, error: %d", err);
+		cJSON_Delete(root);
 		return err;
 	}
 
-	err = json_add_number(parent, DATA_NEIGHBOR_CELLS_CID, data->cell_data.current_cell.id);
+	err = json_add_number(root, DATA_NEIGHBOR_CELLS_MCC, data->cell_data.current_cell.mcc);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		cJSON_Delete(root);
 		return err;
 	}
 
-	err = json_add_number(parent, DATA_NEIGHBOR_CELLS_TAC, data->cell_data.current_cell.tac);
+	err = json_add_number(root, DATA_NEIGHBOR_CELLS_MNC, data->cell_data.current_cell.mnc);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		cJSON_Delete(root);
 		return err;
 	}
 
-	err = json_add_number(parent, DATA_NEIGHBOR_CELLS_EARFCN,
+	err = json_add_number(root, DATA_NEIGHBOR_CELLS_CID, data->cell_data.current_cell.id);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		cJSON_Delete(root);
+		return err;
+	}
+
+	err = json_add_number(root, DATA_NEIGHBOR_CELLS_TAC, data->cell_data.current_cell.tac);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		cJSON_Delete(root);
+		return err;
+	}
+
+	err = json_add_number(root, DATA_NEIGHBOR_CELLS_EARFCN,
 			      data->cell_data.current_cell.earfcn);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		cJSON_Delete(root);
 		return err;
 	}
 
-	err = json_add_number(parent, DATA_NEIGHBOR_CELLS_TIMING,
+	err = json_add_number(root, DATA_NEIGHBOR_CELLS_TIMING,
 			      data->cell_data.current_cell.timing_advance);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		cJSON_Delete(root);
 		return err;
 	}
 
-	err = json_add_number(parent, DATA_NEIGHBOR_CELLS_RSRP,
+	err = json_add_number(root, DATA_NEIGHBOR_CELLS_RSRP,
 			      data->cell_data.current_cell.rsrp);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		cJSON_Delete(root);
 		return err;
 	}
 
-	err = json_add_number(parent, DATA_NEIGHBOR_CELLS_RSRQ,
+	err = json_add_number(root, DATA_NEIGHBOR_CELLS_RSRQ,
 			      data->cell_data.current_cell.rsrq);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		cJSON_Delete(root);
 		return err;
 	}
 
-	err = json_add_number(parent, DATA_TIMESTAMP, data->ts);
+	err = json_add_number(root, DATA_TIMESTAMP, data->ts);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		cJSON_Delete(root);
 		return err;
 	}
 
@@ -638,6 +609,8 @@ int json_common_neighbor_cells_data_add(cJSON *parent,
 		cJSON *neighbor_cells = cJSON_CreateArray();
 
 		if (neighbor_cells == NULL) {
+			err = -ENOMEM;
+			cJSON_Delete(root);
 			return err;
 		}
 
@@ -647,6 +620,7 @@ int json_common_neighbor_cells_data_add(cJSON *parent,
 
 			if (cell == NULL) {
 				err = -ENOMEM;
+				cJSON_Delete(root);
 				cJSON_Delete(neighbor_cells);
 				return err;
 			}
@@ -656,6 +630,7 @@ int json_common_neighbor_cells_data_add(cJSON *parent,
 			if (err) {
 				LOG_ERR("Encoding error: %d returned at %s:%d", err,
 					__FILE__, __LINE__);
+				cJSON_Delete(root);
 				cJSON_Delete(neighbor_cells);
 				cJSON_Delete(cell);
 				return err;
@@ -666,6 +641,7 @@ int json_common_neighbor_cells_data_add(cJSON *parent,
 			if (err) {
 				LOG_ERR("Encoding error: %d returned at %s:%d", err,
 					__FILE__, __LINE__);
+				cJSON_Delete(root);
 				cJSON_Delete(neighbor_cells);
 				cJSON_Delete(cell);
 				return err;
@@ -676,6 +652,7 @@ int json_common_neighbor_cells_data_add(cJSON *parent,
 			if (err) {
 				LOG_ERR("Encoding error: %d returned at %s:%d", err,
 					__FILE__, __LINE__);
+				cJSON_Delete(root);
 				cJSON_Delete(neighbor_cells);
 				cJSON_Delete(cell);
 				return err;
@@ -686,6 +663,7 @@ int json_common_neighbor_cells_data_add(cJSON *parent,
 			if (err) {
 				LOG_ERR("Encoding error: %d returned at %s:%d", err,
 					__FILE__, __LINE__);
+				cJSON_Delete(root);
 				cJSON_Delete(neighbor_cells);
 				cJSON_Delete(cell);
 				return err;
@@ -694,23 +672,113 @@ int json_common_neighbor_cells_data_add(cJSON *parent,
 			err = op_code_handle(neighbor_cells, JSON_COMMON_ADD_DATA_TO_ARRAY, NULL,
 					     cell, NULL);
 			if (err) {
+				cJSON_Delete(root);
 				cJSON_Delete(neighbor_cells);
 				cJSON_Delete(cell);
 				return err;
 			}
 		}
 
-		err = op_code_handle(parent, JSON_COMMON_ADD_DATA_TO_OBJECT,
+		err = op_code_handle(root, JSON_COMMON_ADD_DATA_TO_OBJECT,
 				     DATA_NEIGHBOR_CELLS_NEIGHBOR_MEAS, neighbor_cells, NULL);
 		if (err) {
+			cJSON_Delete(root);
 			cJSON_Delete(neighbor_cells);
 			return err;
 		}
 	}
+	json_add_obj(parent, DATA_NEIGHBOR_CELLS_ROOT, root);
 
 	data->queued = false;
 	return err;
 }
+
+#if defined(CONFIG_LOCATION_METHOD_WIFI)
+int json_common_wifi_ap_data_add(cJSON *parent,
+				 struct cloud_data_wifi_access_points *data,
+				 enum json_common_op_code op)
+{
+	int err;
+
+	if (!data->queued) {
+		return -ENODATA;
+	}
+
+	cJSON *root = cJSON_CreateObject();
+
+	if (root == NULL) {
+		err = -ENOMEM;
+		return err;
+	}
+
+
+	err = date_time_uptime_to_unix_time_ms(&data->ts);
+	if (err) {
+		LOG_ERR("date_time_uptime_to_unix_time_ms, error: %d", err);
+		cJSON_Delete(root);
+		return err;
+	}
+
+	err = json_add_number(root, DATA_TIMESTAMP, data->ts);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		cJSON_Delete(root);
+		return err;
+	}
+
+	if (data->cnt < NRF_CLOUD_LOCATION_WIFI_AP_CNT_MIN) {
+		cJSON_Delete(root);
+		return -ENODATA;
+	}
+
+	cJSON *ap_array = cJSON_CreateArray();
+
+	if (ap_array == NULL) {
+		cJSON_Delete(root);
+		return err;
+	}
+
+	for (size_t i = 0; i < data->cnt; ++i) {
+		char str_buf[AP_STRING_SIZE];
+		struct wifi_scan_result const *const ap = (data->ap_info + i);
+
+		/* MAC address is the only required parameter for the API call */
+		int ret = snprintk(str_buf, sizeof(str_buf),
+				   "%02x%02x%02x%02x%02x%02x",
+				   ap->mac[0], ap->mac[1], ap->mac[2],
+				   ap->mac[3], ap->mac[4], ap->mac[5]);
+
+		if (ret < 0) {
+			err = -EFAULT;
+			goto cleanup;
+		}
+
+		cJSON *ap_obj = cJSON_CreateString(str_buf);
+
+		if (!cJSON_AddItemToArray(ap_array, ap_obj)) {
+			cJSON_Delete(ap_obj);
+			err = -ENOMEM;
+			goto cleanup;
+		}
+	}
+
+	err = op_code_handle(root, JSON_COMMON_ADD_DATA_TO_OBJECT,
+			     DATA_WIFI_AP_MEAS, ap_array, NULL);
+	if (err) {
+		goto cleanup;
+	}
+
+	json_add_obj(parent, DATA_WIFI_ROOT, root);
+	data->queued = false;
+	return err;
+
+cleanup:
+	cJSON_Delete(ap_array);
+	cJSON_Delete(root);
+	LOG_ERR("Failed to format WiFi location request, out of memory");
+	return err;
+}
+#endif /* CONFIG_LOCATION_METHOD_WIFI */
 
 int json_common_agps_request_data_add(cJSON *parent,
 				      struct cloud_data_agps_request *data,
@@ -782,6 +850,15 @@ int json_common_agps_request_data_add(cJSON *parent,
 	if (data->request.data_flags & NRF_MODEM_GNSS_AGPS_KLOBUCHAR_REQUEST) {
 		err = json_add_number_to_array(agps_types,
 					       DATA_AGPS_REQUEST_TYPE_KLOBUCHAR_CORRECTION);
+		if (err) {
+			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+			goto exit;
+		}
+	}
+
+	if (data->request.data_flags & NRF_MODEM_GNSS_AGPS_NEQUICK_REQUEST) {
+		err = json_add_number_to_array(agps_types,
+					       DATA_AGPS_REQUEST_TYPE_NEQUICK_CORRECTION);
 		if (err) {
 			LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
 			goto exit;
@@ -951,7 +1028,7 @@ int json_common_config_add(cJSON *parent, struct cloud_data_cfg *data, const cha
 		goto exit;
 	}
 
-	err = json_add_number(config_obj, CONFIG_GPS_TIMEOUT, data->gps_timeout);
+	err = json_add_number(config_obj, CONFIG_LOCATION_TIMEOUT, data->location_timeout);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
 		goto exit;
@@ -975,7 +1052,22 @@ int json_common_config_add(cJSON *parent, struct cloud_data_cfg *data, const cha
 		goto exit;
 	}
 
-	err = json_add_number(config_obj, CONFIG_ACC_THRESHOLD, data->accelerometer_threshold);
+	err = json_add_number(config_obj, CONFIG_ACC_ACT_THRESHOLD,
+			      data->accelerometer_activity_threshold);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
+	}
+
+	err = json_add_number(config_obj, CONFIG_ACC_INACT_THRESHOLD,
+			      data->accelerometer_inactivity_threshold);
+	if (err) {
+		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
+		goto exit;
+	}
+
+	err = json_add_number(config_obj, CONFIG_ACC_INACT_TIMEOUT,
+			      data->accelerometer_inactivity_timeout);
 	if (err) {
 		LOG_ERR("Encoding error: %d returned at %s:%d", err, __FILE__, __LINE__);
 		goto exit;
@@ -1015,6 +1107,18 @@ int json_common_config_add(cJSON *parent, struct cloud_data_cfg *data, const cha
 		json_add_obj_array(nod_list, ncell_str);
 	}
 
+	if (data->no_data.wifi) {
+		cJSON *wifi_str = cJSON_CreateString(CONFIG_NO_DATA_LIST_WIFI);
+
+		if (wifi_str == NULL) {
+			cJSON_Delete(nod_list);
+			err = -ENOMEM;
+			goto exit;
+		}
+
+		json_add_obj_array(nod_list, wifi_str);
+	}
+
 	/* If there are no flag set in the no_data structure, an empty array is encoded. */
 	json_add_obj(config_obj, CONFIG_NO_DATA_LIST, nod_list);
 	json_add_obj(parent, object_label, config_obj);
@@ -1028,16 +1132,18 @@ exit:
 
 void json_common_config_get(cJSON *parent, struct cloud_data_cfg *data)
 {
-	cJSON *gps_timeout = cJSON_GetObjectItem(parent, CONFIG_GPS_TIMEOUT);
+	cJSON *location_timeout = cJSON_GetObjectItem(parent, CONFIG_LOCATION_TIMEOUT);
 	cJSON *active = cJSON_GetObjectItem(parent, CONFIG_DEVICE_MODE);
 	cJSON *active_wait = cJSON_GetObjectItem(parent, CONFIG_ACTIVE_TIMEOUT);
 	cJSON *move_res = cJSON_GetObjectItem(parent, CONFIG_MOVE_RES);
 	cJSON *move_timeout = cJSON_GetObjectItem(parent, CONFIG_MOVE_TIMEOUT);
-	cJSON *acc_thres = cJSON_GetObjectItem(parent, CONFIG_ACC_THRESHOLD);
+	cJSON *acc_act_thres = cJSON_GetObjectItem(parent, CONFIG_ACC_ACT_THRESHOLD);
+	cJSON *acc_inact_thres = cJSON_GetObjectItem(parent, CONFIG_ACC_INACT_THRESHOLD);
+	cJSON *acc_inact_time = cJSON_GetObjectItem(parent, CONFIG_ACC_INACT_TIMEOUT);
 	cJSON *nod_list = cJSON_GetObjectItem(parent, CONFIG_NO_DATA_LIST);
 
-	if (gps_timeout != NULL) {
-		data->gps_timeout = gps_timeout->valueint;
+	if (location_timeout != NULL) {
+		data->location_timeout = location_timeout->valueint;
 	}
 
 	if (active != NULL) {
@@ -1056,14 +1162,23 @@ void json_common_config_get(cJSON *parent, struct cloud_data_cfg *data)
 		data->movement_timeout = move_timeout->valueint;
 	}
 
-	if (acc_thres != NULL) {
-		data->accelerometer_threshold = acc_thres->valuedouble;
+	if (acc_act_thres != NULL) {
+		data->accelerometer_activity_threshold = acc_act_thres->valuedouble;
+	}
+
+	if (acc_inact_thres != NULL) {
+		data->accelerometer_inactivity_threshold = acc_inact_thres->valuedouble;
+	}
+
+	if (acc_inact_time != NULL) {
+		data->accelerometer_inactivity_timeout = acc_inact_time->valuedouble;
 	}
 
 	if (nod_list != NULL && cJSON_IsArray(nod_list)) {
 		cJSON *item;
 		bool gnss_found = false;
 		bool ncell_found = false;
+		bool wifi_found = false;
 
 		for (int i = 0; i < cJSON_GetArraySize(nod_list); i++) {
 			item = cJSON_GetArrayItem(nod_list, i);
@@ -1075,6 +1190,10 @@ void json_common_config_get(cJSON *parent, struct cloud_data_cfg *data)
 			if (strcmp(item->valuestring, CONFIG_NO_DATA_LIST_NEIGHBOR_CELL) == 0) {
 				ncell_found = true;
 			}
+
+			if (strcmp(item->valuestring, CONFIG_NO_DATA_LIST_WIFI) == 0) {
+				wifi_found = true;
+			}
 		}
 
 		/* If a supported entry is present in the no data list we set the corresponding flag
@@ -1082,6 +1201,7 @@ void json_common_config_get(cJSON *parent, struct cloud_data_cfg *data)
 		 */
 		data->no_data.gnss = gnss_found;
 		data->no_data.neighbor_cell = ncell_found;
+		data->no_data.wifi = wifi_found;
 	}
 }
 
@@ -1114,6 +1234,16 @@ int json_common_batch_data_add(cJSON *parent, enum json_common_buffer_type type,
 						      NULL);
 		}
 			break;
+		case JSON_COMMON_IMPACT: {
+			struct cloud_data_impact *data =
+					(struct cloud_data_impact *)buf;
+			err = json_common_impact_data_add(array_obj,
+						      &data[i],
+						      JSON_COMMON_ADD_DATA_TO_ARRAY,
+						      NULL,
+						      NULL);
+		}
+			break;
 		case JSON_COMMON_MODEM_STATIC: {
 			struct cloud_data_modem_static *data =
 					(struct cloud_data_modem_static *)buf;
@@ -1134,10 +1264,10 @@ int json_common_batch_data_add(cJSON *parent, enum json_common_buffer_type type,
 								 NULL);
 		}
 			break;
-		case JSON_COMMON_GPS: {
-			struct cloud_data_gps *data =
-					(struct cloud_data_gps *)buf;
-			err = json_common_gps_data_add(array_obj,
+		case JSON_COMMON_GNSS: {
+			struct cloud_data_gnss *data =
+					(struct cloud_data_gnss *)buf;
+			err = json_common_gnss_data_add(array_obj,
 						       &data[i],
 						       JSON_COMMON_ADD_DATA_TO_ARRAY,
 						       NULL,
@@ -1152,16 +1282,6 @@ int json_common_batch_data_add(cJSON *parent, enum json_common_buffer_type type,
 							  JSON_COMMON_ADD_DATA_TO_ARRAY,
 							  NULL,
 							  NULL);
-		}
-			break;
-		case JSON_COMMON_ACCELEROMETER: {
-			struct cloud_data_accelerometer *data =
-					(struct cloud_data_accelerometer *)buf;
-			err = json_common_accel_data_add(array_obj,
-							 &data[i],
-							 JSON_COMMON_ADD_DATA_TO_ARRAY,
-							 NULL,
-							 NULL);
 		}
 			break;
 		case JSON_COMMON_BATTERY: {

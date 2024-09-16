@@ -13,7 +13,7 @@
 #ifndef BT_MESH_GEN_PONOFF_SRV_H__
 #define BT_MESH_GEN_PONOFF_SRV_H__
 
-#include <bluetooth/mesh.h>
+#include <zephyr/bluetooth/mesh.h>
 
 #include <bluetooth/mesh/gen_ponoff.h>
 #include <bluetooth/mesh/gen_onoff_srv.h>
@@ -104,10 +104,6 @@ struct bt_mesh_ponoff_srv {
 			     enum bt_mesh_on_power_up old_on_power_up,
 			     enum bt_mesh_on_power_up new_on_power_up);
 
-#if CONFIG_BT_SETTINGS
-	/** Storage timer */
-	struct k_work_delayable store_timer;
-#endif
 	/** Current OnPowerUp state. */
 	enum bt_mesh_on_power_up on_power_up;
 };

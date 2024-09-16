@@ -18,7 +18,6 @@ target_sources(app PRIVATE
   ${app_sources}
   ${NRF_DIR}/subsys/bluetooth/mesh/sensor_types.c
   ${NRF_DIR}/subsys/bluetooth/mesh/sensor.c
-  ${ZEPHYR_BASE}/subsys/net/buf.c
   ${ZEPHYR_BASE}/subsys/bluetooth/mesh/msg.c
   )
 
@@ -31,6 +30,7 @@ target_compile_options(app
   -DCONFIG_BT_MESH_SENSOR_CHANNELS_MAX=5
   -DCONFIG_BT_MESH_SENSOR_CHANNEL_ENCODED_SIZE_MAX=4
   -DCONFIG_BT_LOG_LEVEL=0
+  -DCONFIG_BT_MESH_USES_TINYCRYPT
   )
 
 zephyr_linker_sources(SECTIONS sensor_types.ld)

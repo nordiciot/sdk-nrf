@@ -11,7 +11,7 @@ Words enclosed in <angle brackets> are references to syntactical elements.
 Words enclosed in [square brackets] represent optional items that can be left out of the command line at the specified point.
 The brackets are not used when the words appear in the command line.
 
-<CR>, <LF>, and terminating NUL are allowed in an AT command sent by an application, but are not mandatory when using an interface where both the command string and the length of command string are provided.
+``<CR>``, ``<LF>`` and ``<CR><LF>`` are allowed in an AT command sent by an application.
 
 A string type parameter input must be enclosed between quotation marks (``"string"``).
 
@@ -46,3 +46,5 @@ The modem-specific AT commands are documented in the `nRF91 AT Commands Referenc
    HTTPC_AT_commands
    TWI_AT_commands
    GPIO_AT_commands
+   CARRIER_AT_commands
+   NRFCLOUD_AT_commands

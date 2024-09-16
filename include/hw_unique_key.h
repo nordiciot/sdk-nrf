@@ -22,39 +22,48 @@ extern "C" {
 
 #include <stdbool.h>
 
-#ifdef __ZEPHYR__
+#if defined(__NRF_TFM__)
 #include <autoconf.h>
-#ifdef CONFIG_HAS_HW_NRF_KMU
-	#define HUK_HAS_KMU
 #endif
-#ifdef CONFIG_HAS_HW_NRF_CC310
-	#define HUK_HAS_CC310
-#endif
-#ifdef CONFIG_HAS_HW_NRF_CC312
-	#define HUK_HAS_CC312
-#endif
+#include <zephyr/devicetree.h>
 
-#else /* __ZEPHYR__ */
+#if DT_HAS_COMPAT_STATUS_OKAY(nordic_nrf_kmu)
 #define HUK_HAS_KMU
-#ifdef NRF9160_XXAA
-	#define HUK_HAS_CC310
 #endif
-#ifdef NRF5340_XXAA_APPLICATION
-	#define HUK_HAS_CC312
+#if defined(CONFIG_HAS_HW_NRF_CC310)
+#define HUK_HAS_CC310
 #endif
-#endif /* __ZEPHYR__ */
+#if defined(CONFIG_HAS_HW_NRF_CC312)
+#define HUK_HAS_CC312
+#endif
 
-#ifdef HUK_HAS_CC310
+#if defined(HUK_HAS_CC310)
 #define HUK_SIZE_WORDS 4
 #elif defined(HUK_HAS_CC312)
 #define HUK_SIZE_WORDS 8
 #else
-#error This library requires CryptoCell to be available.
+#error "This library requires CryptoCell to be available."
 #endif
 
 #define HUK_SIZE_BYTES (HUK_SIZE_WORDS * 4)
-#define ERR_HUK_MISSING 0x15500
 
+/** @brief Error value when the hardware unique key is missing */
+#define HW_UNIQUE_KEY_ERR_MISSING               (0x16501)
+
+/** @brief Error value when writing the hardware unique key failed */
+#define HW_UNIQUE_KEY_ERR_WRITE_FAILED          (0x16502)
+
+/** @brief Error value when the generation of the hardware unique key failed */
+#define HW_UNIQUE_KEY_ERR_GENERATION_FAILED     (0x16503)
+
+/** @brief Error value when key derivation using the hardware unique key failed */
+#define HW_UNIQUE_KEY_ERR_DERIVE_FAILED         (0x16504)
+
+/** @brief Error value when the hardware unique key had a generic failure */
+#define HW_UNIQUE_KEY_ERR_GENERIC_ERROR         (0x16505)
+
+/** @brief Return code for success */
+#define HW_UNIQUE_KEY_SUCCESS                   (0x0)
 
 /* The available slots. KDR is always available, while the MKEK and MEXT
  * keys are only stored when there is a KMU, since without a key, the key
@@ -77,31 +86,31 @@ enum hw_unique_key_slot {
  *
  * @details This can only be done once (until a mass erase happens).
  *          This function waits for the flash operation to finish before returning.
- *          Panic on failure.
  *
- * @param[in] kmu_slot  The keyslot to write to, see HUK_KEYSLOT_*.
+ * @param[in] key_slot  The keyslot to write to, see HUK_KEYSLOT_*.
  * @param[in] key       The key to write. Must be @ref HUK_SIZE_BYTES bytes long.
+ *
+ * @return HW_UNIQUE_KEY_SUCCESS on success, otherwise a negative hardware unique key error code
  */
-void hw_unique_key_write(enum hw_unique_key_slot kmu_slot, const uint8_t *key);
+int hw_unique_key_write(enum hw_unique_key_slot key_slot, const uint8_t *key);
 
-#ifdef CONFIG_HW_UNIQUE_KEY_RANDOM
 /**
- * @brief Read random numbers from @ref nrf_cc3xx_platform_ctr_drbg_get
+ * @brief Read random numbers from nrf_cc3xx_platform_ctr_drbg_get
  *        and write them to all slots with @ref hw_unique_key_write.
- *        Panic on failure.
+ *
+ * @return HW_UNIQUE_KEY_SUCCESS on success, otherwise a negative hardware unique key error code
  */
-void hw_unique_key_write_random(void);
-#endif /* CONFIG_HW_UNIQUE_KEY_RANDOM */
+int hw_unique_key_write_random(void);
 
 /**
  * @brief Check whether a Hardware Unique Key has been written to the KMU.
  *
- * @param[in] kmu_slot  The keyslot to check, see HUK_KEYSLOT_*.
+ * @param[in] key_slot  The keyslot to check, see HUK_KEYSLOT_*.
  *
  * @retval true   if a HUK has been written to the specified keyslot,
  * @retval false  otherwise.
  */
-bool hw_unique_key_is_written(enum hw_unique_key_slot kmu_slot);
+bool hw_unique_key_is_written(enum hw_unique_key_slot key_slot);
 
 /**
  * @brief Check whether any Hardware Unique Keys are written to the KMU.
@@ -111,24 +120,23 @@ bool hw_unique_key_is_written(enum hw_unique_key_slot kmu_slot);
  */
 bool hw_unique_key_are_any_written(void);
 
-#ifdef CONFIG_HAS_HW_NRF_ACL
 /**
  * @brief Load the Hardware Unique Key (HUK) into the KDR registers of the
  *        Cryptocell.
  *
  * @details It also locks the flash page which contains the key material from
  *          reading and writing until the next reboot.
- *          Panic on failure.
+ *
+ * @return HW_UNIQUE_KEY_SUCCESS on success, otherwise a negative hardware unique key error code
  */
-void hw_unique_key_load_kdr(void);
-#endif /* CONFIG_HAS_HW_NRF_ACL */
+int hw_unique_key_load_kdr(void);
 
 /**
  * @brief Derive a key from the specified HUK, using the nrf_cc3xx_platform API
  *
  * See nrf_cc3xx_platform_kmu_shadow_key_derive() for more info.
  *
- * @param[in]  kmu_slot      Keyslot to derive from.
+ * @param[in]  key_slot      Keyslot to derive from.
  * @param[in]  context       Context for key derivation.
  * @param[in]  context_size  Size of context.
  * @param[in]  label         Label for key derivation.
@@ -136,11 +144,9 @@ void hw_unique_key_load_kdr(void);
  * @param[out] output        The derived key.
  * @param[in]  output_size   Size of output.
  *
- * @retval 0  on success
- * @retval -ERR_HUK_MISSING  if the slot has not been written.
- * @return otherwise, an error from nrf_cc3xx_platform_kmu_shadow_key_derive()
+ * @return HW_UNIQUE_KEY_SUCCESS on success, otherwise a negative hardware unique key error code
  */
-int hw_unique_key_derive_key(enum hw_unique_key_slot kmu_slot,
+int hw_unique_key_derive_key(enum hw_unique_key_slot key_slot,
 	const uint8_t *context, size_t context_size,
 	uint8_t const *label, size_t label_size,
 	uint8_t *output, uint32_t output_size);

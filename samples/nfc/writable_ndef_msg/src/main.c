@@ -13,8 +13,8 @@
  *
  */
 
-#include <zephyr.h>
-#include <sys/reboot.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/reboot.h>
 #include <stdbool.h>
 #include <nfc_t4t_lib.h>
 
@@ -62,7 +62,7 @@ static void flash_buffer_prepare(size_t data_length)
  * @brief Callback function for handling NFC events.
  */
 static void nfc_callback(void *context,
-			 enum nfc_t4t_event event,
+			 nfc_t4t_event_t event,
 			 const uint8_t *data,
 			 size_t data_length,
 			 uint32_t flags)
@@ -181,7 +181,7 @@ int main(void)
 			atomic_set(&op_flags, FLASH_WRITE_FINISHED);
 		}
 
-		__WFE();
+		k_cpu_atomic_idle(irq_lock());
 	}
 
 fail:

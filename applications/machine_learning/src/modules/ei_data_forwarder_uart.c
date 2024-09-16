@@ -4,24 +4,26 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
-#include <drivers/uart.h>
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/uart.h>
 
 #include "ei_data_forwarder.h"
 #include "ei_data_forwarder_event.h"
 
 #include <caf/events/sensor_event.h>
-#include "ml_state_event.h"
+#include "ml_app_mode_event.h"
 
 #define MODULE ei_data_forwarder
 #include <caf/events/module_state_event.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_ML_APP_EI_DATA_FORWARDER_LOG_LEVEL);
 
-#define UART_LABEL		CONFIG_ML_APP_EI_DATA_FORWARDER_UART_DEV
+#define EI_DATA_FORWARDER_UART_NODE DT_CHOSEN(ncs_ml_app_ei_data_forwarder_uart)
+#define EI_DATA_FORWARDER_UART_DEV DEVICE_DT_GET(EI_DATA_FORWARDER_UART_NODE)
+
 #define UART_BUF_SIZE		CONFIG_ML_APP_EI_DATA_FORWARDER_BUF_SIZE
-#define ML_STATE_CONTROL	IS_ENABLED(CONFIG_ML_APP_ML_STATE_EVENTS)
+#define ML_APP_MODE_CONTROL	IS_ENABLED(CONFIG_ML_APP_MODE_EVENTS)
 
 enum state {
 	STATE_DISABLED,
@@ -46,7 +48,7 @@ static void broadcast_ei_data_forwarder_state(enum ei_data_forwarder_state forwa
 	struct ei_data_forwarder_event *event = new_ei_data_forwarder_event();
 
 	event->state = forwarder_state;
-	EVENT_SUBMIT(event);
+	APP_EVENT_SUBMIT(event);
 }
 
 static void update_state(enum state new_state)
@@ -113,7 +115,7 @@ static bool handle_sensor_event(const struct sensor_event *event)
 					       sizeof(buf));
 
 	if (pos < 0) {
-		atomic_cas(&uart_busy, true, false);
+		(void)atomic_set(&uart_busy, false);
 		LOG_ERR("EI data forwader parsing error: %d", pos);
 		report_error();
 		return false;
@@ -122,7 +124,7 @@ static bool handle_sensor_event(const struct sensor_event *event)
 	int err = uart_tx(dev, buf, pos, SYS_FOREVER_MS);
 
 	if (err) {
-		atomic_cas(&uart_busy, true, false);
+		(void)atomic_set(&uart_busy, false);
 		LOG_ERR("uart_tx error: %d", err);
 		report_error();
 	}
@@ -130,7 +132,7 @@ static bool handle_sensor_event(const struct sensor_event *event)
 	return false;
 }
 
-static bool handle_ml_state_event(const struct ml_state_event *event)
+static bool handle_ml_app_mode_event(const struct ml_app_mode_event *event)
 {
 	__ASSERT_NO_MSG(state != STATE_DISABLED);
 
@@ -138,7 +140,7 @@ static bool handle_ml_state_event(const struct ml_state_event *event)
 		return false;
 	}
 
-	if (event->state == ML_STATE_DATA_FORWARDING) {
+	if (event->mode == ML_APP_MODE_DATA_FORWARDING) {
 		update_state(STATE_ACTIVE);
 	} else {
 		update_state(STATE_SUSPENDED);
@@ -150,15 +152,15 @@ static bool handle_ml_state_event(const struct ml_state_event *event)
 static void uart_cb(const struct device *dev, struct uart_event *evt, void *user_data)
 {
 	if (evt->type == UART_TX_DONE) {
-		atomic_cas(&uart_busy, true, false);
+		(void)atomic_set(&uart_busy, false);
 	}
 }
 
 static int init(void)
 {
-	dev = device_get_binding(UART_LABEL);
+	dev = EI_DATA_FORWARDER_UART_DEV;
 
-	if (!dev) {
+	if (!device_is_ready(dev)) {
 		LOG_ERR("UART device binding failed");
 		return -ENXIO;
 	}
@@ -180,7 +182,8 @@ static bool handle_module_state_event(const struct module_state_event *event)
 		int err = init();
 
 		if (!err) {
-			enum state init_state = ML_STATE_CONTROL ? STATE_SUSPENDED : STATE_ACTIVE;
+			enum state init_state = ML_APP_MODE_CONTROL ?
+						STATE_SUSPENDED : STATE_ACTIVE;
 
 			update_state(init_state);
 			module_set_state(MODULE_STATE_READY);
@@ -192,19 +195,19 @@ static bool handle_module_state_event(const struct module_state_event *event)
 	return false;
 }
 
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
-	if (is_sensor_event(eh)) {
-		return handle_sensor_event(cast_sensor_event(eh));
+	if (is_sensor_event(aeh)) {
+		return handle_sensor_event(cast_sensor_event(aeh));
 	}
 
-	if (ML_STATE_CONTROL &&
-	    is_ml_state_event(eh)) {
-		return handle_ml_state_event(cast_ml_state_event(eh));
+	if (ML_APP_MODE_CONTROL &&
+	    is_ml_app_mode_event(aeh)) {
+		return handle_ml_app_mode_event(cast_ml_app_mode_event(aeh));
 	}
 
-	if (is_module_state_event(eh)) {
-		return handle_module_state_event(cast_module_state_event(eh));
+	if (is_module_state_event(aeh)) {
+		return handle_module_state_event(cast_module_state_event(aeh));
 	}
 
 	/* If event is unhandled, unsubscribe. */
@@ -213,9 +216,9 @@ static bool event_handler(const struct event_header *eh)
 	return false;
 }
 
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
-EVENT_SUBSCRIBE(MODULE, sensor_event);
-#if ML_STATE_CONTROL
-EVENT_SUBSCRIBE(MODULE, ml_state_event);
-#endif /* ML_STATE_CONTROL */
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
+APP_EVENT_SUBSCRIBE(MODULE, sensor_event);
+#if ML_APP_MODE_CONTROL
+APP_EVENT_SUBSCRIBE(MODULE, ml_app_mode_event);
+#endif /* ML_APP_MODE_CONTROL */

@@ -4,11 +4,9 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 #include <bluetooth/mesh/gen_prop_cli.h>
-#include <sys/util.h>
+#include <zephyr/sys/util.h>
 #include "gen_prop_internal.h"
 #include "model_utils.h"
-#include "mesh/net.h"
-#include "mesh/transport.h"
 
 BUILD_ASSERT(BT_MESH_MODEL_BUF_LEN(BT_MESH_PROP_OP_MFR_PROP_STATUS,
 				   BT_MESH_PROP_MSG_MAXLEN_PROP_STATUS) <=
@@ -217,10 +215,15 @@ static int props_get(struct bt_mesh_prop_cli *cli, struct bt_mesh_msg_ctx *ctx,
 	struct prop_list_ctx block_ctx = {
 		.list = rsp,
 	};
-	int status = model_ackd_send(cli->model, ctx, &msg,
-				     rsp ? &cli->ack_ctx : NULL,
-				     op_get(BT_MESH_PROP_OP_PROPS_STATUS, kind),
-				     &block_ctx);
+	int status;
+	struct bt_mesh_msg_rsp_ctx rsp_ctx = {
+		.ack = &cli->ack_ctx,
+		.op = op_get(BT_MESH_PROP_OP_PROPS_STATUS, kind),
+		.user_data = &block_ctx,
+		.timeout = model_ackd_timeout_get(cli->model, ctx),
+	};
+
+	status = bt_mesh_msg_ackd_send(cli->model, ctx, &msg, rsp ? &rsp_ctx : NULL);
 
 	if (status == 0) {
 		status = block_ctx.status;
@@ -254,9 +257,14 @@ int bt_mesh_prop_cli_prop_get(struct bt_mesh_prop_cli *cli,
 	bt_mesh_model_msg_init(&msg, op_get(BT_MESH_PROP_OP_PROP_GET, kind));
 	net_buf_simple_add_le16(&msg, id);
 
-	return model_ackd_send(cli->model, ctx, &msg,
-			       rsp ? &cli->ack_ctx : NULL,
-			       op_get(BT_MESH_PROP_OP_PROP_STATUS, kind), rsp);
+	struct bt_mesh_msg_rsp_ctx rsp_ctx = {
+		.ack = &cli->ack_ctx,
+		.op = op_get(BT_MESH_PROP_OP_PROP_STATUS, kind),
+		.user_data = rsp,
+		.timeout = model_ackd_timeout_get(cli->model, ctx),
+	};
+
+	return bt_mesh_msg_ackd_send(cli->model, ctx, &msg, rsp ? &rsp_ctx : NULL);
 }
 
 int bt_mesh_prop_cli_user_prop_set(struct bt_mesh_prop_cli *cli,
@@ -271,11 +279,14 @@ int bt_mesh_prop_cli_user_prop_set(struct bt_mesh_prop_cli *cli,
 	net_buf_simple_add_le16(&msg, val->meta.id);
 	net_buf_simple_add_mem(&msg, val->value, val->size);
 
-	return model_ackd_send(cli->model, ctx, &msg,
-			       rsp ? &cli->ack_ctx : NULL,
-			       op_get(BT_MESH_PROP_OP_PROP_STATUS,
-				      BT_MESH_PROP_SRV_KIND_USER),
-			       rsp);
+	struct bt_mesh_msg_rsp_ctx rsp_ctx = {
+		.ack = &cli->ack_ctx,
+		.op = op_get(BT_MESH_PROP_OP_PROP_STATUS, BT_MESH_PROP_SRV_KIND_USER),
+		.user_data = rsp,
+		.timeout = model_ackd_timeout_get(cli->model, ctx),
+	};
+
+	return bt_mesh_msg_ackd_send(cli->model, ctx, &msg, rsp ? &rsp_ctx : NULL);
 }
 
 int bt_mesh_prop_cli_user_prop_set_unack(struct bt_mesh_prop_cli *cli,
@@ -289,7 +300,7 @@ int bt_mesh_prop_cli_user_prop_set_unack(struct bt_mesh_prop_cli *cli,
 	net_buf_simple_add_le16(&msg, val->meta.id);
 	net_buf_simple_add_mem(&msg, val->value, val->size);
 
-	return model_send(cli->model, ctx, &msg);
+	return bt_mesh_msg_send(cli->model, ctx, &msg);
 }
 
 int bt_mesh_prop_cli_admin_prop_set(struct bt_mesh_prop_cli *cli,
@@ -305,11 +316,14 @@ int bt_mesh_prop_cli_admin_prop_set(struct bt_mesh_prop_cli *cli,
 	net_buf_simple_add_u8(&msg, val->meta.user_access);
 	net_buf_simple_add_mem(&msg, val->value, val->size);
 
-	return model_ackd_send(cli->model, ctx, &msg,
-			       rsp ? &cli->ack_ctx : NULL,
-			       op_get(BT_MESH_PROP_OP_PROP_STATUS,
-				      BT_MESH_PROP_SRV_KIND_ADMIN),
-			       rsp);
+	struct bt_mesh_msg_rsp_ctx rsp_ctx = {
+		.ack = &cli->ack_ctx,
+		.op = op_get(BT_MESH_PROP_OP_PROP_STATUS, BT_MESH_PROP_SRV_KIND_ADMIN),
+		.user_data = rsp,
+		.timeout = model_ackd_timeout_get(cli->model, ctx),
+	};
+
+	return bt_mesh_msg_ackd_send(cli->model, ctx, &msg, rsp ? &rsp_ctx : NULL);
 }
 
 int bt_mesh_prop_cli_admin_prop_set_unack(struct bt_mesh_prop_cli *cli,
@@ -324,7 +338,7 @@ int bt_mesh_prop_cli_admin_prop_set_unack(struct bt_mesh_prop_cli *cli,
 	net_buf_simple_add_u8(&msg, val->meta.user_access);
 	net_buf_simple_add_mem(&msg, val->value, val->size);
 
-	return model_send(cli->model, ctx, &msg);
+	return bt_mesh_msg_send(cli->model, ctx, &msg);
 }
 
 int bt_mesh_prop_cli_mfr_prop_set(struct bt_mesh_prop_cli *cli,
@@ -339,11 +353,14 @@ int bt_mesh_prop_cli_mfr_prop_set(struct bt_mesh_prop_cli *cli,
 	net_buf_simple_add_le16(&msg, prop->id);
 	net_buf_simple_add_u8(&msg, prop->user_access);
 
-	return model_ackd_send(cli->model, ctx, &msg,
-			       rsp ? &cli->ack_ctx : NULL,
-			       op_get(BT_MESH_PROP_OP_PROP_STATUS,
-				      BT_MESH_PROP_SRV_KIND_MFR),
-			       rsp);
+	struct bt_mesh_msg_rsp_ctx rsp_ctx = {
+		.ack = &cli->ack_ctx,
+		.op = op_get(BT_MESH_PROP_OP_PROP_STATUS, BT_MESH_PROP_SRV_KIND_MFR),
+		.user_data = rsp,
+		.timeout = model_ackd_timeout_get(cli->model, ctx),
+	};
+
+	return bt_mesh_msg_ackd_send(cli->model, ctx, &msg, rsp ? &rsp_ctx : NULL);
 }
 
 int bt_mesh_prop_cli_mfr_prop_set_unack(struct bt_mesh_prop_cli *cli,
@@ -357,5 +374,5 @@ int bt_mesh_prop_cli_mfr_prop_set_unack(struct bt_mesh_prop_cli *cli,
 	net_buf_simple_add_le16(&msg, prop->id);
 	net_buf_simple_add_u8(&msg, prop->user_access);
 
-	return model_send(cli->model, ctx, &msg);
+	return bt_mesh_msg_send(cli->model, ctx, &msg);
 }

@@ -7,7 +7,7 @@ jobs:
     name: Check OSS history
     steps:
       - name: Checkout the code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           path: ncs/nrf
           fetch-depth: 0
@@ -21,10 +21,16 @@ jobs:
         run: |
           west init -l ncs/nrf
           cd ncs
-          west update zephyr mcuboot trusted-firmware-m
+          west update
           git -C zephyr remote add upstream https://github.com/zephyrproject-rtos/zephyr
+
+      - name: Check manifest userdata
+        working-directory: ncs/nrf
+        run: |
+          python3 scripts/ci/check_manifest_userdata.py
 
       - name: Check OSS history
         uses: nrfconnect/action-oss-history@main
         with:
           workspace: 'ncs'
+          args: -p zephyr -p mcuboot

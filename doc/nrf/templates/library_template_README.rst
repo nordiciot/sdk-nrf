@@ -14,7 +14,7 @@ Template: Library
 
    * Give the library a concise name that also corresponds to the folder name.
 
-     If the library targets a specific protocol or device, add it in the title before the library name (for example, "NFC:" or "nRF9160:").
+     If the library targets a specific protocol or device, add it in the title before the library name (for example, "NFC:").
      Do not include the word "library" in the title.
      Use the provided stock phrases and includes when possible.
 
@@ -30,21 +30,20 @@ Template: Library
 
    * Include a tech writer in the PR review.
 
-Overview*
-*********
+Overview
+********
 
 .. note::
    Use this section to give a general overview of the library.
-   This is optional if the library is so small the the initial short description also gives an overview of the library.
 
-Implementation
-==============
+Implementation*
+===============
 
 .. note::
    Use this section to describe the library architecture and implementation.
 
-Supported features
-==================
+Supported features*
+===================
 
 .. note::
    Use this section to describe the features supported by the library.
@@ -54,52 +53,42 @@ Supported backends*
 
 .. note::
    Use this section to describe the backends supported by the library, if applicable.
-   This is optional.
 
 Requirements*
 *************
 
 .. note::
    Use this section to list the requirements needed to use the library.
-   This is not required if there are no specific requirements to use the library. It is a mandatory section if there are specific requirements that have to be met to use the library.
+   It is a mandatory section if there are specific requirements that must be met to use the library.
 
-Library files
+Configuration
 *************
 
 .. note::
-   Use this section to indicate the location of the library files.
+   Use this section to describe how to enable the library for a project.
+   This information is mandatory.
 
-.. |library path| replace:: :file:`path_to_library_files`
-
-This library is found under |library path| in the |NCS| folder structure.
-
-Configuration*
-**************
-
-.. note::
-   Use this section to list available library configuration options, if applicable.
-   This is optional.
+   You can also use this section to list available library configuration options, if applicable.
+   This information is optional.
 
 Shell commands list*
 ====================
 
 .. note::
    Use this section to list available library shell commands, if applicable.
-   This is optional.
 
-Usage*
-******
+Usage
+*****
 
 .. note::
    Use this section to explain how to use the library.
-   This is optional if the library is so small the the initial short description also gives information about how to use the library.
+   This is optional if the library is so small that the initial short description also provides information about how to use the library.
 
 Samples using the library*
 **************************
 
 .. note::
-   Use this section to list all |NCS| samples using this library, if present.
-   This is optional.
+   Use this section to list all the |NCS| samples using this library, if present.
 
 The following |NCS| samples use this library:
 
@@ -112,21 +101,18 @@ Application integration*
 
 .. note::
    Use this section to explain how to integrate the library in a custom application.
-   This is optional.
 
 Additional information*
 ***********************
 
 .. note::
-   Use this section to describe any additional information relevant to the user.
-   This is optional.
+   Use this section to provide any additional information relevant to the user.
 
 Limitations*
 ************
 
 .. note::
    Use this section to describe any limitations to the library, if present.
-   This is optional.
 
 Dependencies
 ************
@@ -138,13 +124,13 @@ API documentation
 *****************
 
 .. note::
-   Use this section to call the API documentation as follows:
+   Add the following section to use the API documentation:
 
-   .. code-block::
+.. code-block::
 
-      | Header file: :file:`*indicate_the_path*`
-      | Source files: :file:`*indicate_the_path*`
+   | Header file: :file:`*provide_the_path*`
+   | Source files: :file:`*provide_the_path*`
 
-      .. doxygengroup:: *indicate_the_doxygroup_if_needed*
-         :project: *indicate_the_project_name_if_needed*
-         :members:
+   .. doxygengroup:: *doxygen_group_name*
+      :project: *project_name*
+      :members:

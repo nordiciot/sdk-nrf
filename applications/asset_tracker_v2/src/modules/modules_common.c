@@ -4,17 +4,17 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <zephyr/types.h>
-#include <event_manager.h>
+#include <app_event_manager.h>
 #include "modules_common.h"
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(modules_common, CONFIG_MODULES_COMMON_LOG_LEVEL);
 
 struct event_prototype {
-	struct event_header header;
+	struct app_event_header header;
 	uint8_t event_id;
 };
 
@@ -45,15 +45,21 @@ int module_get_next_msg(struct module_data *module, void *msg)
 			(struct event_prototype *)msg;
 		struct event_type *event =
 			(struct event_type *)evt_proto->header.type_id;
-		char buf[50];
 
-		event->log_event(&evt_proto->header, buf, sizeof(buf));
+		if (event->log_event_func) {
+			event->log_event_func(&evt_proto->header);
+		}
+#ifdef CONFIG_APP_EVENT_MANAGER_USE_DEPRECATED_LOG_FUN
+		else if (event->log_event_func_dep) {
+			char buf[50];
 
-		LOG_DBG("%s module: Dequeued %s",
-			module->name,
-			log_strdup(buf));
+			event->log_event_func_dep(&evt_proto->header, buf, sizeof(buf));
+			LOG_DBG("%s module: Dequeued %s",
+				module->name,
+				buf);
+		}
+#endif
 	}
-
 	return err;
 }
 
@@ -78,16 +84,22 @@ int module_enqueue_msg(struct module_data *module, void *msg)
 	}
 
 	if (IS_ENABLED(CONFIG_MODULES_COMMON_LOG_LEVEL_DBG)) {
-		struct event_prototype *evt_proto =
-			(struct event_prototype *)msg;
-		struct event_type *event =
-			(struct event_type *)evt_proto->header.type_id;
-		char buf[50];
+		struct event_prototype *evt_proto = (struct event_prototype *)msg;
+		struct event_type *event = (struct event_type *)evt_proto->header.type_id;
 
-		event->log_event(&evt_proto->header, buf, sizeof(buf));
+		if (event->log_event_func) {
+			event->log_event_func(&evt_proto->header);
+		}
+#ifdef CONFIG_APP_EVENT_MANAGER_USE_DEPRECATED_LOG_FUN
+		else if (event->log_event_func_dep) {
+			char buf[50];
 
-		LOG_DBG("%s module: Enqueued: %s", log_strdup(module->name),
-			log_strdup(buf));
+			event->log_event_func_dep(&evt_proto->header, buf, sizeof(buf));
+			LOG_DBG("%s module: Dequeued %s",
+				module->name,
+				buf);
+		}
+#endif
 	}
 
 	return 0;

@@ -4,25 +4,14 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
-#include <bluetooth/gatt.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/uuid.h>
-#include <logging/log.h>
-#include <settings/settings.h>
+#include <zephyr/kernel.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/settings/settings.h>
 
 #include "ble_utils.h"
-
-/* MCUMgr BT FOTA includes */
-#ifdef CONFIG_MCUMGR_CMD_OS_MGMT
-#include "os_mgmt/os_mgmt.h"
-#endif
-#ifdef CONFIG_MCUMGR_CMD_IMG_MGMT
-#include "img_mgmt/img_mgmt.h"
-#endif
-#ifdef CONFIG_MCUMGR_SMP_BT
-#include <mgmt/mcumgr/smp_bt.h>
-#endif
 
 LOG_MODULE_REGISTER(ble_utils, CONFIG_BLE_UTILS_LOG_LEVEL);
 
@@ -33,7 +22,6 @@ static void connected(struct bt_conn *conn, uint8_t err);
 static void disconnected(struct bt_conn *conn, uint8_t reason);
 static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey);
 static void auth_cancel(struct bt_conn *conn);
-static void pairing_confirm(struct bt_conn *conn);
 static void pairing_complete(struct bt_conn *conn, bool bonded);
 static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason);
 static void __attribute__((unused))
@@ -43,7 +31,9 @@ security_changed(struct bt_conn *conn, bt_security_t level,
 static struct bt_conn_auth_cb conn_auth_callbacks = {
 	.passkey_display = auth_passkey_display,
 	.cancel = auth_cancel,
-	.pairing_confirm = pairing_confirm,
+};
+
+static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {
 	.pairing_complete = pairing_complete,
 	.pairing_failed = pairing_failed
 };
@@ -109,11 +99,9 @@ security_changed(struct bt_conn *conn, bt_security_t level,
 	char *addr = ble_addr(conn);
 
 	if (!err) {
-		LOG_INF("Security changed: %s level %u", log_strdup(addr),
-			level);
+		LOG_INF("Security changed: %s level %u", addr, level);
 	} else {
-		LOG_INF("Security failed: %s level %u err %d", log_strdup(addr),
-			level, err);
+		LOG_INF("Security failed: %s level %u err %d", addr, level, err);
 	}
 }
 
@@ -121,51 +109,29 @@ static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
 {
 	char *addr = ble_addr(conn);
 
-	LOG_INF("Passkey for %s: %06u", log_strdup(addr), passkey);
+	LOG_INF("Passkey for %s: %06u", addr, passkey);
 }
 
 static void auth_cancel(struct bt_conn *conn)
 {
 	char *addr = ble_addr(conn);
 
-	LOG_INF("Pairing cancelled: %s", log_strdup(addr));
-}
-
-static void pairing_confirm(struct bt_conn *conn)
-{
-	char *addr = ble_addr(conn);
-
-	bt_conn_auth_pairing_confirm(conn);
-
-	LOG_INF("Pairing confirmed: %s", log_strdup(addr));
+	LOG_INF("Pairing cancelled: %s", addr);
 }
 
 static void pairing_complete(struct bt_conn *conn, bool bonded)
 {
 	char *addr = ble_addr(conn);
 
-	LOG_INF("Pairing completed: %s, bonded: %d", log_strdup(addr), bonded);
+	LOG_INF("Pairing completed: %s, bonded: %d", addr, bonded);
 }
 
 static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 {
 	char *addr = ble_addr(conn);
 
-	LOG_INF("Pairing failed conn: %s, reason %d", log_strdup(addr), reason);
+	LOG_INF("Pairing failed conn: %s, reason %d", addr, reason);
 }
-
-#if defined(CONFIG_MCUMGR_SMP_BT)
-static int software_update_confirmation_handler(uint32_t offset, uint32_t size,
-						void *arg)
-{
-	/* For now just print update progress and confirm data chunk without any additional
-	 * checks.
-	 */
-	LOG_INF("Device firmware upgrade progress %d B / %d B", offset, size);
-
-	return 0;
-}
-#endif
 
 int ble_utils_init(struct bt_nus_cb *nus_clbs, ble_connection_cb_t on_connect,
 		   ble_disconnection_cb_t on_disconnect)
@@ -178,7 +144,17 @@ int ble_utils_init(struct bt_nus_cb *nus_clbs, ble_connection_cb_t on_connect,
 	bt_conn_cb_register(&conn_callbacks);
 
 	if (IS_ENABLED(CONFIG_BT_SMP)) {
-		bt_conn_auth_cb_register(&conn_auth_callbacks);
+		ret = bt_conn_auth_cb_register(&conn_auth_callbacks);
+		if (ret) {
+			LOG_ERR("Failed to register authorization callbacks.");
+			goto end;
+		}
+
+		ret = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
+		if (ret) {
+			LOG_ERR("Failed to register authorization info callbacks.");
+			goto end;
+		}
 	}
 
 	ret = bt_enable(NULL);
@@ -198,14 +174,6 @@ int ble_utils_init(struct bt_nus_cb *nus_clbs, ble_connection_cb_t on_connect,
 		LOG_ERR("Failed to initialize UART service (error: %d)", ret);
 		goto end;
 	}
-
-#if defined(CONFIG_MCUMGR_SMP_BT) && defined(CONFIG_MCUMGR_CMD_IMG_MGMT) &&    \
-	defined(CONFIG_MCUMGR_CMD_OS_MGMT)
-	os_mgmt_register_group();
-	img_mgmt_register_group();
-	img_mgmt_set_upload_cb(software_update_confirmation_handler, NULL);
-	smp_bt_register();
-#endif
 
 	ret = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), sd,
 			      ARRAY_SIZE(sd));

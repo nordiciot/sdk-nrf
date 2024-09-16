@@ -14,9 +14,10 @@ target_sources(app
   PRIVATE
   ${app_sources}
   ${NRF_DIR}/subsys/bluetooth/mesh/light_ctrl_srv.c
+  ${NRF_DIR}/subsys/bluetooth/mesh/light_ctrl_reg.c
+  ${NRF_DIR}/subsys/bluetooth/mesh/light_ctrl_reg_spec.c
   ${NRF_DIR}/subsys/bluetooth/mesh/sensor_types.c
   ${NRF_DIR}/subsys/bluetooth/mesh/sensor.c
-  ${ZEPHYR_BASE}/subsys/net/buf.c
   )
 
 target_include_directories(app
@@ -45,7 +46,9 @@ target_compile_options(app
   -DCONFIG_BT_MESH_LIGHT_CTRL_SRV_LVL_ON=20000
   -DCONFIG_BT_MESH_LIGHT_CTRL_SRV_LVL_PROLONG=10000
   -DCONFIG_BT_MESH_LIGHT_CTRL_SRV_REG=1
-  -DCONFIG_BT_MESH_LIGHT_CTRL_SRV_REG_INTERVAL=100
+  -DCONFIG_BT_MESH_LIGHT_CTRL_REG=1
+  -DCONFIG_BT_MESH_LIGHT_CTRL_REG_SPEC=1
+  -DCONFIG_BT_MESH_LIGHT_CTRL_REG_SPEC_INTERVAL=100
   -DCONFIG_BT_MESH_LIGHT_CTRL_SRV_REG_KIU=250
   -DCONFIG_BT_MESH_LIGHT_CTRL_SRV_REG_KID=25
   -DCONFIG_BT_MESH_LIGHT_CTRL_SRV_REG_KPU=80
@@ -54,7 +57,11 @@ target_compile_options(app
   -DCONFIG_BT_MESH_LIGHT_CTRL_SRV_REG_LUX_ON=500
   -DCONFIG_BT_MESH_LIGHT_CTRL_SRV_REG_LUX_PROLONG=200
   -DCONFIG_BT_MESH_LIGHT_CTRL_SRV_REG_LUX_STANDBY=100
+  -DCONFIG_BT_MESH_LIGHT_CTRL_AMB_LIGHT_LEVEL_TIMEOUT=20
+  -DCONFIG_BT_MESH_USES_TINYCRYPT
 )
+
+zephyr_linker_sources(SECTIONS ${NRF_DIR}/subsys/bluetooth/mesh/sensor_types.ld)
 
 zephyr_ld_options(
     ${LINKERFLAGPREFIX},--allow-multiple-definition

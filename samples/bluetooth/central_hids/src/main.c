@@ -9,21 +9,21 @@
 #include <zephyr/types.h>
 #include <stddef.h>
 #include <errno.h>
-#include <zephyr.h>
-#include <sys/printk.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
 #include <bluetooth/gatt_dm.h>
-#include <sys/byteorder.h>
+#include <zephyr/sys/byteorder.h>
 #include <bluetooth/scan.h>
 #include <bluetooth/services/hogp.h>
 #include <dk_buttons_and_leds.h>
 
-#include <settings/settings.h>
+#include <zephyr/settings/settings.h>
 
 /**
  * Switch between boot protocol and report protocol mode.
@@ -258,7 +258,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 	gatt_discover(conn);
 }
 
-static struct bt_conn_cb conn_callbacks = {
+BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected        = connected,
 	.disconnected     = disconnected,
 	.security_changed = security_changed
@@ -604,18 +604,6 @@ static void auth_cancel(struct bt_conn *conn)
 }
 
 
-static void pairing_confirm(struct bt_conn *conn)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-	bt_conn_auth_pairing_confirm(conn);
-
-	printk("Pairing confirmed: %s\n", addr);
-}
-
-
 static void pairing_complete(struct bt_conn *conn, bool bonded)
 {
 	char addr[BT_ADDR_LE_STR_LEN];
@@ -639,13 +627,15 @@ static struct bt_conn_auth_cb conn_auth_callbacks = {
 	.passkey_display = auth_passkey_display,
 	.passkey_confirm = auth_passkey_confirm,
 	.cancel = auth_cancel,
-	.pairing_confirm = pairing_confirm,
+};
+
+static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {
 	.pairing_complete = pairing_complete,
 	.pairing_failed = pairing_failed
 };
 
 
-void main(void)
+int main(void)
 {
 	int err;
 
@@ -653,18 +643,22 @@ void main(void)
 
 	bt_hogp_init(&hogp, &hogp_init_params);
 
-	bt_conn_cb_register(&conn_callbacks);
-
 	err = bt_conn_auth_cb_register(&conn_auth_callbacks);
 	if (err) {
 		printk("failed to register authorization callbacks.\n");
-		return;
+		return 0;
+	}
+
+	err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
+	if (err) {
+		printk("Failed to register authorization info callbacks.\n");
+		return 0;
 	}
 
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Bluetooth initialized\n");
@@ -678,14 +672,15 @@ void main(void)
 	err = dk_buttons_init(button_handler);
 	if (err) {
 		printk("Failed to initialize buttons (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	err = bt_scan_start(BT_SCAN_TYPE_SCAN_ACTIVE);
 	if (err) {
 		printk("Scanning failed to start (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Scanning successfully started\n");
+	return 0;
 }

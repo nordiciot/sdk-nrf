@@ -15,9 +15,9 @@ Requirements
 
 The sample supports the following development kits:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf9160dk_nrf9160_ns, nrf5340dk_nrf5340_cpuapp_and_cpuapp_ns, nrf52840dk_nrf52840, nrf52dk_nrf52832
+.. table-from-sample-yaml::
+
+.. include:: /includes/tfm.txt
 
 Overview
 ********
@@ -44,15 +44,15 @@ To run the sample using a custom machine learning model, you must complete the f
 1. Configure the Edge Impulse wrapper by completing the following steps:
 
    a. Prepare your own machine learning model using `Edge Impulse studio`_.
-   #. Set the :kconfig:`CONFIG_EDGE_IMPULSE_URI` to URI of your machine learning model.
+   #. Set the :kconfig:option:`CONFIG_EDGE_IMPULSE_URI` to URI of your machine learning model.
 
    See the :ref:`ei_wrapper` page for detailed configuration steps.
 #. Define the input data for the machine learning model in :file:`samples/edge_impulse/wrapper/src/include/input_data.h`.
 #. Check the example input data in your Edge Impulse studio project:
 
    a. Go to the :guilabel:`Live classification` tab.
-   #. In the :guilabel:`Classifying existing test sample` panel, select one of the test samples.
-   #. Press :guilabel:`Load sample` to display the raw data preview.
+   #. In the **Classifying existing test sample** panel, select one of the test samples.
+   #. Click :guilabel:`Load sample` to display the raw data preview.
 
       .. figure:: ../../../doc/nrf/images/ei_loading_test_sample.png
          :scale: 50 %
@@ -68,7 +68,7 @@ To run the sample using a custom machine learning model, you must complete the f
 
          Raw data preview in Edge Impulse studio
 
-#. Copy information from the :guilabel:`Raw features` list into an array defined in the :file:`input_data.h` file.
+#. Copy information from the **Raw features** list into an array defined in the :file:`input_data.h` file.
 
 .. note::
     If you provide more input data than a single input window can hold, the prediction will be triggered multiple times.
@@ -80,7 +80,7 @@ Building and running
 
 .. |sample path| replace:: :file:`samples/edge_impulse/wrapper`
 
-.. include:: /includes/build_and_run.txt
+.. include:: /includes/build_and_run_ns.txt
 
 Testing
 =======
@@ -94,14 +94,22 @@ After programming the sample to your development kit, test it by performing the 
    .. parsed-literal::
       :class: highlight
 
-      *** Booting Zephyr OS build v2.4.0-ncs1-3484-g21046b8cdb4e  ***
+      *** Booting Zephyr OS build v2.6.99-ncs1-14-g15be5e615498  ***
+      Machine learning model sampling frequency: 52
+      Labels assigned by the model:
+      - idle
+      - sine
+      - triangle
+
       Prediction started...
 
       Classification results
       ======================
-      Label: sine
-      Value: 1.00
-      Anomaly: 0.47
+      Value: 1.00     Label: sine
+      Value: 0.00     Label: triangle
+      Value: 0.00     Label: idle
+      Anomaly: -0.07
+
 
 The observed classification results depend on machine learning model and input data.
 
@@ -111,3 +119,7 @@ Dependencies
 This sample uses the following |NCS| subsystems:
 
 * :ref:`ei_wrapper`
+
+In addition, it uses the following secure firmware component:
+
+* :ref:`Trusted Firmware-M <ug_tfm>`

@@ -6,6 +6,20 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
+# Set Kconfig root files that will be processed as a first Kconfig for used child images.
+set(mcuboot_KCONFIG_ROOT "\\\${ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR}/config/nrfconnect/chip-module/Kconfig.mcuboot.root")
+set(multiprotocol_rpmsg_KCONFIG_ROOT "\\\${ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR}/config/nrfconnect/chip-module/Kconfig.multiprotocol_rpmsg.root")
+set(hci_rpmsg_KCONFIG_ROOT "\\\${ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR}/config/nrfconnect/chip-module/Kconfig.hci_rpmsg.root")
+
+# For prj.conf the CONF_FILE is empty. In other case extract the exact file name from the path string.
+if(CONF_FILE)
+    get_filename_component(CONFIG_FILE_NAME ${CONF_FILE} NAME)
+endif()
+
+if(NOT CONFIG_FILE_NAME STREQUAL "prj_no_dfu.conf")
+    set(PM_STATIC_YML_FILE ${CMAKE_CURRENT_SOURCE_DIR}/configuration/${BOARD}/pm_static_dfu.yml)
+endif()
+
 find_package(Zephyr HINTS $ENV{ZEPHYR_BASE})
 
 project(matter-template)
@@ -26,15 +40,19 @@ target_include_directories(app PRIVATE
 target_sources(app PRIVATE
     src/app_task.cpp
     src/main.cpp
-    src/zap-generated/attribute-size.cpp
     src/zap-generated/IMClusterCommandHandler.cpp
     src/zap-generated/callback-stub.cpp
     ${COMMON_ROOT}/src/led_widget.cpp
-    ${COMMON_ROOT}/src/thread_util.cpp
 )
+
+if(CONFIG_CHIP_OTA_REQUESTOR)
+    target_sources(app PRIVATE ${COMMON_ROOT}/src/ota_util.cpp)
+endif()
 
 chip_configure_data_model(app
     INCLUDE_SERVER
+    BYPASS_IDL
+    GEN_DIR src/zap-generated
     ZAP_FILE ${CMAKE_CURRENT_SOURCE_DIR}/src/template.zap
 )
 # NORDIC SDK APP END

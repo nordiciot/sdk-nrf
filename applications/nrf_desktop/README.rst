@@ -9,6 +9,7 @@ nRF Desktop
 
 The nRF Desktop is a reference design of a Human Interface Device (HID) that is connected to a host through Bluetooth® Low Energy or USB, or both.
 Depending on the configuration, this application can work as desktop mouse, gaming mouse, keyboard, or connection dongle.
+See `nRF Desktop reference design page`_ for an overview of supported features.
 
 .. tip::
     To get started with hardware that has pre-configured software, go to the `User interface`_ section.
@@ -25,14 +26,14 @@ Overview: Firmware architecture
 The nRF Desktop application design aims at high performance, while still providing configurability and extensibility.
 
 The application architecture is modular, event-driven and build around :ref:`lib_caf`.
-This means that parts of the application functionality are separated into isolated modules that communicate with each other using application events, which are handled by the :ref:`event_manager`.
+This means that parts of the application functionality are separated into isolated modules that communicate with each other using application events, which are handled by the :ref:`app_event_manager`.
 Modules register themselves as listeners of those events that they are configured to react to.
 An application event can be submitted by multiple modules and it can have multiple listeners.
 
 Module and component overview
 =============================
 
-The following figure shows the nRF Desktop modules and how they relate with other components and the :ref:`event_manager`.
+The following figure shows the nRF Desktop modules and how they relate with other components and the :ref:`app_event_manager`.
 The figure does not present all the available modules.
 For example, the figure does not include the modules that are used as hotfixes or only for debug or profiling purposes.
 
@@ -84,7 +85,7 @@ Sink Module
 
 .. note::
    Some application modules can have multiple implementations (for example, :ref:`nrf_desktop_motion`).
-   In such case, the table shows the :ref:`event_manager` events received and submitted by all implementations of a given application module.
+   In such case, the table shows the :ref:`app_event_manager` events received and submitted by all implementations of a given application module.
 
 Module usage per hardware type
 ==============================
@@ -96,7 +97,7 @@ In other words, not all of the :ref:`nrf_desktop_app_internal_modules` need to b
 Gaming mouse module set
 -----------------------
 
-The following figure shows the modules that are enabled when the application is working as a gaming mouse.
+The following figure shows the modules that are enabled when the application is working as a gaming mouse:
 
 .. figure:: /images/nrf_desktop_arch_gmouse.svg
    :alt: nRF Desktop high-level design (gaming mouse)
@@ -106,7 +107,7 @@ The following figure shows the modules that are enabled when the application is 
 Desktop mouse module set
 ------------------------
 
-The following figure shows the modules that are enabled when the application is working as a desktop mouse.
+The following figure shows the modules that are enabled when the application is working as a desktop mouse:
 
 .. figure:: /images/nrf_desktop_arch_dmouse.svg
    :alt: nRF Desktop high-level design (desktop mouse)
@@ -116,7 +117,7 @@ The following figure shows the modules that are enabled when the application is 
 Keyboard module set
 -------------------
 
-The following figure shows the modules that are enabled when the application is working as a keyboard.
+The following figure shows the modules that are enabled when the application is working as a keyboard:
 
 .. figure:: /images/nrf_desktop_arch_kbd.svg
    :alt: nRF Desktop high-level design (keyboard)
@@ -126,7 +127,7 @@ The following figure shows the modules that are enabled when the application is 
 Dongle module set
 -----------------
 
-The following figure shows the modules that are enabled when the application is working as a dongle.
+The following figure shows the modules that are enabled when the application is working as a dongle:
 
 .. figure:: /images/nrf_desktop_arch_dongle.svg
    :alt: nRF Desktop high-level design (dongle)
@@ -143,15 +144,15 @@ The following threads are kept running in the application:
 * System-related threads
     * Idle thread
     * System workqueue thread
-    * Logger thread (on debug :ref:`build types <nrf_desktop_requirements_build_types>`)
-    * Shell thread (on :ref:`build types <nrf_desktop_requirements_build_types>` with shell enabled)
+    * Logger thread (when :ref:`zephyr:logging_api` is enabled)
+    * Shell thread (when :ref:`zephyr:shell_api` is enabled)
     * Threads related to Bluetooth® LE (the exact number depends on the selected Link Layer)
 * Application-related threads
     * Motion sensor thread (running only on mouse)
     * Settings loading thread (enabled by default only on keyboard)
     * QoS data sampling thread (running only if Bluetooth® LE QoS feature is enabled)
 
-Most of the application activity takes place in the context of the system work queue thread, either through scheduled work objects or through the event manager callbacks (executed from the system workqueue thread).
+Most of the application activity takes place in the context of the system work queue thread, either through scheduled work objects or through the Application Event Manager callbacks (executed from the system workqueue thread).
 Because of this, the application does not need to handle resource protection.
 The only exception are places where the interaction with interrupts or multiple threads cannot be avoided.
 
@@ -162,14 +163,14 @@ Most of memory resources that are used by the application are allocated statical
 
 The application uses dynamic allocation to:
 
-* Create the event manager events.
-  For more information, see the :ref:`event_manager` page.
+* Create the Application Event Manager events.
+  For more information, see the :ref:`app_event_manager` page.
 * Temporarily store the HID-related data in the :ref:`nrf_desktop_hid_state` and :ref:`nrf_desktop_hid_forward`.
   For more information, see the documentation pages of these modules.
 
 When configuring HEAP, make sure that the values for the following options match the typical event size and the system needs:
 
-* :kconfig:`CONFIG_HEAP_MEM_POOL_SIZE` - The size must be big enough to handle the worst possible use case for the given device.
+* :kconfig:option:`CONFIG_HEAP_MEM_POOL_SIZE` - The size must be big enough to handle the worst possible use case for the given device.
 
 .. important::
     The nRF Desktop uses ``k_heap`` as the backend for dynamic allocation.
@@ -222,7 +223,7 @@ These inputs are not synchronized with the HID report transmission to the host.
 When the mouse is constantly in use, the motion module is kept in the fetching state.
 In this state, the nRF Desktop mouse forwards the data from the motion sensor to the host in the following way:
 
-a. USB state (or Bluetooth HIDS) sends a HID mouse report to the host and submits ``hid_report_sent_event``.
+1. USB state (or Bluetooth HIDS) sends a HID mouse report to the host and submits ``hid_report_sent_event``.
 #. The event triggers sampling of the motion sensor.
 #. A dedicated thread is used to fetch the sample from the sensor.
 #. After the sample is fetched, the thread forwards it to the :ref:`nrf_desktop_hid_state` as ``motion_event``.
@@ -260,7 +261,7 @@ The nRF Desktop supports the HID keyboard LED report.
 The report is used by the host to update the state of the keyboard LEDs, for example to indicate that the Caps Lock key is active.
 
 .. note::
-   Only the nrf52840dk_nrf52840 in ``ZDebug_keyboard`` configuration has hardware LEDs that can be used to disaply state of the Caps Lock and Num Lock.
+   Only the nrf52840dk_nrf52840 in ``keyboard`` configuration has hardware LEDs that can be used to display the Caps Lock and Num Lock state.
 
 The following diagrams show the HID output report data exchange between the application modules.
 
@@ -294,7 +295,7 @@ The report is used by the :ref:`nrf_desktop_config_channel`.
 
 .. note::
    The nRF Desktop also uses a dedicated HID output report to forward the :ref:`nrf_desktop_config_channel` data through the nRF Desktop dongle.
-   This report is handled using the configuration channel's infrastructure and it can be enabled using :kconfig:`CONFIG_DESKTOP_CONFIG_CHANNEL_OUT_REPORT`.
+   This report is handled using the configuration channel's infrastructure and it can be enabled using :ref:`CONFIG_DESKTOP_CONFIG_CHANNEL_OUT_REPORT <config_desktop_app_options>`.
    See the Kconfig option's help for details about the report.
 
 HID protocols
@@ -361,7 +362,7 @@ Depending on what development kit you use, you need to select the respective con
 
       .. table-from-rows:: /includes/sample_board_rows.txt
          :header: heading
-         :rows: nrf52840dk_nrf52840, nrf52833dk_nrf52833
+         :rows: nrf52840dk_nrf52840, nrf52833dk_nrf52833, nrf52833dk_nrf52820, nrf5340dk_nrf5340_cpuapp
 
       In nRF52840 DK, the application is configured to work as gaming mouse (with motion emulated by using DK buttons) and in nRF52833 DK, the application is configured to work as HID dongle.
 
@@ -378,34 +379,37 @@ nRF Desktop build types
 The nRF Desktop does not use a single :file:`prj.conf` file.
 Configuration files are provided for different build types for each supported board.
 
-.. include:: /gs_modifying.rst
+Each board has its own :file:`prj.conf` file, which represents a ``debug`` build type.
+Other build types are covered by dedicated files with the build type added as a suffix to the ``prj`` part, as per the following list.
+For example, the ``release`` build type file name is :file:`prj_release.conf`.
+If a board has other configuration files, for example associated with partition layout or child image configuration, these follow the same pattern.
+
+.. include:: /config_and_build/modifying.rst
    :start-after: build_types_overview_start
    :end-before: build_types_overview_end
 
 .. note::
     `Selecting a build type`_ is optional.
-    The ``ZDebug`` build type is used by default in nRF Desktop if no build type is explicitly selected.
+    The ``debug`` build type is used by default in nRF Desktop if no build type is explicitly selected.
 
 The following build types are available for various boards in the nRF Desktop:
 
-* ``ZRelease`` -- Release version of the application with no debugging features.
-* ``ZReleaseB0`` -- ``ZRelease`` build type with the support for the B0 bootloader enabled (for :ref:`background DFU <nrf_desktop_bootloader_background_dfu>`).
-* ``ZReleaseMCUBoot`` -- ``ZRelease`` build type with the support for the MCUboot bootloader enabled (for :ref:`serial recovery DFU <nrf_desktop_bootloader_serial_dfu>` or :ref:`background DFU <nrf_desktop_bootloader_background_dfu>`).
-* ``ZDebug`` -- Debug version of the application; the same as the ``ZRelease`` build type, but with debug options enabled.
-* ``ZDebugB0`` -- ``ZDebug`` build type with the support for the B0 bootloader enabled (for :ref:`background DFU <nrf_desktop_bootloader_background_dfu>`).
-* ``ZDebugMCUBoot`` -- ``ZDebug`` build type with the support for the MCUboot bootloader enabled (for :ref:`serial recovery DFU <nrf_desktop_bootloader_serial_dfu>` or :ref:`background DFU <nrf_desktop_bootloader_background_dfu>`).
-* ``ZDebugWithShell`` -- ``ZDebug`` build type with the shell enabled.
+* Bootloader-enabled configurations with support for :ref:`serial recovery DFU <nrf_desktop_bootloader_serial_dfu>` or :ref:`background DFU <nrf_desktop_bootloader_background_dfu>` are set as default if they fit in flash memory.
+  See :ref:`nrf_desktop_board_configuration_files` for details about which boards have bootloader included in their default configuration.
+* ``release`` - Release version of the application with no debugging features.
+* ``debug`` - Debug version of the application; the same as the ``release`` build type, but with debug options enabled.
+* ``wwcb`` - ``debug`` build type with the support for the B0 bootloader enabled for `Works With ChromeBook (WWCB)`_.
 
 In nRF Desktop, not every development kit can support every build type mentioned above.
 If the given build type is not supported on the selected DK, an error message will appear when `Building and running`_.
-For example, if the ``ZDebugWithShell`` build type is not supported on the selected DK, the following notification appears:
+For example, if the ``wwcb`` build type is not supported on the selected DK, the following notification appears:
 
 .. code-block:: console
 
-   Configuration file for build type ZDebugWithShell is missing.
+   File not found: ./ncs/nrf/applications/nrf_desktop/configuration/nrf52dmouse_nrf52832/prj_wwcb.conf
 
 |nrf_desktop_build_type_conf|
-For example, the nRF52840 Development Kit supports the ``ZDebug_keyboard`` configuration, which is defined in the :file:`app_ZDebug_keyboard.conf` file in the :file:`configuration/nrf52840dk_nrf52840` directory.
+For example, the nRF52840 Development Kit supports the ``keyboard`` configuration, which is defined in the :file:`prj_keyboard.conf` file in the :file:`configuration/nrf52840dk_nrf52840` directory.
 This configuration lets you generate the application with the keyboard role.
 
 See :ref:`nrf_desktop_porting_guide` for detailed information about the application configuration and how to create build type files for your hardware.
@@ -484,7 +488,7 @@ No additional software or drivers are required.
       .. figure:: /images/nrf_desktop_dongle_usb.svg
          :alt: nRF Desktop dongle
 
-      The dongle has an USB connector located at one end of the board.
+      The dongle has a USB connector located at one end of the board.
       It should be inserted to the USB slot located on the host.
 
 ..
@@ -522,6 +526,14 @@ Connection through Bluetooth LE
 
 When turned on, the nRF Desktop peripherals are advertising until they go to the suspended state or connect through Bluetooth.
 The peripheral supports one wireless connection at a time, but it can be bonded with :ref:`multiple peers <nrf_desktop_ble_peers>`.
+
+.. note::
+   To simplify pairing the nRF Desktop peripherals with Windows 10 hosts, the peripherals include `Swift Pair`_ payload in the Bluetooth LE advertising data.
+   By default, the Swift Pair payload is included for all of the Bluetooth local identities, apart from the dedicated local identity used for connection with an nRF Desktop dongle.
+
+   Some of the nRF Desktop configurations also include `Fast Pair`_ payload in the Bluetooth LE advertising data to simplify pairing the nRF Desktop peripherals with Android hosts.
+   These configurations apply further modifications that are needed to improve the user experience.
+   See the :ref:`nrf_desktop_bluetooth_guide_fast_pair` documentation section for details.
 
 The nRF Desktop Bluetooth Central device scans for all bonded peripherals that are not connected.
 The scanning is interrupted when any device connected to the dongle through Bluetooth comes in use.
@@ -784,7 +796,7 @@ For example, LEDs are turned off and advertising is stopped.
 
 Moving the mouse or pressing any button wakes up the device and turns on the disabled functionalities.
 
-You can define the amount of time after which the peripherals are suspended or powered off in :kconfig:`CONFIG_CAF_POWER_MANAGER_TIMEOUT`.
+You can define the amount of time after which the peripherals are suspended or powered off in :kconfig:option:`CONFIG_CAF_POWER_MANAGER_TIMEOUT`.
 By default, this period is set to 120 seconds.
 
 .. important::
@@ -792,6 +804,29 @@ By default, this period is set to 120 seconds.
 
     If a nRF Desktop device supports remote wakeup, the USB connected device goes to suspended state when USB is suspended.
     The device can then trigger remote wakeup of the connected host on user input.
+
+Configuration
+*************
+
+|config|
+
+Adding nRF21540 EK shield support
+=================================
+
+The nRF Desktop application can be used with the :ref:`ug_radio_fem_nrf21540_ek` shield, an RF front-end module (FEM) for the 2.4 GHz range extension.
+The shield can be used with any nRF Desktop HID application configured for a development kit that is fitted with Arduino-compatible connector (see the :guilabel:`DK` tab in `Requirements`_).
+This means that the shield support is not available for nRF Desktop's dedicated boards, such as ``nrf52840gmouse_nrf52840``, ``nrf52kbd_nrf52832``, or ``nrf52840dongle_nrf52840``.
+To build the application with the shield support, pass the ``SHIELD`` parameter to the build command.
+
+For detailed information about building the nRF Desktop application for the nRF21540 EK, see the :ref:`ug_radio_fem_nrf21540_ek_programming` section on the nRF21540 EK documentation page.
+
+.. note::
+   For the multi-core build, use the ``hci_rpmsg_`` as the *childImageName* parameter, because in the nRF Desktop application, network core runs using ``hci_rpmsg_``.
+   The command would look as follows:
+
+   .. code-block:: console
+
+      west build -b nrf5340dk_nrf5340_cpuapp -- -DSHIELD=nrf21540_ek -Dhci_rpmsg_SHIELD=nrf21540_ek
 
 Building and running
 ********************
@@ -812,19 +847,56 @@ Selecting a build type
 
 Before you start testing the application, you can select one of the :ref:`nrf_desktop_requirements_build_types`, depending on your development kit and building method.
 
-Selecting a build type in SES
------------------------------
+Selecting a build type in |VSC|
+-------------------------------
 
-.. include:: /gs_modifying.rst
-   :start-after: build_types_selection_ses_start
-   :end-before: build_types_selection_ses_end
+.. include:: /config_and_build/modifying.rst
+   :start-after: build_types_selection_vsc_start
+   :end-before: build_types_selection_vsc_end
 
 Selecting a build type from command line
 ----------------------------------------
 
-.. include:: /gs_modifying.rst
+.. include:: /config_and_build/modifying.rst
    :start-after: build_types_selection_cmd_start
    :end-before: build_types_selection_cmd_end
+
+.. note::
+   If nRF Desktop is built with `Fast Pair`_ support, you must provide Fast Pair Model ID and Anti Spoofing private key as CMake options.
+   You can use either your own provisioning data or the provisioning data obtained by Nordic Semiconductor for development purposes.
+   The following debug devices are meant to be used with the nRF Desktop and have been registered:
+
+   * NCS keyboard - The Fast Pair Provider meant to be used with keyboards:
+
+      * Device name: NCS keyboard
+      * Model ID: ``0x52FF02``
+      * Anti-spoofing key (base64, uncompressed): ``8E8ulwhSIp/skZeg27xmWv2SxRxTOagypHrf2OdrhGY=``
+      * Type: Input device
+      * Additional features: Data only connection, Support personalized name, Ringing device unsupported
+
+   * NCS gaming mouse - Fast Pair Provider meant to be used with gaming mice:
+
+      * Device name: NCS gaming mouse
+      * Model ID: ``0x8E717D``
+      * Anti-spoofing key (base64, uncompressed): ``dZxFzP7X9CcfLPC0apyRkmgsh3n2EbWo9NFNXfVuxAM=``
+      * Type: Input device
+      * Additional features: Data only connection, Support personalized name, Ringing device unsupported
+
+   See :ref:`ug_bt_fast_pair_provisioning` documentation for the following information:
+
+   * Registering a Fast Pair Provider
+   * Provisioning a Fast Pair Provider in |NCS|
+
+.. nrf_desktop_fastpair_important_start
+
+.. important::
+   This is the debug Fast Pair provisioning data obtained by Nordic for the development purposes.
+   It should not be used in production.
+
+   To test with the debug mode Model ID, you must configure the Android device to include the debug results while displaying the nearby Fast Pair Providers.
+   For details, see `Verifying Fast Pair`_ in the GFPS documentation.
+
+.. nrf_desktop_fastpair_important_end
 
 .. _nrf_desktop_testing_steps:
 
@@ -850,7 +922,7 @@ After building the application with or without :ref:`specifying the build type <
    .. note::
         You can manually start the scanning for new peripheral devices by pressing the **SW1** button on the dongle for a short time.
         This might be needed if the dongle does not connect with all the peripherals before timeout.
-        The scanning is interrupted after the amount of time predefined in :kconfig:`CONFIG_DESKTOP_BLE_SCAN_DURATION_S`, because it negatively affects the performance of already connected peripherals.
+        The scanning is interrupted after the amount of time predefined in :ref:`CONFIG_DESKTOP_BLE_SCAN_DURATION_S <config_desktop_app_options>`, because it negatively affects the performance of already connected peripherals.
 
 #. Move the mouse and press any key on the keyboard.
    The input is reflected on the host.
@@ -895,10 +967,129 @@ The nRF Desktop application uses the following files as configuration sources:
 * Kconfig files - These reflect the software configuration.
   See :ref:`kconfig_tips_and_tricks` for information about how to configure them.
 
-You must modify these configuration sources when `Adding a new board`_, as described below.
-
 For information about differences between DTS and Kconfig, see :ref:`zephyr:dt_vs_kconfig`.
-For detailed instructions for adding Zephyr support to a custom board, see Zephyr's :ref:`zephyr:board_porting_guide`.
+
+Application-specific Kconfig configuration
+==========================================
+
+The nRF Desktop introduces Kconfig options that can be used to simplify an application configuration.
+These options can be used to select a device role and to automatically apply a default configuration suitable for the selected role.
+
+.. note::
+   Part of the default configuration is applied by modifying the default values of Kconfig options.
+   Changing configuration in menuconfig does not automatically adjust user-configurable values to the new defaults.
+   So, you must update those values manually.
+   For more information, see the Stuck symbols in menuconfig and guiconfig section on the :ref:`kconfig_tips_and_tricks` in the Zephyr documentation.
+
+   The default Kconfig option values are automatically updated if configuration changes are applied directly in the configuration files.
+
+.. _nrf_desktop_hid_configuration:
+
+HID configuration
+-----------------
+
+The nRF Desktop application introduces application-specific configuration options related to HID device configuration.
+These options are defined in :file:`Kconfig.hid`.
+
+The options define the nRF Desktop device role.
+The device role can be either the HID dongle (:ref:`CONFIG_DESKTOP_ROLE_HID_DONGLE <config_desktop_app_options>`) or the HID peripheral (:ref:`CONFIG_DESKTOP_ROLE_HID_PERIPHERAL <config_desktop_app_options>`).
+The HID peripheral role can also specify a peripheral type:
+
+* HID mouse (:ref:`CONFIG_DESKTOP_PERIPHERAL_TYPE_MOUSE <config_desktop_app_options>`)
+* HID keyboard (:ref:`CONFIG_DESKTOP_PERIPHERAL_TYPE_KEYBOARD <config_desktop_app_options>`)
+* other HID device (:ref:`CONFIG_DESKTOP_PERIPHERAL_TYPE_OTHER <config_desktop_app_options>`)
+
+Each role automatically implies nRF Desktop modules needed for the role.
+For example, :ref:`nrf_desktop_hid_state` is automatically enabled for the HID peripheral role.
+
+By default, the nRF Desktop devices use predefined format of HID reports.
+The common HID report map is defined in the :file:`configuration/common/hid_report_desc.c` file.
+The selected role implies a set of related HID reports.
+For example, HID mouse automatically enables support for HID mouse report.
+If ``other HID device`` peripheral type is chosen, the set of HID reports needs to be explicitly defined in the configuration.
+
+Apart from this, the supported HID boot protocol interface can be specified as either:
+
+* mouse (:ref:`CONFIG_DESKTOP_HID_BOOT_INTERFACE_MOUSE <config_desktop_app_options>`)
+* keyboard (:ref:`CONFIG_DESKTOP_HID_BOOT_INTERFACE_KEYBOARD <config_desktop_app_options>`)
+* none (:ref:`CONFIG_DESKTOP_HID_BOOT_INTERFACE_DISABLED <config_desktop_app_options>`)
+
+.. _nrf_desktop_hid_device_identifiers:
+
+HID device identifiers
+~~~~~~~~~~~~~~~~~~~~~~
+
+The nRF Desktop application defines the following common device identifiers:
+
+* Manufacturer (:ref:`CONFIG_DESKTOP_DEVICE_MANUFACTURER <config_desktop_app_options>`)
+* Vendor ID (:ref:`CONFIG_DESKTOP_DEVICE_VID <config_desktop_app_options>`)
+* Product name (:ref:`CONFIG_DESKTOP_DEVICE_PRODUCT <config_desktop_app_options>`)
+* Product ID (:ref:`CONFIG_DESKTOP_DEVICE_PID <config_desktop_app_options>`)
+
+These Kconfig options determine the default values of device identifiers used for:
+
+* :ref:`nrf_desktop_usb_state_identifiers`
+* BLE GATT Device Information Service (:kconfig:option:`CONFIG_BT_DIS`) that is required for :ref:`nrf_desktop_bluetooth_guide_peripheral`
+
+.. note::
+   Apart from the mentioned common device identifiers, the nRF Desktop application defines an application-specific string representing device generation (:ref:`CONFIG_DESKTOP_DEVICE_GENERATION <config_desktop_app_options>`).
+   The generation allows to distinguish configurations that use the same board and bootloader, but are not interoperable.
+   The value can be read through the :ref:`nrf_desktop_config_channel`.
+
+Debug configuration
+-------------------
+
+The nRF Desktop application introduces application-specific configuration options related to the debug configuration.
+These options are defined in the :file:`Kconfig.debug` file.
+
+The :ref:`CONFIG_DESKTOP_LOG <config_desktop_app_options>` Kconfig option enables support for logging in the nRF Desktop application.
+This option overlays Kconfig option defaults from the Logging subsystem to align them with the nRF Desktop requirements.
+The nRF Desktop configuration uses SEGGER J-Link RTT as the Logging subsystem backend.
+
+The :ref:`CONFIG_DESKTOP_SHELL <config_desktop_app_options>` Kconfig option enables support for CLI in the nRF Desktop application.
+This option overlays Kconfig option defaults from the Shell subsystem to align them with the nRF Desktop requirements.
+The nRF Desktop configuration uses SEGGER J-Link RTT as the Shell subsystem backend.
+If both shell and logging are enabled, logger uses shell as the logging backend.
+
+See the :file:`Kconfig.debug` file content for details.
+
+Default common configuration
+----------------------------
+
+The nRF Desktop application aligns the configuration with the nRF Desktop use case by overlaying Kconfig defaults and selecting or implying the required Kconfig options.
+Among others, the Kconfig :ref:`app_event_manager` and :ref:`lib_caf` options are selected to ensure that they are enabled.
+The :ref:`CONFIG_DESKTOP_SETTINGS_LOADER <config_desktop_app_options>` and :ref:`CONFIG_DESKTOP_POWER_MANAGER <config_desktop_app_options>` are implied to enable the :ref:`nrf_desktop_settings_loader` and :ref:`nrf_desktop_power_manager` modules, respectively.
+See the :file:`Kconfig.defaults` file for details related to default common configuration.
+
+.. _nrf_desktop_bluetooth_configuration:
+
+Bluetooth configuration
+-----------------------
+
+The nRF Desktop application introduces application-specific configuration options related to Bluetooth connectivity configuration.
+These options are defined in :file:`Kconfig.ble` file.
+
+The :ref:`CONFIG_DESKTOP_BT <config_desktop_app_options>` Kconfig option enables support for Bluetooth connectivity in the nRF Desktop application.
+The option is enabled by default.
+
+The nRF Desktop Bluetooth peripheral configuration (:ref:`CONFIG_DESKTOP_BT_PERIPHERAL <config_desktop_app_options>`) is automatically enabled for the nRF Desktop HID peripheral role (:ref:`CONFIG_DESKTOP_ROLE_HID_PERIPHERAL <config_desktop_app_options>`).
+The nRF Desktop Bluetooth central configuration (:ref:`CONFIG_DESKTOP_BT_CENTRAL <config_desktop_app_options>`) is automatically enabled for the nRF Desktop HID dongle role (:ref:`CONFIG_DESKTOP_ROLE_HID_DONGLE <config_desktop_app_options>`)
+
+The nRF Desktop Bluetooth configuration options perform the following:
+
+* Implies application modules related to Bluetooth that are required for the selected device role
+* Selects required functionalities in Zephyr's Bluetooth stack
+* Overlays Bluetooth Kconfig option defaults to align them with the nRF Desktop use-case
+
+See :file:`Kconfig.ble` file content for details.
+See the :ref:`nrf_desktop_bluetooth_guide` for more information about Bluetooth support in nRF Desktop application.
+
+CAF configuration
+-----------------
+
+The nRF Desktop application overlays defaults of the :ref:`lib_caf` related Kconfig options to align them with the nRF Desktop use-case.
+The files that apply the overlays are located in the :file:`src/modules` directory and are named :file:`Kconfig.caf_module_name.default`.
+For example, the Kconfig defaults of :ref:`caf_settings_loader` are overlayed in the :file:`src/modules/Kconfig.caf_settings_loader.default`.
 
 .. _nrf_desktop_board_configuration:
 
@@ -915,7 +1106,7 @@ The application configuration files define both a set of options with which the 
 Include the following files in this directory:
 
 Mandatory configuration files
-    * Application configuration file for the ``ZDebug`` :ref:`build type <nrf_desktop_requirements_build_types>`.
+    * Application configuration file for the ``debug`` (:file:`prj.conf`) :ref:`build type <nrf_desktop_requirements_build_types>`.
     * Configuration files for the selected modules.
 
 Optional configuration files
@@ -925,6 +1116,8 @@ Optional configuration files
     * DTS overlay file.
 
 See `Adding a new board`_ for information about how to add these files.
+
+.. _nrf_desktop_board_configuration_files:
 
 nRF Desktop board configuration files
 -------------------------------------
@@ -938,45 +1131,65 @@ nRF52840 Gaming Mouse (nrf52840gmouse_nrf52840)
         * The application is configured to act as a gaming mouse, with both Bluetooth LE and USB transports enabled.
         * Bluetooth is configured to use Nordic's SoftDevice link layer.
 
-      * |preconfigured_build_types|
+      * The configuration with the B0 bootloader is set as default.
+      * The board supports debug (:file:`prj_fast_pair.conf`) and release (:file:`prj_release_fast_pair.conf`) :ref:`nrf_desktop_bluetooth_guide_fast_pair` configurations.
+        Both configurations use the MCUboot bootloader built in the direct-xip mode (``MCUBOOT+XIP``), and they support the firmware updates using the :ref:`nrf_desktop_dfu` and the :ref:`nrf_desktop_dfu_mcumgr`.
 
 nRF52832 Desktop Mouse (nrf52dmouse_nrf52832) and nRF52810 Desktop Mouse (nrf52810dmouse_nrf52810)
       * Both reference designs are meant for the project-specific hardware and are defined in :file:`nrf/boards/arm/nrf52dmouse_nrf52832` and :file:`nrf/boards/arm/nrf52810dmouse_nrf52810`, respectively.
       * The application is configured to act as a mouse.
       * Only the Bluetooth LE transport is enabled.
-        Bluetooth uses Zephyr's software link layer.
-      * There is no configuration with bootloader available.
+        Bluetooth uses either Zephyr's software link layer (nrf52810dmouse_nrf52810) or Nordic's SoftDevice link layer (nrf52dmouse_nrf52832).
+      * The preconfigured build types for both nrf52dmouse_nrf52832 and nrf52810dmouse_nrf52810 boards are without the bootloader due to memory size limits on nrf52810dmouse_nrf52810 board.
 
 Sample mouse, keyboard or dongle (nrf52840dk_nrf52840)
       * The configuration uses the nRF52840 Development Kit.
       * The build types allow to build the application as mouse, keyboard or dongle.
       * Inputs are simulated based on the hardware button presses.
-      * The configuration with bootloader is available.
+      * The configuration with the B0 bootloader is set as default.
+      * The board supports debug :ref:`nrf_desktop_bluetooth_guide_fast_pair` configuration that acts as a mouse (:file:`prj_fast_pair.conf`).
+        The configuration uses the MCUboot bootloader built in the direct-xip mode (``MCUBOOT+XIP``), and supports firmware updates using the :ref:`nrf_desktop_dfu` and the :ref:`nrf_desktop_dfu_mcumgr`.
 
 Sample dongle (nrf52833dk_nrf52833)
       * The configuration uses the nRF52833 Development Kit.
-      * The application is configured to act as both mouse and keyboard.
+      * The application is configured to act as a dongle that forwards data from both mouse and keyboard.
       * Bluetooth uses Nordic's SoftDevice link layer and is configured to act as a central.
         Input data comes from Bluetooth and is retransmitted to USB.
+      * The configuration with the MCUboot bootloader is set as default.
+
+Sample dongle (nrf52833dk_nrf52820)
+      * The configuration uses the nRF52820 emulation on the nRF52833 Development Kit.
+      * The application is configured to act as a dongle that forwards data from both mouse and keyboard.
+      * Bluetooth uses Zephyr's software link layer and is configured to act as a central.
+        Input data comes from Bluetooth and is retransmitted to USB.
+      * |preconfigured_build_types|
 
 nRF52832 Desktop Keyboard (nrf52kbd_nrf52832)
       * The reference design used is defined in :file:`nrf/boards/arm/nrf52kbd_nrf52832` for the project-specific hardware.
       * The application is configured to act as a keyboard, with the Bluetooth LE transport enabled.
       * Bluetooth is configured to use Nordic's SoftDevice link layer.
-      * |preconfigured_build_types|
+      * The preconfigured build types configure the device without the bootloader in debug mode and with B0 bootloader in release mode due to memory size limits.
+      * The board supports release :ref:`nrf_desktop_bluetooth_guide_fast_pair` configuration (:file:`prj_release_fast_pair.conf`).
+        The configuration uses the MCUboot bootloader built in the direct-xip mode (``MCUBOOT+XIP``), and supports firmware updates using the :ref:`nrf_desktop_dfu` and the :ref:`nrf_desktop_dfu_mcumgr`.
 
 nRF52840 USB Dongle (nrf52840dongle_nrf52840) and nRF52833 USB Dongle (nrf52833dongle_nrf52833)
       * Since the nRF52840 Dongle is generic and defined in Zephyr, project-specific changes are applied in the DTS overlay file.
-      * The application is configured to act as both mouse and keyboard.
+      * The application is configured to act as a dongle that forwards data from both mouse and keyboard.
       * Bluetooth uses Nordic's SoftDevice link layer and is configured to act as a central.
         Input data comes from Bluetooth and is retransmitted to USB.
-      * |preconfigured_build_types|
+      * The configuration with the B0 bootloader is set as default for nrf52840dongle_nrf52840 board and with the MCUboot bootloader is set as default for nrf52833dongle_nrf52833 board.
 
 nRF52820 USB Dongle (nrf52820dongle_nrf52820)
-      * The application is configured to act as both mouse and keyboard.
+      * The application is configured to act as a dongle that forwards data from both mouse and keyboard.
       * Bluetooth uses Zephyr's software link layer and is configured to act as a central.
         Input data comes from Bluetooth and is retransmitted to USB.
       * |preconfigured_build_types|
+
+Sample dongle (nrf5340dk_nrf5340)
+      * The application is configured to act as a dongle that forwards data from both mouse and keyboard.
+      * Bluetooth uses Nordic's SoftDevice link layer without LLPM and is configured to act as a central.
+        Input data comes from Bluetooth and is retransmitted to USB.
+      * The configuration with the B0 bootloader is set as default.
 
 .. _porting_guide_adding_board:
 
@@ -984,16 +1197,20 @@ Adding a new board
 ==================
 
 When adding a new board for the first time, focus on a single configuration.
-Moreover, keep the default ``ZDebug`` build type that the application is built with, and do not add any additional build type parameters.
+Moreover, keep the default ``debug`` build type that the application is built with, and do not add any additional build type parameters.
+The following procedure uses the gaming mouse configuration as an example.
+
+Zephyr support for a board
+--------------------------
+
+Before introducing nRF Desktop application configuration for a given board, you need to ensure that the board is supported in Zephyr.
 
 .. note::
-    * The following procedure uses the gaming mouse configuration as an example.
-    * The first three steps of the configuration procedure are identical to the steps described in Zephyr's :ref:`zephyr:board_porting_guide`.
+   You can skip this step if your selected board is already supported in Zephyr.
 
-To use the nRF Desktop application with your custom board:
+Follow the Zephyr's :ref:`zephyr:board_porting_guide` for detailed instructions related to introducing Zephyr support for a new board.
+Make sure that the following conditions are met:
 
-1. Define the reference design by copying the nRF Desktop reference design files that are the closest match for your hardware.
-   For example, for gaming mouse use :file:`nrf/boards/arm/nrf52840gmouse_nrf52840`.
 #. Edit the DTS files to make sure they match the hardware configuration.
    Pay attention to the following elements:
 
@@ -1001,14 +1218,24 @@ To use the nRF Desktop application with your custom board:
    * Bus configuration for optical sensor.
    * `Changing interrupt priority`_.
 
-#. Edit the reference design's Kconfig files to make sure they match the required system configuration.
+#. Edit the board's Kconfig files to make sure they match the required system configuration.
    For example, disable the drivers that will not be used by your device.
-#. Copy the project files for the device that is the closest match for your hardware.
-   For example, for gaming mouse these are located at :file:`applications/nrf_desktop/configure/nrf52840gmouse_nrf52840`.
+
+.. tip::
+   You can define the new board by copying the nRF Desktop reference design files that are the closest match for your hardware and then aligning the configuration to your hardware.
+   For example, for gaming mouse use :file:`nrf/boards/arm/nrf52840gmouse_nrf52840`.
+
+nRF Desktop configuration
+-------------------------
+
+Perform the following steps to add nRF Desktop application configuration for a board that is already supported in Zephyr.
+
+1. Copy the project files for the device that is the closest match for your hardware.
+   For example, for gaming mouse these are located at :file:`applications/nrf_desktop/configuration/nrf52840gmouse_nrf52840`.
 #. Optionally, depending on the reference design, edit the DTS overlay file.
    This step is not required if you have created a new reference design and its DTS files fully describe your hardware.
    In such case, the overlay file can be left empty.
-#. In Kconfig, ensure that the following modules that are specific for gaming mouse are enabled:
+#. In Kconfig, ensure that the following hardware interface modules that are specific for gaming mouse are enabled:
 
    * :ref:`caf_buttons`
    * :ref:`caf_leds`
@@ -1016,7 +1243,7 @@ To use the nRF Desktop application with your custom board:
    * :ref:`nrf_desktop_wheel`
    * :ref:`nrf_desktop_battery_meas`
 
-#. For each module enabled, change its :file:`_def` file to match your hardware.
+#. For each module enabled, change its configuration to match your hardware.
    Apply the following changes, depending on the module:
 
    Motion module
@@ -1034,19 +1261,21 @@ To use the nRF Desktop application with your custom board:
      * The application uses two logical LEDs - one for the peers state, and one for the system state indication.
      * Each of the logical LEDs can have either one (monochromatic) or three color channels (RGB).
        Such color channel is a physical LED.
-     * The project uses Pulse-Width Modulation (PWM) channels to control the brightness of each physical LED.
-       Configure the PWM peripheral in DTS files, and configure the :file:`_def` file of the LEDs module to indicate which PWM channel is assigned to each LED color.
-       Ensure that PWM channels are correctly configured in DTS and PWM driver is enabled in the Kconfig file.
+     * The module uses Zephyr's :ref:`zephyr:led_api` driver for setting the LED color.
+       Zephyr's LED driver can use the implementation based on either GPIO or PWM (Pulse-Width Modulation).
+       The hardware configuration is described through DTS.
+       See the :ref:`caf_leds` configuration section for details.
 
-#. Review Bluetooth options in Kconfig:
+#. Review the :ref:`nrf_desktop_hid_configuration`.
+#. By default, the nRF Desktop device enables Bluetooth connectivity support.
+   Review the :ref:`nrf_desktop_bluetooth_configuration`.
 
    a. Ensure that the Bluetooth role is properly configured.
       For mouse, it should be configured as peripheral.
    #. Update the configuration related to peer control.
-      You can also disable the peer control using the :kconfig:`CONFIG_DESKTOP_BLE_PEER_CONTROL` option.
+      You can also disable the peer control using the :ref:`CONFIG_DESKTOP_BLE_PEER_CONTROL <config_desktop_app_options>` option.
       Peer control details are described in the :ref:`nrf_desktop_ble_bond` documentation.
 
-   Refer to the :ref:`nrf_desktop_bluetooth_guide` section and Zephyr's :ref:`zephyr:bluetooth` page for more detailed information about the Bluetooth configuration.
 #. Edit Kconfig to disable options that you do not use.
    Some options have dependencies that might not be needed when these options are disabled.
    For example, when the LEDs module is disabled, the PWM driver is not needed.
@@ -1064,53 +1293,58 @@ While |NCS| provides support for two motion sensor drivers (PMW3360 and PAW3212)
 
 Complete the steps described in the following sections to add a new motion sensor.
 
-1. Add a new sensor driver
---------------------------
+.. rst-class:: numbered-step
+
+Add a new sensor driver
+-----------------------
 
 First, create a new motion sensor driver that will provide code for communication with the sensor.
 Use the two existing |NCS| sensor drivers as an example.
 
 The communication between the application and the sensor is done through a sensor driver API (see :ref:`sensor_api`).
-For motion module to work correctly, the driver must support a trigger (see ``sensor_trigger_set``) on a new data (see ``SENSOR_TRIG_DATA_READY`` trigger type).
+For the motion module to work correctly, the driver must support a trigger (see ``sensor_trigger_set``) on a new data (see ``SENSOR_TRIG_DATA_READY`` trigger type).
 
-When motion data is ready, the driver calls a registered callback.
+When the motion data is ready, the driver calls a registered callback.
 The application starts a process of retrieving a motion data sample.
 The motion module calls ``sensor_sample_fetch`` and then ``sensor_channel_get`` on two sensor channels, ``SENSOR_CHAN_POS_DX`` and ``SENSOR_CHAN_POS_DY``.
 The driver must support these two channels.
 
-2. Create a DTS binding
------------------------
+.. rst-class:: numbered-step
+
+Create a DTS binding
+--------------------
 
 Zephyr recommends to use DTS for hardware configuration (see :ref:`zephyr:dt_vs_kconfig`).
 For the new motion sensor configuration to be recognized by DTS, define a dedicated DTS binding.
 See :ref:`dt-bindings` for more information, and refer to :file:`dts/bindings/sensor` for binding examples.
 
-3. Configure sensor through DTS
--------------------------------
+.. rst-class:: numbered-step
+
+Configure sensor through DTS
+----------------------------
 
 Once binding is defined, it is possible to set the sensor configuration.
 This is done by editing the DTS file that describes the board.
 For more information, see :ref:`devicetree-intro`.
 
 As an example, take a look at the PMW3360 sensor that already exists in |NCS|.
-The following code excerpt is taken from :file:`boards/arm/nrf52840gmouse_nrf52840/nrf52840gmouse_nrf52840.dts`.
+The following code excerpt is taken from :file:`boards/arm/nrf52840gmouse_nrf52840/nrf52840gmouse_nrf52840.dts`:
 
 .. code-block:: none
 
    &spi1 {
    	compatible = "nordic,nrf-spim";
    	status = "okay";
-   	sck-pin = <16>;
-   	mosi-pin = <17>;
-   	miso-pin = <15>;
    	cs-gpios = <&gpio0 13 0>;
 
+	pinctrl-0 = <&spi1_default_alt>;
+	pinctrl-1 = <&spi1_sleep_alt>;
+	pinctrl-names = "default", "sleep";
    	pmw3360@0 {
    		compatible = "pixart,pmw3360";
    		reg = <0>;
    		irq-gpios = <&gpio0 21 0>;
    		spi-max-frequency = <2000000>;
-   		label = "PMW3360";
    	};
    };
 
@@ -1133,7 +1367,7 @@ The following options are inherited from the ``spi-device`` binding and are comm
 
   .. note::
       To achieve the full speed, data must be propagated through the application and reach Bluetooth LE a few hundred microseconds before the subsequent connection event.
-      If you aim for the lowest latency through the LLPM (a 1-ms interval), the sensor data readout should take no more than 250 us.
+      If you aim for the lowest latency through the LLPM (an interval of 1 ms), the sensor data readout should take no more than 250 us.
       The bus and the sensor configuration must ensure that communication speed is fast enough.
 
 The remaining option ``irq-gpios`` is specific to ``pixart,pmw3360`` binding.
@@ -1141,8 +1375,10 @@ It refers to the PIN to which the motion sensor IRQ line is connected.
 
 If a different kind of bus is used for the new sensor, the DTS layout will be different.
 
-4. Include sensor in the application
-------------------------------------
+.. rst-class:: numbered-step
+
+Include sensor in the application
+---------------------------------
 
 Once the new sensor is supported by |NCS| and board configuration is updated, you can include it in the nRF Desktop application.
 
@@ -1158,8 +1394,10 @@ You can translate the new sensor-specific attributes to a generic abstraction by
     If an attribute is not supported by the sensor, it does not have to be defined.
     In such case, set the attribute to ``-ENOTSUP``.
 
-5. Select the new sensor
-------------------------
+.. rst-class:: numbered-step
+
+Select the new sensor
+---------------------
 
 The application can now use the new sensor.
 Edit the application configuration files for your board to enable it.
@@ -1177,14 +1415,14 @@ Changing interrupt priority
 You can edit the DTS files to change the priority of the peripheral's interrupt.
 This can be useful when :ref:`adding a new custom board <porting_guide_adding_board>` or whenever you need to change the interrupt priority.
 
-The ``interrupts`` property is an array, where meaning of each element is defined by the specification of the interrupt controller.
+The ``interrupts`` property is an array, where the meaning of each element is defined by the specification of the interrupt controller.
 These specification files are located at :file:`zephyr/dts/bindings/interrupt-controller/` DTS binding file directory.
 
 For example, for nRF52840 the file is :file:`arm,v7m-nvic.yaml`.
 This file defines ``interrupts`` property in the ``interrupt-cells`` list.
-In case of nRF52840, it contains two elements: ``irq`` and ``priority``.
+For nRF52840, it contains two elements: ``irq`` and ``priority``.
 The default values for these elements for the given peripheral can be found in the :file:`dtsi` file specific for the device.
-In case of nRF52840, this is :file:`zephyr/dts/arm/nordic/nrf52840.dtsi`, which has the following ``interrupts`` property for nRF52840:
+In the case of nRF52840, this is :file:`zephyr/dts/arm/nordic/nrf52840.dtsi`, which has the following ``interrupts``:
 
 .. code-block::
 
@@ -1201,7 +1439,6 @@ In case of nRF52840, this is :file:`zephyr/dts/arm/nordic/nrf52840.dtsi`, which 
            reg = <0x40004000 0x1000>;
            interrupts = <4 1>;
            status = "disabled";
-           label = "SPI_1";
    };
 
 To change the priority of the peripheral's interrupt, override the ``interrupts`` property of the peripheral node by including the following code snippet in the :file:`dts.overlay` or directly in the board DTS:
@@ -1219,10 +1456,10 @@ This code snippet will change the **SPI1** interrupt priority from default ``1``
 Flash memory layout
 ===================
 
-Depending on whether the bootloader is enabled, the partition layout on the flash memory is set by defining one of the following options:
+The flash memory is set by defining one of the following options:
 
 * `Memory layout in DTS`_ (bootloader is not enabled)
-* `Memory layout in partition manager`_ (bootloader is enabled)
+* `Memory layout in partition manager`_ (either bootloader or :ref:`nrf_desktop_bluetooth_guide_fast_pair` is enabled)
 
 The set of required partitions differs depending on configuration:
 
@@ -1248,8 +1485,8 @@ Since the nRF Desktop application uses the partition manager when the bootloader
 
 .. important::
     By default, Zephyr does not use the code partition defined in the DTS files.
-    It is only used if :kconfig:`CONFIG_USE_DT_CODE_PARTITION` is enabled.
-    If this option is disabled, the code is loaded at the address defined by :kconfig:`CONFIG_FLASH_LOAD_OFFSET` and can spawn for :kconfig:`CONFIG_FLASH_LOAD_SIZE` (or for the whole flash if the load size is set to zero).
+    It is only used if :kconfig:option:`CONFIG_USE_DT_CODE_PARTITION` is enabled.
+    If this option is disabled, the code is loaded at the address defined by :kconfig:option:`CONFIG_FLASH_LOAD_OFFSET` and can spawn for :kconfig:option:`CONFIG_FLASH_LOAD_SIZE` (or for the whole flash if the load size is set to zero).
 
 Because the nRF Desktop application depends on the DTS layout only for configurations without the bootloader, only the settings partition is relevant in such cases and other partitions are ignored.
 
@@ -1261,15 +1498,22 @@ Memory layout in partition manager
 When the bootloader is enabled, the nRF Desktop application uses the partition manager for the layout configuration of the flash memory.
 The nRF Desktop configurations with bootloader use static configurations of partitions to ensure that the partition layout will not change between builds.
 
-Add the :file:`pm_static_${CMAKE_BUILD_TYPE}.yml` file to the project's board configuration directory to define the static partition manager configuration for given board and build type.
+Add the :file:`pm_static_${BUILD_TYPE}.yml` file to the project's board configuration directory to define the static partition manager configuration for given board and build type.
+For example, to define the static partition layout for the nrf52840dk_nrf52840 board and ``release`` build type, you would need to add the :file:`pm_static_release.yml` file into the :file:`applicatons/nrf_desktop/configuration/nrf52840dk_nrf52840` directory.
+
 Take into account the following points:
 
 * For the :ref:`background firmware upgrade <nrf_desktop_bootloader_background_dfu>`, you must define the secondary image partition.
   This is because the update image is stored on the secondary image partition while the device is running firmware from the primary partition.
+  For this reason, the feature is not available for devices with smaller flash size, because the size of the required flash memory is essentially doubled.
+  The devices with smaller flash size can use either USB serial recovery or the MCUboot bootloader with the secondary image partition located on an external flash.
 * When you use :ref:`USB serial recovery <nrf_desktop_bootloader_serial_dfu>`, you do not need the secondary image partition.
   The firmware image is overwritten by the bootloader.
 
+For an example of configuration, see the static partition maps defined for the existing configuration that uses a given DFU method.
 For more information about how to configure the flash memory layout using the partition manager, see :ref:`partition_manager`.
+
+.. _nrf_desktop_pm_external_flash:
 
 External flash configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1280,7 +1524,7 @@ Enabling external flash can be useful especially for memory-limited devices.
 For example, the MCUboot can use it as a secondary image partition for the :ref:`background firmware upgrade <nrf_desktop_bootloader_background_dfu>`.
 The MCUboot moves the image data from the secondary image partition to the primary image partition before booting the new firmware.
 
-For an example of the nRF Desktop application configuration that uses an external flash, see the ``ZDebugMCUBootQSPI`` configuration of the nRF52840 Development Kit.
+For an example of the nRF Desktop application configuration that uses an external flash, see the ``mcuboot_qspi`` configuration of the nRF52840 Development Kit.
 This configuration uses the ``MX25R64`` external flash that is part of the development kit.
 
 For detailed information, see the :ref:`partition_manager` documentation.
@@ -1293,23 +1537,31 @@ Bluetooth in nRF Desktop
 The nRF Desktop devices use :ref:`Zephyr's Bluetooth API <zephyr:bluetooth>` to handle the Bluetooth LE connections.
 
 This API is used only by the application modules that handle such connections.
-The information about peer and connection state is propagated to other application modules using :ref:`event_manager` events.
+The information about peer and connection state is propagated to other application modules using :ref:`app_event_manager` events.
 
-The nRF Desktop devices come in the following types:
+The :ref:`CONFIG_DESKTOP_BT <config_desktop_app_options>` Kconfig option enables support for Bluetooth connectivity in the nRF Desktop.
+Specific Bluetooth configurations and application modules are selected or implied according to the HID device role.
+Apart from that, the defaults of Bluetooth-related Kconfigs are aligned with the nRF Desktop use case.
 
-* Peripheral devices (mouse or keyboard)
+The nRF Desktop devices come in the following roles:
 
-  * Support only the Bluetooth Peripheral role (:kconfig:`CONFIG_BT_PERIPHERAL`).
+* HID peripheral (:ref:`CONFIG_DESKTOP_ROLE_HID_PERIPHERAL <config_desktop_app_options>`) that works as Bluetooth Peripheral (:ref:`CONFIG_DESKTOP_BT_PERIPHERAL <config_desktop_app_options>`)
+
+  * Support only the Bluetooth Peripheral role (:kconfig:option:`CONFIG_BT_PERIPHERAL`).
   * Handle only one Bluetooth LE connection at a time.
   * Use more than one Bluetooth local identity.
 
-* Central devices (dongle)
+* HID dongle (:ref:`CONFIG_DESKTOP_ROLE_HID_DONGLE <config_desktop_app_options>`) that works as Bluetooth Central (:ref:`CONFIG_DESKTOP_BT_CENTRAL <config_desktop_app_options>`)
 
-  * Support only the Bluetooth Central role (:kconfig:`CONFIG_BT_CENTRAL`).
+  * Support only the Bluetooth Central role (:kconfig:option:`CONFIG_BT_CENTRAL`).
   * Handle multiple Bluetooth LE connections simultaneously.
   * Use only one Bluetooth local identity (the default one).
 
 Both central and peripheral devices have dedicated configuration options and use dedicated modules.
+
+The nRF Desktop peripheral configurations that enable `Fast Pair`_ support use slightly different Bluetooth configuration.
+This is needed to improve the user experience.
+See :ref:`nrf_desktop_bluetooth_guide_fast_pair` for more details.
 
 .. note::
     There is no nRF Desktop device that supports both central and peripheral roles.
@@ -1327,12 +1579,13 @@ Configuration options
 This section describes the most important Bluetooth Kconfig options common for all nRF Desktop devices.
 For detailed information about every option, see the Kconfig help.
 
-* :kconfig:`CONFIG_BT_MAX_PAIRED`
+* :kconfig:option:`CONFIG_BT_MAX_PAIRED`
 
   * nRF Desktop central: The maximum number of paired devices is greater than or equal to the maximum number of simultaneously connected peers.
+    The :kconfig:option:`CONFIG_BT_MAX_PAIRED` is by default set to :ref:`CONFIG_DESKTOP_HID_DONGLE_BOND_COUNT <config_desktop_app_options>`.
   * nRF Desktop peripheral: The maximum number of paired devices is equal to the number of peers plus one, where the one additional paired device slot is used for erase advertising.
 
-* :kconfig:`CONFIG_BT_ID_MAX`
+* :kconfig:option:`CONFIG_BT_ID_MAX`
 
   * nRF Desktop central: The device uses only one Bluetooth local identity, that is the default one.
   * nRF Desktop peripheral: The number of Bluetooth local identities must be equal to the number of peers plus two.
@@ -1341,9 +1594,10 @@ For detailed information about every option, see the Kconfig help.
     * The other additional local identity is the default local identity, which is unused, because it cannot be reset after removing the bond.
       Without the identity reset, the previously bonded central could still try to reconnect after being removed from Bluetooth bonds on the peripheral side.
 
-* :kconfig:`CONFIG_BT_MAX_CONN`
+* :kconfig:option:`CONFIG_BT_MAX_CONN`
 
-  * nRF Desktop central: Set the option to the maximum number of simultaneously connected devices.
+  * nRF Desktop central: This option is set to the maximum number of simultaneously connected devices.
+    The :kconfig:option:`CONFIG_BT_MAX_CONN` is by default set to :ref:`CONFIG_DESKTOP_HID_DONGLE_CONN_COUNT <config_desktop_app_options>`.
   * nRF Desktop peripheral: The default value (one) is used.
 
 .. note::
@@ -1357,22 +1611,23 @@ Link Layer configuration options
 
 The nRF Desktop devices use one of the following Link Layers:
 
-* :kconfig:`CONFIG_BT_LL_SW_SPLIT`
+* :kconfig:option:`CONFIG_BT_LL_SW_SPLIT`
     This Link Layer does not support the Low Latency Packet Mode (LLPM) and has a lower memory usage, so it can be used by memory-limited devices.
 
-* :kconfig:`CONFIG_BT_LL_SOFTDEVICE`
+* :kconfig:option:`CONFIG_BT_LL_SOFTDEVICE`
     This Link Layer does support the Low Latency Packet Mode (LLPM).
-    If you opt for this Link Layer and enable the :kconfig:`CONFIG_BT_CTLR_LLPM`, the :kconfig:`CONFIG_CAF_BLE_USE_LLPM` is also enabled by default and can be configured further:
+    If you opt for this Link Layer and enable the :kconfig:option:`CONFIG_BT_CTLR_SDC_LLPM`, the :kconfig:option:`CONFIG_CAF_BLE_USE_LLPM` is also enabled by default and can be configured further:
 
-    * When :kconfig:`CONFIG_CAF_BLE_USE_LLPM` is enabled, set the value for :kconfig:`CONFIG_SDC_MAX_CONN_EVENT_LEN_DEFAULT` to ``3000``.
+    * When :kconfig:option:`CONFIG_CAF_BLE_USE_LLPM` is enabled, set the value for :kconfig:option:`CONFIG_BT_CTLR_SDC_MAX_CONN_EVENT_LEN_DEFAULT` to ``3000``.
 
       This is required by the nRF Desktop central and helps avoid scheduling conflicts with Bluetooth Link Layer.
       Such conflicts could lead to a drop in HID input report rate or a disconnection.
-      Setting the value to ``3000`` also enables the nRF Desktop central to exchange data with up to 2 standard Bluetooth LE peripherals during every connection interval (every 7.5 ms).
+      Because of this, if the nRF Desktop central supports LLPM and more than one simultaneous Bluetooth connection, it also uses 10 ms connection interval instead of 7.5 ms.
+      Setting the value of :kconfig:option:`CONFIG_BT_CTLR_SDC_MAX_CONN_EVENT_LEN_DEFAULT` to ``3000`` also enables the nRF Desktop central to exchange data with up to 3 standard Bluetooth LE peripherals during every connection interval (every 10 ms).
 
-    * When :kconfig:`CONFIG_CAF_BLE_USE_LLPM` is disabled, the device will use only standard Bluetooth LE connection parameters with the lowest available connection interval of 7.5 ms.
+    * When :kconfig:option:`CONFIG_CAF_BLE_USE_LLPM` is disabled, the device will use only standard Bluetooth LE connection parameters with the lowest available connection interval of 7.5 ms.
 
-      If the LLPM is disabled and more than 2 simultaneous Bluetooth connections are supported (:kconfig:`CONFIG_BT_MAX_CONN`), you can set the value for :kconfig:`CONFIG_SDC_MAX_CONN_EVENT_LEN_DEFAULT` to ``2500``.
+      If the LLPM is disabled and more than 2 simultaneous Bluetooth connections are supported (:kconfig:option:`CONFIG_BT_MAX_CONN`), you can set the value for :kconfig:option:`CONFIG_BT_CTLR_SDC_MAX_CONN_EVENT_LEN_DEFAULT` to ``2500``.
       With this value, the nRF Desktop central is able to exchange the data with up to 3 Bluetooth LE peripherals during every 7.5-ms connection interval.
       Using the value of ``3000`` for more than 2 simultaneous Bluetooth LE connections will result in a lower HID input report rate.
 
@@ -1396,7 +1651,7 @@ Optionally, you can also enable the following module:
   The module can be used only with the SoftDevice Link Layer.
 
 .. note::
-   The nRF Destkop devices enable :kconfig:`CONFIG_BT_SETTINGS`.
+   The nRF Desktop devices enable :kconfig:option:`CONFIG_BT_SETTINGS`.
    When this option is enabled, the application is responsible for calling the :c:func:`settings_load` function - this is handled by the :ref:`nrf_desktop_settings_loader`.
 
 .. _nrf_desktop_bluetooth_guide_peripheral:
@@ -1410,7 +1665,8 @@ The HID over GATT profile specification requires Bluetooth Peripherals to define
 
 * HID Service - Handled in the :ref:`nrf_desktop_hids`.
 * Battery Service - Handled in the :ref:`nrf_desktop_bas`.
-* Device Information Service - Implemented in Zephyr and enabled with :kconfig:`CONFIG_BT_DIS`.
+* Device Information Service - Implemented in Zephyr and enabled with :kconfig:option:`CONFIG_BT_DIS`.
+  The device identifiers are configured according to the common :ref:`nrf_desktop_hid_device_identifiers` by default.
   It can be configured using Kconfig options with the ``CONFIG_BT_DIS`` prefix.
 
 The nRF Desktop peripherals must also define a dedicated GATT Service, which is used to provide the following information:
@@ -1423,7 +1679,7 @@ The GATT Service is implemented by the :ref:`nrf_desktop_dev_descr`.
 Apart from the GATT Services, an nRF Desktop peripheral device must enable and configure the following application modules:
 
 * :ref:`nrf_desktop_ble_adv` - Controls the Bluetooth advertising.
-* :ref:`nrf_desktop_ble_latency` - Keeps the connection latency low when the :ref:`nrf_desktop_config_channel` is being used or when an update image is being received by the :ref:`nrf_desktop_ble_smp`.
+* :ref:`nrf_desktop_ble_latency` - Keeps the connection latency low when the :ref:`nrf_desktop_config_channel` is used or when either the :ref:`nrf_desktop_ble_smp` or :ref:`nrf_desktop_dfu_mcumgr` receive an update image.
   This is done to ensure quick data transfer.
 
 Optionally, you can also enable the following module:
@@ -1433,6 +1689,56 @@ Optionally, you can also enable the following module:
   The Bluetooth Central can apply the channel map to avoid congested RF channels.
   This results in better connection quality and higher report rate.
 
+.. _nrf_desktop_bluetooth_guide_fast_pair:
+
+Fast Pair
+~~~~~~~~~
+
+The nRF Desktop peripheral can be built with Google `Fast Pair`_ support.
+The configurations that enable Fast Pair are set in the :file:`prj_fast_pair.conf` and :file:`prj_release_fast_pair.conf` files.
+
+.. note::
+   The Fast Pair integration in the nRF Desktop is :ref:`experimental <software_maturity>`.
+   The factory reset of the Fast Pair non-volatile data is not yet supported.
+
+   The Fast Pair support in the |NCS| is :ref:`experimental <software_maturity>`.
+   See :ref:`ug_bt_fast_pair` for details.
+
+These configurations support multiple bonds per Bluetooth local identity (:kconfig:option:`CONFIG_CAF_BLE_STATE_MAX_LOCAL_ID_BONDS` is set to ``3``) and erase advertising (:ref:`CONFIG_DESKTOP_BLE_PEER_ERASE <config_desktop_app_options>`), but Bluetooth peer selection (:ref:`CONFIG_DESKTOP_BLE_PEER_SELECT <config_desktop_app_options>`) is disabled.
+You can now pair with your other hosts without putting peripheral back in pairing mode (without triggering the erase advertising).
+The nRF Desktop peripheral that integrates Fast Pair behaves as follows:
+
+  * The dongle peer does not use the Fast Pair advertising payload.
+  * The bond erase operation is enabled for the dongle peer.
+    This will let you change the bonded Bluetooth Central.
+  * If the dongle peer (:ref:`CONFIG_DESKTOP_BLE_DONGLE_PEER_ENABLE <config_desktop_app_options>`) is enabled, the `Swift Pair`_ payload is, by default, included only for the mentioned peer.
+    In the Fast Pair configurations, the dongle peer is intended to be used for all of the peers that are not Fast Pair Seekers.
+  * If the used Bluetooth local identity has no bonds, the device advertises in pairing mode, and the Fast Pair discoverable advertising is used.
+    This allows to pair with the nRF Desktop device using both Fast Pair and normal Bluetooth pairing flows.
+    This advertising payload is also used during the erase advertising.
+  * If the used Bluetooth local identity already has a bond, the device is no longer in the pairing mode and the Fast Pair not discoverable advertising is used.
+    This allows to pair only with the Fast Pair Seekers linked to Google Accounts that are already associated with the nRF Desktop device.
+    In this mode the device by default rejects normal Bluetooth pairing (:ref:`CONFIG_DESKTOP_FAST_PAIR_LIMIT_NORMAL_PAIRING <config_desktop_app_options>` option is enabled).
+    The Fast Pair UI indication is hidden after the Provider reaches :kconfig:option:`CONFIG_CAF_BLE_STATE_MAX_LOCAL_ID_BONDS` bonded peers on the used local identity.
+  * The :ref:`nrf_desktop_factory_reset` is enabled by default if the :ref:`nrf_desktop_config_channel` is supported by the device.
+    The factory reset operation removes both Fast Pair and Bluetooth non-volatile data.
+    The factory reset operation is triggered using the configuration channel.
+
+After successful erase advertising procedure, the peripheral removes all of the bonds of a given Bluetooth local identity.
+
+Apart from that, the following changes are applied in configurations that support Fast Pair:
+
+* The static :ref:`partition_manager` configuration is modified to introduce a dedicated flash partition used to store the Fast Pair provisioning data.
+* Bluetooth privacy feature (:kconfig:option:`CONFIG_BT_PRIVACY`) is enabled.
+* The fast and slow advertising intervals defined in the :ref:`nrf_desktop_ble_adv` are aligned with Fast Pair expectations.
+* The Bluetooth advertising filter accept list (:kconfig:option:`CONFIG_CAF_BLE_ADV_FILTER_ACCEPT_LIST`) is disabled to allow Fast Pair Seekers other than the bonded one to connect outside of the pairing mode.
+* The security failure timeout (:ref:`CONFIG_DESKTOP_BLE_SECURITY_FAIL_TIMEOUT_S <config_desktop_app_options>`) is longer to prevent disconnections during the Fast Pair procedure.
+* Passkey authentication (:ref:`CONFIG_DESKTOP_BLE_ENABLE_PASSKEY <config_desktop_app_options>`) is disabled on keyboard.
+  Fast Pair currently does not support devices that use screen or keyboard for Bluetooth authentication.
+* TX power correction value (:kconfig:option:`CONFIG_BT_ADV_PROV_TX_POWER_CORRECTION_VAL`) is configured to align the TX power included in the advertising data with the Fast Pair expectations.
+
+See :ref:`ug_bt_fast_pair` for detailed information about Fast Pair support in the |NCS|.
+
 Bluetooth Central
 -----------------
 
@@ -1441,7 +1747,7 @@ The central must also control the Bluetooth connection parameters.
 These features are implemented by the following application modules:
 
 * :ref:`nrf_desktop_ble_scan` - Controls the Bluetooth scanning.
-* :ref:`nrf_desktop_ble_conn_params` - Control the Bluetooth connection parameters and react on connection slave latency update requests received from the connected peripherals.
+* :ref:`nrf_desktop_ble_conn_params` - Controls the Bluetooth connection parameters and reacts on latency update requests received from the connected peripherals.
 * :ref:`nrf_desktop_ble_discovery` - Handles discovering and reading the GATT Characteristics from the connected peripheral.
 * :ref:`nrf_desktop_hid_forward` - Subscribes for HID reports from the Bluetooth Peripherals (HID over GATT) and forwards data using application events.
 
@@ -1463,18 +1769,22 @@ The nRF Desktop application can use one of the following bootloaders:
   The MCUboot bootloader can be used in the following scenarios:
 
   * :ref:`Background DFU <nrf_desktop_bootloader_background_dfu>`.
-    In this scenario, the MCUboot swaps the application images located on the secondary and primary slot before booting the new image.
-    Because of this, the image is not booted directly from the secondary image slot.
-    The swap operation takes additional time, but an external FLASH can be used as the secondary image slot.
+    In this scenario, the MCUboot either swaps the application images located on the secondary and primary slot before booting a new image (``swap mode``) or boots a new application image directly from the secondary image slot (``direct-xip mode``).
+    The swap operation significantly increases boot time after a successful image transfer, but an external flash can be used as the secondary image slot.
 
     You can use the MCUboot for the background DFU through the :ref:`nrf_desktop_config_channel` and :ref:`nrf_desktop_dfu`.
     The MCUboot can also be used for the background DFU over Simple Management Protocol (SMP).
-    The SMP can be used to transfer the new firmware image in the background from an Android device.
-    In that case, the :ref:`nrf_desktop_ble_smp` is used to handle the image transfer.
+    The SMP can be used to transfer the new firmware image in the background, for example, from an Android device.
+    In that case, either the :ref:`nrf_desktop_ble_smp` or :ref:`nrf_desktop_dfu_mcumgr` is used to handle the image transfer.
+    The :ref:`nrf_desktop_ble_smp` relies on a generic module implemented in the Common Application Framework (CAF).
+    The :ref:`nrf_desktop_dfu_mcumgr` uses an application-specific implementation that allows to synchronize a secondary image slot access with the :ref:`nrf_desktop_dfu` using the :ref:`nrf_desktop_dfu_lock`.
 
   * :ref:`USB serial recovery <nrf_desktop_bootloader_serial_dfu>`.
     In this scenario, the MCUboot bootloader supports the USB serial recovery.
     The USB serial recovery can be used for memory-limited devices that support the USB connection.
+    In this mode, unlike in the background DFU mode, the DFU image transfer is handled by the bootloader.
+    The application is not running and it can be overwritten.
+    Because of that, only one application slot may be used.
 
   For more information about the MCUboot, see the :ref:`MCUboot <mcuboot:mcuboot_wrapper>` documentation.
 
@@ -1486,30 +1796,100 @@ The nRF Desktop application can use one of the following bootloaders:
     Make sure that you use your own private key for the release version of the devices.
     Do not use the debug key for production.
 
+If your configuration enables the bootloader, make sure to define a static flash memory layout in the Partition Manager.
+See :ref:`nrf_desktop_flash_memory_layout` documentation section for details.
+
 Configuring the B0 bootloader
 -----------------------------
 
-To enable the B0 bootloader, select the :kconfig:`CONFIG_SECURE_BOOT` Kconfig option.
+To enable the B0 bootloader, select the :kconfig:option:`CONFIG_SECURE_BOOT` Kconfig option in the application configuration.
 
-The B0 bootloader requires the following options enabled:
+The B0 bootloader additionally requires enabling the following options in the application configuration:
 
-* :kconfig:`CONFIG_SB_SIGNING_KEY_FILE` - Required for providing the signature used for image signing and verification.
-* :kconfig:`CONFIG_FW_INFO` - Required for the application versioning information.
-* :kconfig:`CONFIG_FW_INFO_FIRMWARE_VERSION` - Enable this option to set the version of the application after you enabled :kconfig:`CONFIG_FW_INFO`.
-* :kconfig:`CONFIG_BUILD_S1_VARIANT` - Required for the build system to be able to construct the application binaries for both application's slots in flash memory.
+* :kconfig:option:`CONFIG_SB_SIGNING_KEY_FILE` - Required for providing the signature used for image signing and verification.
+* :kconfig:option:`CONFIG_FW_INFO` - Required for the application versioning information.
+* :kconfig:option:`CONFIG_FW_INFO_FIRMWARE_VERSION` - Enable this option to set the version of the application after you enabled :kconfig:option:`CONFIG_FW_INFO`.
+  The nRF Desktop application with the B0 bootloader configuration builds two application images: one for the S0 slot and the other for the S1 slot.
+  To generate the DFU package, you need to update this configuration only in the main application image as the ``s1_image`` child image mirrors it.
+  You can do that by rebuilding the application from scratch or by changing the configuration of the main image through menuconfig.
+* :kconfig:option:`CONFIG_BUILD_S1_VARIANT` - Required for the build system to be able to construct the application binaries for both application's slots in flash memory.
+
+.. _nrf_desktop_configuring_mcuboot_bootloader:
 
 Configuring the MCUboot bootloader
 ----------------------------------
 
-To enable the MCUboot bootloader, select the :kconfig:`CONFIG_BOOTLOADER_MCUBOOT` Kconfig option.
+To enable the MCUboot bootloader, select the :kconfig:option:`CONFIG_BOOTLOADER_MCUBOOT` Kconfig option in the application configuration.
 
-Configure the MCUboot bootloader with the following options:
+The MCUboot private key path (:kconfig:option:`CONFIG_BOOT_SIGNATURE_KEY_FILE`) must be set only in the MCUboot bootloader configuration file.
+The key is used both by the build system (to sign the application update images) and by the bootloader (to verify the application signature using public key derived from the selected private key).
 
-* ``CONFIG_BOOT_SIGNATURE_KEY_FILE`` - This option defines the path to the private key that is used to sign the application and that is used by the bootloader to verify the application signature.
-  The key must be defined only in the MCUboot bootloader configuration file.
-* :kconfig:`CONFIG_IMG_MANAGER` and :kconfig:`CONFIG_MCUBOOT_IMG_MANAGER` - These options allow the application to manage the DFU image.
-  Enable both of them only for configurations that support :ref:`background DFU <nrf_desktop_bootloader_background_dfu>`.
-  For these configurations, the :ref:`nrf_desktop_dfu` uses the provided API to request firmware upgrade and confirm the running image.
+The MCUboot bootloader configuration depends on the selected way of performing image upgrade.
+For detailed information about the available MCUboot bootloader modes, see the following sections.
+
+Swap mode
+~~~~~~~~~
+
+In the swap mode, the MCUboot bootloader moves the image to the primary slot before booting it.
+The swap mode is the image upgrade mode used by default for the :ref:`background DFU <nrf_desktop_bootloader_background_dfu>`.
+
+If the swap mode is used, the application must request firmware upgrade and confirm the running image.
+For this purpose, make sure to enable :kconfig:option:`CONFIG_IMG_MANAGER` and :kconfig:option:`CONFIG_MCUBOOT_IMG_MANAGER` Kconfig options in the application configuration.
+These options allow the :ref:`nrf_desktop_dfu`, :ref:`nrf_desktop_ble_smp`, and :ref:`nrf_desktop_dfu_mcumgr` to manage the DFU image.
+
+.. note::
+  When the MCUboot bootloader is in the swap mode, it can use a secondary image slot located on the external flash.
+  For details on using an external flash for the secondary image slot, see the :ref:`nrf_desktop_pm_external_flash` section.
+
+Direct-xip mode
+~~~~~~~~~~~~~~~
+
+The direct-xip mode is used for the :ref:`background DFU <nrf_desktop_bootloader_background_dfu>`.
+In this mode, the MCUboot bootloader boots an image directly from a given slot, so the swap operation is not needed.
+Make sure to enable the :kconfig:option:`CONFIG_BOOT_BUILD_DIRECT_XIP_VARIANT` Kconfig option in the application configuration to build application update images for both slots.
+
+Enable the ``CONFIG_BOOT_DIRECT_XIP`` Kconfig option in the bootloader configuration to make the MCUboot run the image directly from both image slots.
+The nRF Desktop's bootloader configurations do not enable the revert mechanism (``CONFIG_BOOT_DIRECT_XIP_REVERT``).
+When the direct-xip mode is enabled (the :kconfig:option:`CONFIG_BOOT_BUILD_DIRECT_XIP_VARIANT` Kconfig option is set in the application configuration), the application modules that control the DFU transport do not request firmware upgrades and do not confirm the running image.
+In that scenario, the MCUboot bootloader simply boots the image with the higher image version.
+
+By default, the MCUboot bootloader ignores the build number while comparing image versions.
+Enable the ``CONFIG_BOOT_VERSION_CMP_USE_BUILD_NUMBER`` Kconfig option in the bootloader configuration to use the build number while comparing image versions.
+To apply the same option for the :ref:`nrf_desktop_ble_smp` or :ref:`nrf_desktop_dfu_mcumgr`, enable the :kconfig:option:`CONFIG_MCUMGR_GRP_IMG_VERSION_CMP_USE_BUILD_NUMBER` Kconfig option in the application configuration.
+
+It is recommended to also enable the :kconfig:option:`CONFIG_MCUMGR_GRP_IMG_REJECT_DIRECT_XIP_MISMATCHED_SLOT` Kconfig option in the application configuration to make sure that MCUmgr rejects application image updates with invalid start address.
+This prevents uploading an update image build for improper slot through the MCUmgr's Simple Management Protocol (SMP).
+
+Serial recovery mode
+~~~~~~~~~~~~~~~~~~~~
+
+In the :ref:`USB serial recovery <nrf_desktop_bootloader_serial_dfu>` mode, the MCUboot bootloader uses a built-in foreground DFU transport over serial interface through USB.
+The application is not involved in the foreground DFU transport, therefore it can be directly overwritten by the bootloader.
+Because of that, the configuration with the serial recovery mode requires only a single application slot.
+
+Enable the USB serial recovery DFU using the following configuration options:
+
+* ``CONFIG_MCUBOOT_SERIAL`` - This option enables the serial recovery DFU.
+* ``CONFIG_BOOT_SERIAL_CDC_ACM`` - This option enables the serial interface through USB.
+
+  .. note::
+    Make sure to enable and properly configure the USB subsystem in the bootloader configuration.
+    See :ref:`usb_api` for more information.
+
+If the predefined button is pressed during the boot, the MCUboot bootloader enters the serial recovery mode instead of booting the application.
+The GPIO pin used to trigger the serial recovery mode is configured using Devicetree Specification (DTS).
+The pin is configured with the ``mcuboot-button0`` alias.
+The ``mcuboot-led0`` alias can be used to define the LED activated in the serial recovery mode.
+The ``CONFIG_MCUBOOT_INDICATION_LED`` Kconfig option must be selected to enable the LED.
+By default, both the GPIO pin and the LED are defined in the board's DTS file.
+See :file:`boards/arm/nrf52833dongle_nrf52833/nrf52833dongle_nrf52833.dts` for an example of board's DTS file used by the nRF Desktop application.
+
+For an example of bootloader Kconfig configuration file defined by the application, see the MCUboot bootloader debug configuration defined for nRF52833 dongle (:file:`applications/nrf_desktop/configuration/nrf52833dongle_nrf52833/child_image/mcuboot/prj.conf`).
+
+.. note::
+  The nRF Desktop devices use either the serial recovery DFU with a single application slot or the background DFU.
+  Both mentioned firmware upgrade methods are not used simultaneously by any of the configurations.
+  For example, the ``nrf52840dk_nrf52840`` board in ``prj_mcuboot_smp.conf`` uses only the background DFU and does not enable the serial recovery feature.
 
 .. _nrf_desktop_bootloader_background_dfu:
 
@@ -1517,34 +1897,26 @@ Background Device Firmware Upgrade
 ==================================
 
 The nRF Desktop application uses the :ref:`nrf_desktop_config_channel` and :ref:`nrf_desktop_dfu` for the background DFU process.
+From the application perspective, the update image transfer during the background DFU process is very similar for both MCUboot and B0 bootloader.
 The firmware update process has three stages, discussed below.
 At the end of these three stages, the nRF Desktop application will be rebooted with the new firmware package installed.
 
 .. note::
-    The background DFU mode requires two application slots in the flash memory.
-    For this reason, the feature is not available for devices with smaller flash size, because the size of the flash memory required is essentially doubled.
-    The devices with smaller flash size can use either :ref:`nrf_desktop_bootloader_serial_dfu` or MCUboot bootloader with the secondary image partition located on an external flash.
-
-The background firmware upgrade can also be performed over the Simple Management Protocol (SMP).
-For more detailed information about the DFU over SMP, read the :ref:`nrf_desktop_ble_smp` documentation.
+  The background firmware upgrade can also be performed over the Simple Management Protocol (SMP).
+  For more details about the DFU over SMP, read the :ref:`nrf_desktop_ble_smp` or :ref:`nrf_desktop_dfu_mcumgr` documentation.
 
 Update image generation
 -----------------------
 
-The update image is generated in the build directory when building the firmware if the bootloader is enabled in the configuration:
+The update image is generated in the build directory when building the firmware with the enabled bootloader.
 
-* The :file:`zephyr/dfu_application.zip` is used by both B0 and MCUboot bootloader for the background DFU through the :ref:`nrf_desktop_config_channel` and :ref:`nrf_desktop_dfu`.
-  This package contains firmware images along with additional metadata.
+The :file:`zephyr/dfu_application.zip` file is used by both B0 and MCUboot bootloader for the background DFU through the :ref:`nrf_desktop_config_channel` and :ref:`nrf_desktop_dfu`.
+The package contains firmware images along with additional metadata.
+If the used bootloader boots the application directly from either slot 0 or slot 1, the host script transfers the update image that can be run from the unused slot.
+Otherwise, the image is always uploaded to the slot 1 and then moved to slot 0 by the bootloader before boot.
 
-  .. note::
-      By default, the build process for the B0 bootloader will construct an image for the first slot (slot 0 or S0).
-      To ensure that application is built for both slots, select the :kconfig:`CONFIG_BUILD_S1_VARIANT` Kconfig option.
-
-      When this option is selected, the :file:`zephyr/dfu_application.zip` contains both images.
-      The update tool checks if the currently running image runs from either slot 0 or slot 1.
-      It then transfers the update image that can be run from the unused slot.
-
-* The :file:`zephyr/app_update.bin` is used for the background DFU through the :ref:`nrf_desktop_ble_smp`.
+.. note::
+  Make sure to properly configure the bootloader to ensure that the build system generates the :file:`zephyr/dfu_application.zip` archive containing all of the required update images.
 
 Update image transfer
 ---------------------
@@ -1560,10 +1932,34 @@ Depending on the side on which the process is handled:
 * On the host side, the process is handled by the :ref:`nrf_desktop_config_channel_script`.
   See the tool documentation for more information about how to execute the background DFU process on the host.
 
-If the MCUboot bootloader is selected, the update image can also be transferred in the background through the :ref:`nrf_desktop_ble_smp`.
+.. _nrf_desktop_image_transfer_over_smp:
 
-Update image verification and swap
-----------------------------------
+Image transfer over SMP
+~~~~~~~~~~~~~~~~~~~~~~~
+
+If the MCUboot bootloader is selected, the update image can also be transferred in the background either through the :ref:`nrf_desktop_ble_smp` or :ref:`nrf_desktop_dfu_mcumgr`.
+The `nRF Connect for Mobile`_ application uses binary files for the image transfer over the Simple Management Protocol (SMP).
+The :guilabel:`DFU` button appears in the tab of the connected Bluetooth device that supports the image transfer over the SMP.
+After pressing the button, you can select the :file:`*.bin` file used for the firmware update.
+
+After building your application for configuration with either the :ref:`nrf_desktop_ble_smp` or :ref:`nrf_desktop_dfu_mcumgr` enabled, the following firmware update files are generated in the build directory:
+
+ * :file:`zephyr/app_update.bin` - The application image that is bootable from the primary slot.
+ * :file:`zephyr/mcuboot_secondary_app_update.bin` - The application image that is bootable from the secondary slot.
+   The file is generated only if the MCUboot bootloader is built in the direct-xip mode.
+
+If the MCUboot bootloader uses the built-in direct-xip mode, you must upload the image for the slot that is currently unused.
+If the MCUboot bootloader built-in swap mode is used, the :file:`zephyr/app_update.bin` file must always be used.
+The :file:`zephyr/app_update.bin` file is the application image that can be booted from the primary slot.
+In the swap mode, the MCUboot bootloader always moves the new application image to the primary slot before booting it.
+
+.. note::
+  If the :kconfig:option:`CONFIG_MCUMGR_GRP_IMG_REJECT_DIRECT_XIP_MISMATCHED_SLOT` Kconfig option is enabled in the application configuration, the device rejects update image upload for the invalid slot.
+  It is recommended to enable the option if the application uses MCUboot in the direct-xip mode.
+  The upload rejection can be used as a simple mechanism of verifying which image update should be used.
+
+Update image verification and application image update
+------------------------------------------------------
 
 Once the update image transfer is completed, the background DFU process will continue after the device reboot.
 If :ref:`nrf_desktop_config_channel_script` is used, the reboot is triggered by the script right after the image transfer completes.
@@ -1578,44 +1974,13 @@ Otherwise, the old version is used.
 Serial recovery DFU
 ===================
 
-The nRF Desktop application also supports the serial recovery DFU mode through USB.
-In this mode, unlike in :ref:`background DFU mode <nrf_desktop_bootloader_background_dfu>`, the application is overwritten and only one application slot is used.
-This mode can so be used on devices with a limited amount of flash memory available.
+The serial recovery DFU is a feature of MCUboot and it needs to be enabled in the bootloader's configuration.
+For the configuration details, see the :ref:`nrf_desktop_configuring_mcuboot_bootloader` section.
 
-.. note::
-   The serial recovery DFU and the background DFU cannot be enabled at the same time on the same device.
-
-The serial recovery DFU is a feature of the bootloader.
-For the serial recovery DFU to be performed, the bootloader must be able to access the USB subsystem.
-This is not possible for the B0, and you have to use :ref:`MCUboot <mcuboot:mcuboot_wrapper>` instead.
-
-As only one application slot is available, the transfer of the new version of the application cannot be done while the application is running.
 To start the serial recovery DFU, the device should boot into recovery mode, in which the bootloader will be waiting for a new image upload to start.
-In the serial recovery DFU mode, the new image is transferred through USB.
-If the transfer is interrupted, the device will not be able to boot the application and automatically start in the serial recovery DFU mode.
-
-Configuring serial recovery DFU
--------------------------------
-
-Configure :ref:`MCUboot <mcuboot:mcuboot_wrapper>` to enable the serial recovery DFU through USB.
-The MCUboot configuration for a given board and :ref:`build type <nrf_desktop_requirements_build_types>` should be written to :file:`applications/nrf_desktop/configuration/your_board_name/mcuboot_buildtype.conf`.
-For an example of the configuration, see the ``ZReleaseMCUBoot`` build type of the nRF52820 or the nRF52833 dongle.
-
-Not every configuration with MCUboot in the nRF Desktop supports the USB serial recovery.
-For example, the ``ZDebugMCUBootSMP`` configuration for the nRF52840 Development Kit supports the MCUboot bootloader with background firmware upgrade.
-
-Select the following Kconfig options to enable the serial recovery DFU:
-
-* ``CONFIG_MCUBOOT_SERIAL`` - This option enables the serial recovery DFU.
-* ``CONFIG_BOOT_SERIAL_CDC_ACM`` - This option enables the serial interface through USB.
-
-  .. note::
-        The USB subsystem must be enabled and properly configured.
-        See :ref:`usb_api` for more information.
-
-* ``CONFIG_BOOT_SERIAL_DETECT_PORT`` and ``CONFIG_BOOT_SERIAL_DETECT_PIN`` - These options select the pin used for triggering the serial recovery mode.
-  To enter the serial recovery mode, set the pin to a logic value defined by ``CONFIG_BOOT_SERIAL_DETECT_PIN_VAL`` when the device boots.
-  By default, the selected GPIO pin should be set to low.
+In the serial recovery DFU mode, the new image is transferred through an USB CDC ACM class instance.
+The bootloader overwrites the existing application located on the primary slot with the new application image.
+If the transfer is interrupted, the device will not be able to boot the incomplete application, and the image upload must be performed again.
 
 Once the device enters the serial recovery mode, you can use the :ref:`mcumgr <zephyr:device_mgmt>` to:
 
@@ -1630,14 +1995,114 @@ For example, the following line will start the upload of the new image to the de
 
   mcumgr -t 60 --conntype serial --connstring=/dev/ttyACM0 image upload build-nrf52833dongle_nrf52833/zephyr/app_update.bin
 
+The command assumes that ``/dev/ttyACM0`` serial device is used by the MCUboot bootloader for the serial recovery.
+
+fwupd support
+=============
+
+fwupd is an open-source project providing tools and daemon for managing the installation of firmware updates on Linux-based systems.
+Together with the `LVFS (Linux Vendor Firmware Service) <LVFS_>`_, it provides a solution for vendors to easily distribute firmware for compatible devices.
+
+The fwupd tools can communicate with the devices running the nRF Desktop application with the :ref:`nrf_desktop_bootloader_background_dfu` feature enabled.
+
+Nordic HID plugin
+-----------------
+
+The fwupd project allows communication with multiple types of devices through various communication protocols.
+The communication protocols are implemented using plugins.
+The plugin associated with the DFU protocol realized through the :ref:`nrf_desktop_config_channel` is branded as ``nordic_hid``.
+
+Adding a new device
+-------------------
+
+The device specifies which protocol is used for the communication by adding the specific device information to the plugin metadata.
+For the ``nordic_hid`` plugin, this file is located at `nordic-hid.quirk`_.
+The following example shows the information passed to the plugin metadata:
+
+.. code-block:: console
+
+   [HIDRAW\VEN_1915&DEV_52DE]
+   Plugin = nordic_hid
+   GType = FuNordicHidCfgChannel
+   NordicHidBootloader = B0
+
+In this console snippet:
+
+* ``[HIDRAW\VEN_1915&DEV_52DE]`` - This line describes the device instance ID provided by the OS, which identifies the device.
+* ``Plugin = nordic_hid`` and ``GType = FuNordicHidCfgChannel`` - These lines set the plugin that the device uses.
+* ``NordicHidBootloader`` - This optional line selects the bootloader that the device is running.
+  If the device does not have the information about the underlying bootloader, the ``NordicHidBootloader`` option is used to select a proper bootloader type.
+  If there is no information about the bootloader, both in metadata and from the device, the update procedure will fail.
+  The possible values are either ``B0``, ``MCUBOOT`` or ``MCUBOOT+XIP``.
+
+.. note::
+   As the ``nordic_hid`` plugin communicates with the device using the Configuration channel, the device update is not allowed through the Serial recovery DFU.
+
+To add a new device, a pull request must be opened to the `fwupd`_ repository with a new entry to the :file:`nordic-hid.quirk` file.
+
+LVFS and update image preparation
+---------------------------------
+
+The `LVFS (Linux Vendor Firmware Service) <LVFS_>`_ hosts firmware images that can be downloaded by Linux machines and used by the fwupd tool for the firmware update of compatible devices.
+A vendor account is needed to upload a new firmware archive to the site.
+Information on how to apply for an account is found at the `LVFS Getting an account`_ website.
+
+The nRF Desktop application DFU image is delivered as a zip package, containing a manifest and one or more binary files used for the update.
+To prepare the image file compatible with the LVFS, the CAB file needs to be prepared.
+The CAB package must contain the DFU package generated by the |NCS|, that is :file:`dfu_application.zip`, plus metadata file with information used by the LVFS.
+For more information, see the `LVFS metadata`_ site.
+
+When the CAB archive has been built, it can be uploaded to the LVFS where the CAB archive is verified and signed.
+For more information about creating CAB files, signing, and uploading the update package, see the `LVFS Uploading Firmware`_ site.
+
+Upgrading firmware using fwupd
+------------------------------
+
+Once the update image was uploaded onto the LVFS, the firmware update procedure can be tested on end machines.
+
+Complete the following steps:
+
+1. Make sure that the host machine to which the updatable device running the nRF Desktop application is connected has the fwupd tool installed.
+#. Fetch the information about available update images from the LVFS by using the following commands:
+
+   .. code-block:: console
+
+      fwupdmgr refresh
+      fwupdmgr get-updates
+
+   In this console snippet:
+
+   * ``fwupdmgr refresh`` - This command downloads the latest metadata from the LVFS.
+   * ``fwupdmgr get-updates`` - This command displays the updates available for the devices on the host system.
+
+#. Test the update image on a limited number of devices before it goes public.
+   For more information about limiting the visibility of updated images uploaded to the LVFS, see the `LVFS testing`_ site.
+#. Run the following command to update the devices:
+
+   .. code-block:: console
+
+      fwupdmgr update
+
+When connecting to the device, the application verifies the bootloader type.
+This is done to ensure a compatible firmware is uploaded to the nRF Desktop device, that is software that can support multiple bootloaders.
+The device is queried for information about bootloader using the :ref:`nrf_desktop_config_channel`.
+If the device does not provide information about the bootloader type, such information can optionally be provided inside the :file:`nordic-hid.quirk` file (see the ``NordicHidBootloader`` option under `Adding a new device`_).
+
+fwupd can fail the image update in the following cases:
+
+* When the bootloader information stored in an updated image does not match the type reported by the device.
+* When there is no information about the bootloader used on the device.
+
+For more information about building the fwupd tool locally, see the `LVFS building fwupd`_ site.
+
 Dependencies
 ************
 
 This application uses the following |NCS| libraries and drivers:
 
 * :ref:`lib_caf`
-* :ref:`event_manager`
-* :ref:`profiler`
+* :ref:`app_event_manager`
+* :ref:`nrf_profiler`
 * :ref:`hids_readme`
 * :ref:`hogp_readme`
 * :ref:`nrf_bt_scan_readme`
@@ -1683,11 +2148,16 @@ These are valid for events that have many listeners or sources, and are gathered
    doc/cpu_meas.rst
    doc/dev_descr.rst
    doc/dfu.rst
+   doc/dfu_mcumgr.rst
+   doc/dfu_lock.rst
+   doc/factory_reset.rst
    doc/failsafe.rst
+   doc/fast_pair_app.rst
    doc/fn_keys.rst
    doc/bas.rst
    doc/hid_forward.rst
    doc/hid_state.rst
+   doc/hid_state_pm.rst
    doc/hids.rst
    doc/info.rst
    doc/led_state.rst
@@ -1696,11 +2166,12 @@ These are valid for events that have many listeners or sources, and are gathered
    doc/motion.rst
    doc/passkey.rst
    doc/power_manager.rst
-   doc/profiler_sync.rst
+   doc/nrf_profiler_sync.rst
    doc/qos.rst
    doc/selector.rst
    doc/smp.rst
    doc/settings_loader.rst
+   doc/swift_pair_app.rst
    doc/usb_state_pm.rst
    doc/usb_state.rst
    doc/watchdog.rst
@@ -1709,21 +2180,47 @@ These are valid for events that have many listeners or sources, and are gathered
    doc/hfclk_lock.rst
    doc/event_rel_modules.rst
 
+.. _config_desktop_app_options:
+
 Application configuration options
 *********************************
+
+Following are the application specific configuration options that can be configured for the nRF desktop and the internal modules:
 
 .. options-from-kconfig::
    :show-type:
 
-.. |nRF_Desktop_confirmation_effect| replace:: After the confirmation, Bluetooth advertising using a new local identity is started.
-   When a new Bluetooth Central device successfully connects and bonds, the old bond is removed and the new bond is used instead.
-   If the new peer does not connect in the predefined period of time, the advertising ends and the application switches back to the old peer.
+API documentation
+*****************
 
-.. |nRF_Desktop_cancel_operation| replace:: You can cancel the ongoing peer operation with a standard button press.
+Following are the API elements used by the application.
 
-.. |preconfigured_build_types| replace:: The preconfigured build types configure the device with or without the bootloader and in debug or release mode.
+HID reports
+===========
 
-.. |hid_state| replace:: HID state module
+| Header file: :file:`applications/nrf_desktop/configuration/common/hid_report_desc.h`
+| Source file: :file:`applications/nrf_desktop/configuration/common/hid_report_desc.c`
 
-.. |led_note| replace:: A breathing LED indicates that the device has entered the advertising mode.
-   This happens when the device is looking for a peer to connect to.
+.. doxygengroup:: nrf_desktop_hid_reports
+   :project: nrf
+   :members:
+
+LED states
+==========
+
+| Header file: :file:`applications/nrf_desktop/configuration/common/led_state.h`
+| Source file: :file:`applications/nrf_desktop/src/modules/led_state.c`
+
+.. doxygengroup:: nrf_desktop_led_state
+   :project: nrf
+   :members:
+
+USB events
+==========
+
+| Header file: :file:`applications/nrf_desktop/src/events/usb_event.h`
+| Source file: :file:`applications/nrf_desktop/src/modules/usb_state.c`
+
+.. doxygengroup:: nrf_desktop_usb_event
+   :project: nrf
+   :members:

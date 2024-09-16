@@ -1,7 +1,12 @@
+#
+# Copyright (c) 2023 Nordic Semiconductor
+#
+# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+#
+
 # nrfxlib documentation build configuration file
 
 import os
-import re
 from pathlib import Path
 import sys
 
@@ -19,9 +24,9 @@ NRFXLIB_BASE = utils.get_projdir("nrfxlib")
 # General configuration --------------------------------------------------------
 
 project = "nrfxlib"
-copyright = "2019-2021, Nordic Semiconductor"
+copyright = "2019-2023, Nordic Semiconductor"
 author = "Nordic Semiconductor"
-version = release = "1.7.99"
+version = release = "2.4.99"
 
 sys.path.insert(0, str(ZEPHYR_BASE / "doc" / "_extensions"))
 sys.path.insert(0, str(NRF_BASE / "doc" / "_extensions"))
@@ -31,9 +36,8 @@ extensions = [
     "breathe",
     "sphinxcontrib.mscgen",
     "inventory_builder",
-    "zephyr.kconfig-role",
+    "zephyr.kconfig",
     "zephyr.warnings_filter",
-    "ncs_cache",
     "zephyr.external_content",
     "zephyr.doxyrunner",
 ]
@@ -53,11 +57,15 @@ html_last_updated_fmt = "%b %d, %Y"
 html_show_sourcelink = True
 html_show_sphinx = False
 
-html_theme_options = {"docsets": utils.get_docsets("nrfxlib")}
+html_theme_options = {"docset": "nrfxlib", "docsets": utils.ALL_DOCSETS}
 
 # Options for intersphinx ------------------------------------------------------
 
 intersphinx_mapping = dict()
+
+zephyr_mapping = utils.get_intersphinx_mapping("zephyr")
+if zephyr_mapping:
+    intersphinx_mapping["zephyr"] = zephyr_mapping
 
 kconfig_mapping = utils.get_intersphinx_mapping("kconfig")
 if kconfig_mapping:
@@ -70,7 +78,6 @@ if nrf_mapping:
 # -- Options for zephyr.warnings_filter ----------------------------------------
 
 warnings_filter_config = str(NRF_BASE / "doc" / "nrfxlib" / "known-warnings.txt")
-warnings_filter_silent = False
 
 # -- Options for doxyrunner plugin ---------------------------------------------
 
@@ -83,28 +90,6 @@ doxyrunner_fmt_vars = {
     "OUTPUT_DIRECTORY": str(doxyrunner_outdir),
 }
 
-# create mbedtls config header (needed for Doxygen)
-doxyrunner_outdir.mkdir(exist_ok=True)
-
-fin_path = NRFXLIB_BASE / "nrf_security" / "configs" / "nrf-config.h.template"
-fout_path = doxyrunner_outdir / "mbedtls_doxygen_config.h"
-
-with open(fin_path) as fin, open(fout_path, "w") as fout:
-    fout.write(
-        re.sub(
-            r"#cmakedefine ([A-Z0-9_-]+)",
-            "\n".join(
-                (
-                    r"#define \1",
-                    r"#define CONFIG_GLUE_\1",
-                    r"#define CONFIG_CC310_\1",
-                    r"#define CONFIG_VANILLA_\1",
-                )
-            ),
-            fin.read(),
-        )
-    )
-
 # Options for breathe ----------------------------------------------------------
 
 breathe_projects = {"nrfxlib": str(doxyrunner_outdir / "xml")}
@@ -116,16 +101,8 @@ breathe_separate_member_pages = True
 
 external_content_contents = [(NRFXLIB_BASE, "**/*.rst"), (NRFXLIB_BASE, "**/doc/")]
 
-# Options for ncs_cache --------------------------------------------------------
-
-ncs_cache_docset = "nrfxlib"
-ncs_cache_build_dir = utils.get_builddir()
-ncs_cache_config = NRF_BASE / "doc" / "cache.yml"
-ncs_cache_manifest = NRF_BASE / "west.yml"
-
 
 def setup(app):
-    app.add_css_file("css/common.css")
     app.add_css_file("css/nrfxlib.css")
 
-    utils.add_google_analytics(app)
+    utils.add_google_analytics(app, html_theme_options)

@@ -7,27 +7,15 @@
 #ifndef NRF_CLOUD_FOTA_H__
 #define NRF_CLOUD_FOTA_H__
 
-#include <net/mqtt.h>
+#include <zephyr/net/mqtt.h>
 #include <net/nrf_cloud.h>
-#include <bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/bluetooth.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define NRF_CLOUD_FOTA_REST_KEY_JOB_DOC	"jobDocument"
-#define NRF_CLOUD_FOTA_REST_KEY_JOB_ID	"jobId"
-#define NRF_CLOUD_FOTA_REST_KEY_PATH	"path"
-#define NRF_CLOUD_FOTA_REST_KEY_HOST	"host"
-#define NRF_CLOUD_FOTA_REST_KEY_TYPE	"firmwareType"
-#define NRF_CLOUD_FOTA_REST_KEY_SIZE	"fileSize"
-#define NRF_CLOUD_FOTA_REST_KEY_VER	"version"
-
-#define NRF_CLOUD_FOTA_REST_VAL_TYPE_MODEM "MODEM"
-#define NRF_CLOUD_FOTA_REST_VAL_TYPE_BOOT  "BOOT"
-#define NRF_CLOUD_FOTA_REST_VAL_TYPE_APP   "APP"
-
-/**@brief FOTA event type provided to callback. */
+/** @brief FOTA event type provided to callback. */
 enum nrf_cloud_fota_evt_id {
 	NRF_CLOUD_FOTA_EVT_START,
 	NRF_CLOUD_FOTA_EVT_DONE,
@@ -38,7 +26,7 @@ enum nrf_cloud_fota_evt_id {
 	NRF_CLOUD_FOTA_EVT_BLE_JOB_RCVD,
 };
 
-/**@brief FOTA error detail. */
+/** @brief FOTA error detail. */
 enum nrf_cloud_fota_error {
 	/** No error. */
 	NRF_CLOUD_FOTA_ERROR_NONE,
@@ -52,17 +40,33 @@ enum nrf_cloud_fota_error {
 	NRF_CLOUD_FOTA_ERROR_APPLY_FAIL,
 	/** Firmware file type differs from expected FOTA type. */
 	NRF_CLOUD_FOTA_ERROR_MISMATCH,
+	/** Received job info was invalid. */
+	NRF_CLOUD_FOTA_ERROR_BAD_JOB_INFO,
+	/** Unhandled FOTA type. */
+	NRF_CLOUD_FOTA_ERROR_BAD_TYPE,
 };
 
-/**@brief FOTA info for a BLE job */
+/** @brief FOTA job data */
+struct nrf_cloud_fota_job {
+	enum nrf_cloud_fota_status status;
+	struct nrf_cloud_fota_job_info info;
+	enum nrf_cloud_fota_error error;
+	/* Download progress percent, 0-100. */
+	int dl_progress;
+	/* Tracking for CONFIG_NRF_CLOUD_FOTA_PROGRESS_PCT_INCREMENT */
+	int sent_dl_progress;
+};
+
+/** @brief BLE FOTA job data */
 struct nrf_cloud_fota_ble_job {
 	bt_addr_t ble_id;
 	struct nrf_cloud_fota_job_info info;
 	enum nrf_cloud_fota_error error;
-	int dl_progress; /* Download progress percent, 0-100. */
+	/* Download progress percent, 0-100. */
+	int dl_progress;
 };
 
-/**@brief FOTA event data provided to @ref nrf_cloud_fota_callback_t */
+/** @brief FOTA event data provided to @ref nrf_cloud_fota_callback_t */
 struct nrf_cloud_fota_evt {
 	enum nrf_cloud_fota_evt_id id;
 
@@ -88,7 +92,7 @@ typedef void (*nrf_cloud_fota_callback_t)
  * @brief  BLE FOTA handler registered with the nRF Cloud FOTA module to handle
  *  asynchronous events.
  *
- * @warning The memory pointed to by ble_job will be freed after the handler
+ * @note The memory pointed to by ble_job will be freed after the handler
  * has returned.
  *
  * @param[in]  ble_job The BLE FOTA job.
@@ -99,7 +103,7 @@ typedef void (*nrf_cloud_fota_ble_callback_t)
 /**
  * @brief Initialize the nRF Cloud FOTA module.
  *
- * @warning This API must be called prior to using nRF Cloud FOTA and it must
+ * @note This API must be called prior to using nRF Cloud FOTA and it must
  * return successfully.
  *
  * @param[in] cb FOTA event handler.
@@ -120,7 +124,7 @@ int nrf_cloud_fota_init(nrf_cloud_fota_callback_t cb);
  */
 int nrf_cloud_fota_uninit(void);
 
-/**@brief Handler for nRF Cloud FOTA MQTT events.
+/** @brief Handler for nRF Cloud FOTA MQTT events.
  *
  * @param _mqtt_evt Pointer to the recived mqtt_evt.
  *
@@ -130,7 +134,7 @@ int nrf_cloud_fota_uninit(void);
  */
 int nrf_cloud_fota_mqtt_evt_handler(const struct mqtt_evt *_mqtt_evt);
 
-/**@brief Set the information required for MQTT transactions and
+/** @brief Set the information required for MQTT transactions and
  *        report status of saved job (if present) to nRF Cloud.
  *        This should be used during initialization.
  * @param client      Pointer to the MQTT client instance.
@@ -143,7 +147,7 @@ int nrf_cloud_fota_mqtt_evt_handler(const struct mqtt_evt *_mqtt_evt);
 int nrf_cloud_fota_endpoint_set_and_report(struct mqtt_client *const client,
 	const char * const client_id, const struct mqtt_utf8 * const endpoint);
 
-/**@brief Set the information required for MQTT transactions.
+/** @brief Set the information required for MQTT transactions.
  *
  * @param client      Pointer to the MQTT client instance.
  * @param client_id   Null terminated client id of this device.
@@ -156,19 +160,19 @@ int nrf_cloud_fota_endpoint_set(struct mqtt_client *const client,
 				const char * const client_id,
 				const struct mqtt_utf8 * const endpoint);
 
-/**@brief Clear the information required for MQTT transactions. */
+/** @brief Clear the information required for MQTT transactions. */
 void nrf_cloud_fota_endpoint_clear(void);
 
-/**@brief Subscribe to FOTA related MQTT topics. */
+/** @brief Subscribe to FOTA related MQTT topics. */
 int nrf_cloud_fota_subscribe(void);
 
-/**@brief Unsubscribe from FOTA related MQTT topics. */
+/** @brief Unsubscribe from FOTA related MQTT topics. */
 int nrf_cloud_fota_unsubscribe(void);
 
-/**@brief Check for pending FOTA updates. */
+/** @brief Make a request to nRF Cloud to send FOTA job details if a FOTA job is queued. */
 int nrf_cloud_fota_update_check(void);
 
-/**@brief Check if a FOTA job is active. */
+/** @brief Check if the device is actively working on a FOTA job. */
 bool nrf_cloud_fota_is_active(void);
 
 /**

@@ -6,9 +6,9 @@
 
 #include <zephyr/types.h>
 
-#include <bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/bluetooth.h>
 #include <bluetooth/scan.h>
-#include <settings/settings.h>
+#include <zephyr/settings/settings.h>
 
 #include <string.h>
 
@@ -16,11 +16,12 @@
 #include <caf/events/module_state_event.h>
 #include "hid_event.h"
 #include <caf/events/ble_common_event.h>
+#include <caf/events/power_event.h>
 
 #include "ble_scan_def.h"
 
-#include <logging/log.h>
-LOG_MODULE_REGISTER(MODULE, CONFIG_DESKTOP_BLE_SCANNING_LOG_LEVEL);
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(MODULE, CONFIG_DESKTOP_BLE_SCAN_LOG_LEVEL);
 
 #define SCAN_TRIG_CHECK_MS    (1 * MSEC_PER_SEC)
 #define SCAN_TRIG_TIMEOUT_MS \
@@ -50,6 +51,7 @@ static struct k_work_delayable scan_start_trigger;
 static struct k_work_delayable scan_stop_trigger;
 static bool peers_only = !IS_ENABLED(CONFIG_DESKTOP_BLE_NEW_PEER_SCAN_ON_BOOT);
 static bool scanning;
+static bool scan_blocked;
 
 
 static void verify_bond(const struct bt_bond_info *info, void *user_data)
@@ -134,7 +136,7 @@ static void broadcast_scan_state(bool active)
 {
 	struct ble_peer_search_event *event = new_ble_peer_search_event();
 	event->active = active;
-	EVENT_SUBMIT(event);
+	APP_EVENT_SUBMIT(event);
 }
 
 static void scan_stop(void)
@@ -192,7 +194,7 @@ static int configure_address_filters(uint8_t *filter_mode)
 
 		bt_addr_le_to_str(&subscribed_peers[i].addr, addr_str,
 				  sizeof(addr_str));
-		LOG_INF("Address filter added %s", log_strdup(addr_str));
+		LOG_INF("Address filter added %s", addr_str);
 		*filter_mode |= BT_SCAN_ADDR_FILTER;
 	}
 
@@ -333,7 +335,10 @@ static void scan_start(void)
 		scan_stop();
 	}
 
-	if (IS_ENABLED(CONFIG_DESKTOP_BLE_NEW_PEER_SCAN_REQUEST) &&
+	if (IS_ENABLED(CONFIG_DESKTOP_BLE_SCAN_PM_EVENTS) && scan_blocked) {
+		LOG_INF("Power down mode - scanning blocked");
+		return;
+	} else if (IS_ENABLED(CONFIG_DESKTOP_BLE_NEW_PEER_SCAN_REQUEST) &&
 	    (conn_count == bond_count) && peers_only) {
 		LOG_INF("All known peers connected - scanning disabled");
 		return;
@@ -417,7 +422,7 @@ static void scan_filter_match(struct bt_scan_device_info *device_info,
 	bt_addr_le_to_str(device_info->recv_info->addr, addr, sizeof(addr));
 
 	LOG_INF("Filters matched. %s %sconnectable",
-		log_strdup(addr), connectable ? "" : "non");
+		addr, connectable ? "" : "non");
 
 	/* Scanning will be stopped by nrf scan module. */
 }
@@ -485,7 +490,7 @@ static void scan_init(void)
 	};
 
 	if (IS_ENABLED(CONFIG_CAF_BLE_USE_LLPM) &&
-	    (CONFIG_BT_MAX_CONN > 2)) {
+	    (CONFIG_BT_MAX_CONN >= 2)) {
 		cp.interval_min = 8;
 		cp.interval_max = 8;
 	} else {
@@ -506,9 +511,11 @@ static void scan_init(void)
 	k_work_init_delayable(&scan_stop_trigger, scan_stop_trigger_fn);
 }
 
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
-	if (is_hid_report_event(eh)) {
+	static bool ble_bond_ready;
+
+	if (is_hid_report_event(aeh)) {
 		/* Do not scan when devices are in use. */
 		scan_counter = 0;
 
@@ -519,9 +526,9 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_module_state_event(eh)) {
+	if (is_module_state_event(aeh)) {
 		const struct module_state_event *event =
-			cast_module_state_event(eh);
+			cast_module_state_event(aeh);
 
 		if (check_state(event, MODULE_ID(ble_state),
 				MODULE_STATE_READY)) {
@@ -534,16 +541,23 @@ static bool event_handler(const struct event_header *eh)
 
 			module_set_state(MODULE_STATE_READY);
 		} else if (check_state(event, MODULE_ID(ble_bond), MODULE_STATE_READY)) {
-			/* Settings need to be loaded before scan start */
-			scan_start();
+			/* Settings need to be loaded on start before the scan begins.
+			 * As the ble_bond module reports its READY state also on wake_up_event,
+			 * to avoid multiple scan start triggering on wake-up scan will be started
+			 * from here only on start-up.
+			 */
+			if (!ble_bond_ready) {
+				ble_bond_ready = true;
+				scan_start();
+			}
 		}
 
 		return false;
 	}
 
-	if (is_ble_peer_event(eh)) {
+	if (is_ble_peer_event(aeh)) {
 		const struct ble_peer_event *event =
-			cast_ble_peer_event(eh);
+			cast_ble_peer_event(aeh);
 
 		switch (event->state) {
 		case PEER_STATE_CONNECTED:
@@ -570,9 +584,9 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_ble_peer_operation_event(eh)) {
+	if (is_ble_peer_operation_event(aeh)) {
 		const struct ble_peer_operation_event *event =
-			cast_ble_peer_operation_event(eh);
+			cast_ble_peer_operation_event(aeh);
 
 		switch (event->op) {
 		case PEER_OPERATION_ERASED:
@@ -611,9 +625,9 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_ble_discovery_complete_event(eh)) {
+	if (is_ble_discovery_complete_event(aeh)) {
 		const struct ble_discovery_complete_event *event =
-			cast_ble_discovery_complete_event(eh);
+			cast_ble_discovery_complete_event(aeh);
 		size_t i;
 
 		for (i = 0; i < ARRAY_SIZE(subscribed_peers); i++) {
@@ -654,14 +668,42 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
+	if (IS_ENABLED(CONFIG_DESKTOP_BLE_SCAN_PM_EVENTS) &&
+	    is_power_down_event(aeh)) {
+		if (scanning) {
+			scan_stop();
+		}
+
+		scan_blocked = true;
+		k_work_cancel_delayable(&scan_start_trigger);
+
+		return false;
+	}
+
+	if (IS_ENABLED(CONFIG_DESKTOP_BLE_SCAN_PM_EVENTS) &&
+	    is_wake_up_event(aeh)) {
+		if (scan_blocked) {
+			scan_blocked = false;
+			if (ble_bond_ready) {
+				scan_start();
+			}
+		}
+
+		return false;
+	}
+
 	/* If event is unhandled, unsubscribe. */
 	__ASSERT_NO_MSG(false);
 
 	return false;
 }
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
-EVENT_SUBSCRIBE(MODULE, ble_peer_event);
-EVENT_SUBSCRIBE(MODULE, ble_peer_operation_event);
-EVENT_SUBSCRIBE(MODULE, ble_discovery_complete_event);
-EVENT_SUBSCRIBE(MODULE, hid_report_event);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
+APP_EVENT_SUBSCRIBE(MODULE, ble_peer_event);
+APP_EVENT_SUBSCRIBE(MODULE, ble_peer_operation_event);
+APP_EVENT_SUBSCRIBE(MODULE, ble_discovery_complete_event);
+APP_EVENT_SUBSCRIBE(MODULE, hid_report_event);
+#ifdef CONFIG_DESKTOP_BLE_SCAN_PM_EVENTS
+APP_EVENT_SUBSCRIBE(MODULE, power_down_event);
+APP_EVENT_SUBSCRIBE(MODULE, wake_up_event);
+#endif

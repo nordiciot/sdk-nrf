@@ -3,13 +3,13 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <logging/log.h>
-#include <zephyr.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/kernel.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
-#include <net/socket.h>
-#include <net/tls_credentials.h>
+#include <zephyr/net/socket.h>
+#include <zephyr/net/tls_credentials.h>
 #include <net/ftp_client.h>
 #include "ftp_commands.h"
 
@@ -198,7 +198,7 @@ static int do_ftp_send_ctrl(const uint8_t *message, int length)
 	int ret = 0;
 	uint32_t offset = 0;
 
-	LOG_DBG("%s", log_strdup(message));
+	LOG_DBG("%s", (char *)message);
 	while (offset < length) {
 		ret = send(client.cmd_sock, message + offset, length - offset, 0);
 		if (ret < 0) {
@@ -295,7 +295,7 @@ static int do_ftp_recv_ctrl(bool post_result, int success_code)
 		client.ctrl_callback(ctrl_buf, ret);
 	}
 
-	LOG_DBG("%s", log_strdup(ctrl_buf));
+	LOG_DBG("%s", ctrl_buf);
 	ftp_inactivity = false;
 	return parse_return_code(ctrl_buf, success_code);
 }
@@ -351,9 +351,6 @@ static int poll_data_task_done(void)
 
 	do {
 		ret = do_ftp_recv_ctrl(true, FTP_CODE_226);
-		if (ret < 0) {
-			break;
-		}
 		if (ret == FTP_CODE_226) {
 			break;
 		}
@@ -365,6 +362,8 @@ static int poll_data_task_done(void)
 				client.ctrl_callback(ctrl_buf, strlen(ctrl_buf));
 				break;
 			}
+		} else if (ret < 0) {
+			break;
 		}
 	} while (1);
 

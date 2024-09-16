@@ -1,7 +1,7 @@
 .. _SLM_AT_MQTT:
 
-MQTT AT commands
-****************
+MQTT client AT commands
+***********************
 
 .. contents::
    :local:
@@ -27,7 +27,7 @@ Syntax
    #XMQTTEVT=<evt_type>,<result>
 
 * The ``<evt_type>`` value is an integer indicating the type of the event.
-  It can assume the following values:
+  It can return the following values:
 
   * ``0`` - Connection request.
   * ``1`` - Disconnection.
@@ -42,7 +42,7 @@ Syntax
   * ``9`` - Ping response from the MQTT broker.
 
 * The ``<result>`` value is an integer indicating the result of the event.
-  It can assume the following values:
+  It can return the following values:
 
   * ``0`` - Success.
   * *Negative value* - Failure.
@@ -95,9 +95,9 @@ Response syntax
 * The ``<evt_type>`` value is an integer.
   When ``0``, it indicates the acknowledgment of the connection request.
 * The ``<result>`` value is an integer.
-  It can assume the following values:
+  It can return the following values:
 
-  * ``0`` - Connection succeded.
+  * ``0`` - Connection succeeded.
   * *Negative Value* - Error code.
     It indicates the reason for the failure.
 
@@ -196,13 +196,13 @@ Response syntax
    #XMQTTEVT: <evt_type>,<result>
 
 * The ``<evt_type>`` value is an integer.
-  It can assume the following values:
+  It can return the following values:
 
   * ``2`` - Notification that a *publish event* has been received on a topic the client is subscribed to.
   * ``7`` - Acknowledgment of the subscribe request.
 
 * The ``<result>`` value is an integer.
-  It can assume the following values:
+  It can return the following values:
 
   * ``0`` - Value indicating the acknowledgment of the connection request.
   * *Negative Value* - Error code indicating the reason for the failure.
@@ -291,7 +291,7 @@ Response syntax
   When ``8``, it acknowledges the reception of the unsubscription request.
 
 * The ``<result>`` value is an integer.
-  It can assume the following values:
+  It can return the following values:
 
   * ``0`` - Value indicating the successful unsubscription.
   * *Negative Value* - Error code indicating the reason for the failure.
@@ -337,8 +337,9 @@ Syntax
   It indicates the topic on which data is published.
 * The ``<msg>`` parameter is a string.
   It contains the payload on the topic being published.
-  The max ``NET_IPV4_MTU`` is 576 bytes.
-  When this parameter is not specified, SLM enters ``slm_data_mode``.
+
+  The maximum size of the payload is 1024 bytes when not empty.
+  If the payload is empty (for example, ``""``), SLM enters ``slm_data_mode``.
 * The ``<qos>`` parameter is an integer.
   It indicates the MQTT Quality of Service types.
   It can accept the following values:
@@ -351,7 +352,7 @@ Syntax
     The acknowledgment of the reception is expected and the message should be published only once.
 
 * The ``<retain>`` parameter is an integer.
-  Default value is  ``0``.
+  Its default value is ``0``.
   When ``1``, it indicates that the broker should store the message persistently.
 
 Response syntax
@@ -362,17 +363,19 @@ Response syntax
    #XMQTTEVT: <evt_type>,<result>
 
 * The ``<evt_type>`` value is an integer.
-  It can assume the following values:
+  It can return the following values:
 
   * ``3`` - Acknowledgment for the published message with QoS 1.
   * ``4`` - Reception confirmation for the published message with QoS 2.
+
     It is notified when PUBREC is received from the broker.
   * ``5`` - Release of the published message with QoS 2.
   * ``6`` - Confirmation (PUBREL) to a publish release message with QoS 2.
+
     It is notified when PUBREL is received from the broker.
 
 * The ``<result>`` value is an integer.
-  It can assume the following values:
+  It can return the following values:
 
   * ``0`` - Value indicating the acknowledgment of the connection request.
   * *Negative Value* - Error code indicating the reason for the failure.
@@ -392,13 +395,13 @@ Examples
 ::
 
    AT#XMQTTPUB="nrf91/slm/mqtt/topic0"
-   {"msg":"Test Json publish"}
+   OK
+   {"msg":"Test Json publish"}+++
+   #XDATAMODE: 0
    #XMQTTMSG: 21,27
    nrf91/slm/mqtt/topic0
    {"msg":"Test Json publish"}
    #XMQTTEVT: 2,0
-   +++
-   OK
 
 ::
 
@@ -412,12 +415,15 @@ Examples
 
 ::
 
-   AT#XMQTTPUB="nrf91/slm/mqtt/topic2","Test message with QoS 2",2,0
+   AT#XMQTTPUB="nrf91/slm/mqtt/topic2","",2,0
    OK
+   Test message with QoS 2+++
+   #XDATAMODE: 0
    #XMQTTEVT: 4,0
    #XMQTTEVT: 6,0
    #XMQTTMSG: 21,23
-   nrf91/slm/mqtt/topic2Test message with QoS 2
+   nrf91/slm/mqtt/topic2
+   Test message with QoS 2
    #XMQTTEVT: 2,0
 
 Read command

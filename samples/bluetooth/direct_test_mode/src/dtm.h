@@ -9,7 +9,7 @@
 
 #include <stdbool.h>
 #include <zephyr/types.h>
-#include <devicetree.h>
+#include <zephyr/devicetree.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -273,14 +273,17 @@ enum dtm_vs_subcmd {
 	/* Set transmission power, value -40..+4 dBm in steps of 4 */
 	SET_TX_POWER = 2,
 
-	/* Switch nRF21540 FEM antenna. */
-	NRF21540_ANTENNA_SELECT = 3,
+	/* Switch front-end module (FEM) antenna. */
+	FEM_ANTENNA_SELECT = 3,
 
-	/* Set nRF21540 FEM gain value. */
-	NRF21540_GAIN_SET = 4,
+	/* Set front-end module (FEM) gain value. */
+	FEM_GAIN_SET = 4,
 
-	/* Set nRF21540 FEM active delay set. */
-	NRF21540_ACTIVE_DELAY_SET = 5,
+	/* Set radio ramp-up time. */
+	FEM_RAMP_UP_SET = 5,
+
+	/* Restore front-end module (FEM) default parameters (antenna, gain, delay). */
+	FEM_DEFAULT_PARAMS_SET = 6
 };
 
 /* DTM Packet Type field */
@@ -333,21 +336,6 @@ enum dtm_err_code {
 	DTM_ERROR_UNINITIALIZED,
 };
 
-#if DT_NODE_HAS_PROP(DT_NODELABEL(uart0), current_speed)
-/* UART Baudrate used to communicate with the DTM library. */
-#define DTM_UART_BAUDRATE DT_PROP(DT_NODELABEL(uart0), current_speed)
-
-/* The UART poll cycle in micro seconds.
- * A baud rate of e.g. 19200 bits / second, and 8 data bits, 1 start/stop bit,
- * no flow control, give the time to transmit a byte:
- * 10 bits * 1/19200 = approx: 520 us. To ensure no loss of bytes,
- * the UART should be polled every 260 us.
- */
-#define DTM_UART_POLL_CYCLE ((uint32_t) (10 * 1e6 / DTM_UART_BAUDRATE / 2))
-#else
-#error "DTM UART node not found"
-#endif /* DT_NODE_HAS_PROP(DT_NODELABEL(uart0), currrent_speed) */
-
 /* The DTM maximum wait time for the UART command second byte. */
 #define DTM_UART_SECOND_BYTE_MAX_DELAY 5
 
@@ -356,6 +344,10 @@ enum dtm_err_code {
  *  @return 0 in case of success or negative value in case of error
  */
 int dtm_init(void);
+
+/**@brief Function for waiting between the UART poll cycles.
+ */
+void dtm_wait(void);
 
 /**@brief Function for calling when a complete command has been prepared by the
  *        Tester.

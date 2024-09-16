@@ -7,14 +7,14 @@
 #include <zephyr/types.h>
 
 #include <soc.h>
-#include <device.h>
-#include <drivers/adc.h>
-#include <drivers/gpio.h>
-#include <sys/atomic.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/adc.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/sys/atomic.h>
 
 #include <hal/nrf_saadc.h>
 
-#include "event_manager.h"
+#include <app_event_manager.h>
 #include <caf/events/power_event.h>
 #include "battery_event.h"
 #include "battery_def.h"
@@ -22,10 +22,10 @@
 #define MODULE battery_meas
 #include <caf/events/module_state_event.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_DESKTOP_BATTERY_MEAS_LOG_LEVEL);
 
-#define ADC_DEVICE_NAME		DT_LABEL(DT_NODELABEL(adc))
+#define ADC_NODE		DT_NODELABEL(adc)
 #define ADC_RESOLUTION		12
 #define ADC_OVERSAMPLING	4 /* 2^ADC_OVERSAMPLING samples are averaged */
 #define ADC_MAX 		4096
@@ -51,7 +51,7 @@ LOG_MODULE_REGISTER(MODULE, CONFIG_DESKTOP_BATTERY_MEAS_LOG_LEVEL);
 				 * ADC_REF_INTERNAL_MV / ADC_MAX)
 #endif
 
-static const struct device *adc_dev;
+static const struct device *const adc_dev = DEVICE_DT_GET(ADC_NODE);
 static int16_t adc_buffer;
 static bool adc_async_read_pending;
 
@@ -62,17 +62,16 @@ static struct k_poll_event  async_evt =
 				 K_POLL_MODE_NOTIFY_ONLY,
 				 &async_sig);
 
-static const struct device *gpio_dev;
+static const struct device *const gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
 
 static atomic_t active;
 static bool sampling;
 
 static int init_adc(void)
 {
-	adc_dev = device_get_binding(ADC_DEVICE_NAME);
-	if (!adc_dev) {
-		LOG_ERR("Cannot get ADC device");
-		return -ENXIO;
+	if (!device_is_ready(adc_dev)) {
+		LOG_ERR("ADC device not ready");
+		return -ENODEV;
 	}
 
 	static const struct adc_channel_cfg channel_cfg = {
@@ -162,7 +161,7 @@ static void battery_lvl_process(void)
 	struct battery_level_event *event = new_battery_level_event();
 	event->level = level;
 
-	EVENT_SUBMIT(event);
+	APP_EVENT_SUBMIT(event);
 
 	LOG_INF("Battery level: %u%% (%u mV)", level, voltage);
 }
@@ -229,10 +228,9 @@ static int init_fn(void)
 	int err = 0;
 
 	if (IS_ENABLED(CONFIG_DESKTOP_BATTERY_MEAS_HAS_ENABLE_PIN)) {
-		gpio_dev = device_get_binding(DT_LABEL(DT_NODELABEL(gpio0)));
-		if (!gpio_dev) {
-			LOG_ERR("Cannot get GPIO device");
-			err = -ENXIO;
+		if (!device_is_ready(gpio_dev)) {
+			LOG_ERR("GPIO device not ready");
+			err = -ENODEV;
 			goto error;
 		}
 
@@ -257,10 +255,10 @@ error:
 	return err;
 }
 
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
-	if (is_module_state_event(eh)) {
-		struct module_state_event *event = cast_module_state_event(eh);
+	if (is_module_state_event(aeh)) {
+		struct module_state_event *event = cast_module_state_event(aeh);
 
 		if (check_state(event, MODULE_ID(main), MODULE_STATE_READY)) {
 			static bool initialized;
@@ -283,7 +281,7 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_wake_up_event(eh)) {
+	if (is_wake_up_event(aeh)) {
 		if (!atomic_get(&active)) {
 			atomic_set(&active, true);
 
@@ -299,7 +297,7 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_power_down_event(eh)) {
+	if (is_power_down_event(aeh)) {
 		if (atomic_get(&active)) {
 			atomic_set(&active, false);
 
@@ -322,7 +320,7 @@ static bool event_handler(const struct event_header *eh)
 
 	return false;
 }
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
-EVENT_SUBSCRIBE_EARLY(MODULE, power_down_event);
-EVENT_SUBSCRIBE(MODULE, wake_up_event);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
+APP_EVENT_SUBSCRIBE_EARLY(MODULE, power_down_event);
+APP_EVENT_SUBSCRIBE(MODULE, wake_up_event);

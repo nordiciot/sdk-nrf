@@ -9,15 +9,15 @@ GNSS AT commands
 
 The following commands list contains GNSS-related AT commands.
 
-Run GPS
-=======
+GNSS
+====
 
-The ``#XGPS`` command controls the GPS.
+The ``#XGPS`` command controls the GNSS.
 
 Set command
 -----------
 
-The set command allows you to start and stop the GPS.
+The set command allows you to start and stop the GNSS.
 
 Syntax
 ~~~~~~
@@ -28,25 +28,25 @@ Syntax
 
 The ``<op>`` parameter accepts the following integer values:
 
-* ``0`` - Stop GPS
-* ``1`` - Start GPS
+* ``0`` - Stop GNSS
+* ``1`` - Start GNSS
 
 The ``<interval>`` parameter represents the GNSS fix interval in seconds.
-It must be set when starting the GPS.
+It must be set when starting the GNSS.
 It accepts the following integer values:
 
 * ``0`` - Single-fix navigation mode.
 * ``1`` - Continuous navigation mode.
   The fix interval is set to 1 second
-* Ranging from ``10`` to ``1800`` - Periodic navigation mode.
+* Ranging from ``10`` to ``65535`` - Periodic navigation mode.
   The fix interval is set to the specified value.
 
 In periodic navigation mode, the ``<timeout>`` parameter controls the maximum time in seconds that the GNSS receiver is allowed to run while trying to produce a valid PVT estimate.
-In continuous navigation mode, this parameter doesn't have any effect.
+In continuous navigation mode, this parameter does not have any effect.
 It accepts the following integer values:
 
-* ``0`` - the GNSS receiver runs indefinitely until a valid PVT estimate is produced.
-* Any positive integer lower than the ``<interval>`` value - the GNSS receiver is turned off after the specified time is up, even if a valid PVT estimate was not produced.
+* ``0`` - The GNSS receiver runs indefinitely until a valid PVT estimate is produced.
+* Any positive integer lower than the ``<interval>`` value - The GNSS receiver is turned off after the specified time is up, even if a valid PVT estimate was not produced.
 
 When not specified, it defaults to a timeout value of 60 seconds.
 
@@ -65,6 +65,18 @@ Unsolicited notification
 * The ``<heading>`` value represents the heading of the movement of the user in degrees.
 * The ``<datetime>`` value represents the UTC date-time.
 
+::
+
+   #XGPS: <NMEA message>
+
+The ``<NMEA message>`` is the ``$GPGGA`` (Global Positioning System Fix Data) NMEA sentence.
+
+::
+
+   #XGPS: <gnss_service>,<gnss_status>
+
+Refer to the READ command.
+
 Example
 ~~~~~~~
 
@@ -79,7 +91,9 @@ Example
   AT+CFUN=31
 
   OK
-  at#xgps=1,1
+  AT#XGPS=1,1
+
+  #XGPS: 1,1
 
   OK
 
@@ -92,7 +106,43 @@ Example
 Read command
 ------------
 
-The read command is not supported.
+The read command allows you to check GNSS support and service status.
+
+Syntax
+~~~~~~
+
+::
+
+   #XGPS?
+
+Response syntax
+~~~~~~~~~~~~~~~
+
+::
+
+   #XGPS: <gnss_service>,<gnss_status>
+
+* The ``<gnss_service>`` value is an integer.
+  When it returns the value of ``1``, it means that GNSS is supported in ``%XSYSTEMMODE`` and activated in ``+CFUN``.
+
+* The ``<gnss_status>`` value is an integer.
+
+* ``0`` - GNSS is stopped.
+* ``1`` - GNSS is started.
+* ``2`` - GNSS wakes up in periodic mode.
+* ``3`` - GNSS enters sleep because of timeout.
+* ``4`` - GNSS enters sleep because a fix is achieved.
+
+Example
+~~~~~~~
+
+::
+
+  AT#XGPS?
+
+  #XGPS: 1,1
+
+  OK
 
 Test command
 ------------
@@ -117,164 +167,21 @@ Example
 
   OK
 
+GNSS with nRF Cloud A-GPS
+=========================
 
-Connect to nRF Cloud
-====================
+The ``#XAGPS`` command runs the GNSS together with the nRF Cloud A-GPS service.
 
-The ``#XNRFCLOUD`` command controls the connection to the nRF Cloud service.
+.. note::
+   To use ``#XAGPS``, the following preconditions apply:
 
-Set command
------------
-
-The set command allows you to connect and disconnect the nRF Cloud service.
-
-Syntax
-~~~~~~
-
-::
-
-   #XNRFCLOUD=<op>[,<signify>]
-
-The ``<op>`` parameter accepts the following integer values:
-
-* ``0`` - Disconnect from the nRF Cloud service.
-* ``1`` - Connect to the nRF Cloud service.
-* ``2`` - Send a message in the JSON format to the nRF Cloud service.
-
-When ``<op>`` is ``2``, SLM enters ``slm_data_mode``.
-
-The ``<signify>`` parameter is used only when the ``<op>`` value is ``1``
-It accepts the following integer values:
-
-* ``0`` - It does not signify the location info to nRF Cloud.
-* ``1`` - It does signify the location info to nRF Cloud.
-
-When the ``<signify>`` parameter is not specified, it does not signify the location info to nRF Cloud.
-
-Unsolicited notification
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-::
-
-   #XNRFCLOUD: <ready>,<signify>
-
-* The ``<ready>`` value indicates whether the nRF Cloud connection is ready or not.
-* The ``<signify>`` value indicates whether the location info will be signified to nRF Cloud or not.
-
-::
-
-   #XNRFCLOUD: <message>
-
-* The ``<message>`` value indicates the nRF Cloud data received when A-GPS, P-GPS, and Cell_Pos are not active.
-
-Example
-~~~~~~~
-
-::
-
-  AT#XNRFCLOUD=1
-
-  OK
-  #XNRFCLOUD: 1,0
-
-  AT#XNRFCLOUD=2
-  {"msg":"Hello, nRF Cloud"}
-  OK
-
-  #XNRFCLOUD: {"msg":"Hello"}
-
-  AT#XNRFCLOUD=0
-
-  AT#XNRFCLOUD: 0,0
-
-  OK
-  AT#XNRFCLOUD=1,1
-
-  OK
-  #XNRFCLOUD: 1,1
-  AT#XNRFCLOUD=0
-
-  AT#XNRFCLOUD: 0,1
-
-  OK
-
-Read command
-------------
-
-The read command checks if nRF Cloud is connected or not.
-
-Syntax
-~~~~~~
-
-::
-
-   #XNRFCLOUD?
-
-Response syntax
-~~~~~~~~~~~~~~~
-
-::
-
-   #XNRFCLOUD: <ready>,<signify>,<sec_tag>,<device_id>
-
-* The ``<ready>`` value indicates whether the nRF Cloud connection is ready or not.
-* The ``<signify>`` value indicates whether the location info will be signified to nRF Cloud or not.
-* The ``<sec_tag>`` value indicates the ``sec_tag`` used for accessing nRF Cloud.
-* The ``<device_id>`` value indicates the device ID used for accessing nRF Cloud.
-
-Example
-~~~~~~~
-
-::
-
-  AT#XNRFCLOUD?
-
-  #XNRFCLOUD: 1,0,16842753,"nrf-352656106443792"
-
-  OK
-
-::
-
-  AT#XNRFCLOUD?
-
-  #XNRFCLOUD: 1,0,8888,"50503041-3633-4261-803d-1e2b8f70111a"
-
-  OK
-
-
-Test command
-------------
-
-The test command tests the existence of the command and provides information about the type of its subparameters.
-
-Syntax
-~~~~~~
-
-::
-
-   #XNRFCLOUD=?
-
-Example
-~~~~~~~
-
-::
-
-  AT#XXNRFCLOUD=?
-
-  #XNRFCLOUD: (0,1,2),<signify>
-
-  OK
-
-Run GPS with nRF Cloud A-GPS
-============================
-
-The ``#XAGPS`` command runs the GPS together with the nRF Cloud A-GPS service.
-This requires access to nRF Cloud through the LTE network for receiving A-GPS data.
+   * You must define :ref:`CONFIG_SLM_NRF_CLOUD <CONFIG_SLM_NRF_CLOUD>` and :kconfig:option:`CONFIG_NRF_CLOUD_AGPS <CONFIG_NRF_CLOUD_AGPS>`.
+   * You must have access to nRF Cloud through the LTE network for receiving A-GPS data.
 
 Set command
 -----------
 
-The set command allows you to start and stop the GPS together with the nRF Cloud A-GPS service.
+The set command allows you to start and stop the GNSS together with the nRF Cloud A-GPS service.
 
 Syntax
 ~~~~~~
@@ -285,24 +192,24 @@ Syntax
 
 The ``<op>`` parameter accepts the following integer values:
 
-* ``0`` - Stop GPS with A-GPS
-* ``1`` - Start GPS with A-GPS
+* ``0`` - Stop GNSS with A-GPS
+* ``1`` - Start GNSS with A-GPS
 
 The ``<interval>`` parameter represents the GNSS fix interval in seconds.
-It must be set when starting the GPS.
+It must be set when starting the GNSS.
 It accepts the following integer values:
 
 * ``0`` - Single-fix navigation mode.
 * ``1`` - Continuous navigation mode.
   The fix interval is set to 1 second
-* Ranging from ``10`` to ``1800`` - Periodic navigation mode.
+* Ranging from ``10`` to ``65535`` - Periodic navigation mode.
   The fix interval is set to the specified value.
 
 In periodic navigation mode, the ``<timeout>`` parameter controls the maximum time in seconds that the GNSS receiver is allowed to run while trying to produce a valid PVT estimate.
-In continuous navigation mode, this parameter doesn't have any effect.
+In continuous navigation mode, this parameter does not have any effect.
 It accepts the following integer values:
 
-* ``0`` - the GNSS receiver runs indefinitely until a valid PVT estimate is produced.
+* ``0`` - The GNSS receiver runs indefinitely until a valid PVT estimate is produced.
 * Any positive integer lower than the ``<interval>`` value - the GNSS receiver is turned off after the specified time is up, even if a valid PVT estimate was not produced.
 
 When not specified, it defaults to a timeout value of 60 seconds.
@@ -321,6 +228,18 @@ Unsolicited notification
 * The ``<speed>`` value represents the horizontal speed in meters.
 * The ``<heading>`` value represents the heading of the movement of the user in degrees.
 * The ``<datetime>`` value represents the UTC date-time.
+
+::
+
+   #XGPS: <NMEA message>
+
+The ``<NMEA message>`` is the ``$GPGGA`` (Global Positioning System Fix Data) NMEA sentence.
+
+::
+
+   #XAGPS: <gnss_service>,<agps_status>
+
+Refer to the READ command.
 
 Example
 ~~~~~~~
@@ -345,6 +264,8 @@ Example
   #XNRFCLOUD: 1,0
   AT#XAGPS=1,1
 
+  #XAGPS: 1,1
+
   OK
 
   #XGPS: 35.457417,139.625211,162.850952,15.621976,1.418092,0.000000,"2021-06-02 05:21:31"
@@ -358,7 +279,43 @@ Example
 Read command
 ------------
 
-The read command is not supported.
+The read command allows you to check GNSS support and AGPS service status.
+
+Syntax
+~~~~~~
+
+::
+
+   #XAGPS?
+
+Response syntax
+~~~~~~~~~~~~~~~
+
+::
+
+   #XAGPS: <gnss_service>,<agps_status>
+
+* The ``<gnss_service>`` value is an integer.
+  When it returns the value of ``1``, it means that GNSS is supported in ``%XSYSTEMMODE`` and activated in ``+CFUN``.
+
+* The ``<agps_status>`` value is an integer.
+
+* ``0`` - AGPS is stopped.
+* ``1`` - AGPS is started.
+* ``2`` - GNSS wakes up in periodic mode.
+* ``3`` - GNSS enters sleep because of timeout.
+* ``4`` - GNSS enters sleep because a fix is achieved.
+
+Example
+~~~~~~~
+
+::
+
+  AT#XAGPS?
+
+  #XAGPS: 1,1
+
+  OK
 
 Test command
 ------------
@@ -384,16 +341,21 @@ Example
   OK
 
 
-Run GPS with nRF Cloud P-GPS
-============================
+GNSS with nRF Cloud P-GPS
+=========================
 
-The ``#XPGPS`` command runs the GPS together with the nRF Cloud P-GPS service.
-This requires access to nRF Cloud through the LTE network for receiving P-GPS data.
+The ``#XPGPS`` command runs the GNSS together with the nRF Cloud P-GPS service.
+
+.. note::
+   To use ``#XPGPS``, the following preconditions apply:
+
+   * You must define :ref:`CONFIG_SLM_NRF_CLOUD <CONFIG_SLM_NRF_CLOUD>` and :kconfig:option:`CONFIG_NRF_CLOUD_PGPS <CONFIG_NRF_CLOUD_PGPS>`.
+   * You must have access to nRF Cloud through the LTE network for receiving P-GPS data.
 
 Set command
 -----------
 
-The set command allows you to start and stop the GPS together with the nRF Cloud P-GPS service.
+The set command allows you to start and stop the GNSS together with the nRF Cloud P-GPS service.
 
 Syntax
 ~~~~~~
@@ -404,22 +366,22 @@ Syntax
 
 The ``<op>`` parameter accepts the following integer values:
 
-* ``0`` - Stop GPS with P-GPS
-* ``1`` - Start GPS with P-GPS
+* ``0`` - Stop GNSS with P-GPS
+* ``1`` - Start GNSS with P-GPS
 
 The ``<interval>`` parameter represents the GNSS fix interval in seconds.
-It must be set when starting the GPS.
+It must be set when starting the GNSS.
 It accepts the following integer values:
 
-* Ranging from ``10`` to ``1800`` - Periodic navigation mode.
+* Ranging from ``10`` to ``65535`` - Periodic navigation mode.
   The fix interval is set to the specified value.
 
 In periodic navigation mode, the ``<timeout>`` parameter controls the maximum time in seconds that the GNSS receiver is allowed to run while trying to produce a valid PVT estimate.
-In continuous navigation mode, this parameter doesn't have any effect.
+In continuous navigation mode, this parameter does not have any effect.
 It accepts the following integer values:
 
-* ``0`` - the GNSS receiver runs indefinitely until a valid PVT estimate is produced.
-* Any positive integer lower than the ``<interval>`` value - the GNSS receiver is turned off after the specified time is up, even if a valid PVT estimate was not produced.
+* ``0`` - The GNSS receiver runs indefinitely until a valid PVT estimate is produced.
+* Any positive integer lower than the ``<interval>`` value - The GNSS receiver is turned off after the specified time is up, even if a valid PVT estimate was not produced.
 
 When not specified, it defaults to a timeout value of 60 seconds.
 
@@ -437,6 +399,18 @@ Unsolicited notification
 * The ``<speed>`` value represents the horizontal speed in meters.
 * The ``<heading>`` value represents the heading of the movement of the user in degrees.
 * The ``<datetime>`` value represents the UTC date-time.
+
+::
+
+   #XGPS: <NMEA message>
+
+The ``<NMEA message>`` is the ``$GPGGA`` (Global Positioning System Fix Data) NMEA sentence.
+
+::
+
+   #XPGPS: <gnss_service>,<pgps_status>
+
+Refer to the READ command.
 
 Example
 ~~~~~~~
@@ -461,6 +435,8 @@ Example
   #XNRFCLOUD: 1,0
   AT#XPGPS=1,30
 
+  #XPGPS: 1,1
+
   OK
 
   #XGPS: 35.457243,139.625435,149.005020,28.184258,10.431827,281.446014,"2021-06-24 04:35:52"
@@ -474,7 +450,32 @@ Example
 Read command
 ------------
 
-The read command is not supported.
+The read command allows you to check GNSS support and PGPS service status.
+
+Syntax
+~~~~~~
+
+::
+
+   #XPGPS?
+
+Response syntax
+~~~~~~~~~~~~~~~
+
+::
+
+   #XPGPS: <gnss_service>,<pgps_status>
+
+* The ``<gnss_service>`` value is an integer.
+  When it returns the value of ``1``, it means that GNSS is supported in ``%XSYSTEMMODE`` and is activated in ``+CFUN``.
+
+* The ``<pgps_status>`` value is an integer.
+
+* ``0`` - PGPS is stopped.
+* ``1`` - PGPS is started.
+* ``2`` - GNSS wakes up in periodic mode.
+* ``3`` - GNSS enters sleep because of timeout.
+* ``4`` - GNSS enters sleep because a fix is achieved.
 
 Test command
 ------------
@@ -499,81 +500,54 @@ Example
 
   OK
 
-Run nRF Cloud cellular positioning
-==================================
+Delete GNSS data
+================
 
-The ``#XCELLPOS`` command runs the nRF Cloud cellular positioning service for position information.
-This requires to define ``CONFIG_SLM_CELL_POS`` and to access nRF Cloud through the LTE network.
+The ``#XGPSDEL`` command deletes GNSS data from non-volatile memory.
+This command should be issued when GNSS is activated but not started yet.
+
+.. note::
+   This is considered a debug feature, and is not supposed to be used in production code.
 
 Set command
 -----------
 
-The set command allows you to start and stop the nRF Cloud cellular positioning service.
+The set command allows you to delete old GNSS data.
+Using this command does not trigger A-GPS request event.
+The execution of the command may delay the full functionality of A-GPS and P-GPS until the next periodic A-GPS request has been received.
 
 Syntax
 ~~~~~~
 
 ::
 
-   #XCELLPOS=<op>
+   #XGPSDEL=<mask>
 
-The ``<op>`` parameter accepts the following integer values:
+The ``<mask>`` parameter accepts an integer that is the ``OR`` value of the following bitmasks :
 
-* ``0`` - Stop cellular positioning.
-* ``1`` - Start cellular positioning in single-cell mode.
-* ``2`` - Start cellular positioning in multi-cell mode.
-  To use ``2``, you must issue the ``AT%NCELLMEAS`` command first.
-
-Unsolicited notification
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-::
-
-   #XCELLPOS: <type>,<latitude>,<longitude>,<uncertainty>
-
-* The ``<type>`` value indicates in which mode the cellular positioning server is running:
-
-  * ``0`` - The server is running in single-cell mode
-  * ``1`` - The server is running in multi-cell mode
-
-* The ``<latitude>`` value represents the latitude in degrees.
-* The ``<longitude>`` value represents the longitude in degrees.
-* The ``<uncertainty>`` value represents the certainty of the result.
+* ``0x001`` - Ephemerides
+* ``0x002`` - Almanacs (excluding leap second and ionospheric correction)
+* ``0x004`` - Ionospheric correction parameters
+* ``0x008`` - Last good fix (the last position)
+* ``0x010`` - GPS time-of-week (TOW)
+* ``0x020`` - GPS week number
+* ``0x040`` - Leap second (UTC parameters)
+* ``0x080`` - Local clock (TCXO) frequency offset
+* ``0x100`` - Precision estimate of GPS time-of-week (TOW)
+* ``511`` - All of the above
 
 Example
 ~~~~~~~
 
 ::
 
-  AT%XSYSTEMMODE=1,0,0,0
-
+  AT%XSYSTEMMODE=0,0,1,0
   OK
-  AT+CFUN=1
-
+  AT+CFUN=31
   OK
-  AT#XNRFCLOUD=1
-
+  AT#XGPSDEL=511
   OK
-  #XNRFCLOUD: 1,0
-  AT#XCELLPOS=1
-
-  OK
-
-  #XCELLPOS: 0,35.455833,139.626111,1094
-
-  AT%NCELLMEAS
-
-  OK
-
-  %NCELLMEAS: 0,"0199F10A","44020","107E",65535,3750,5,49,27,107504,3750,251,33,4,0,475,107,26,14,25,475,58,26,17,25,475,277,24,9,25,475,51,18,1,25
-
-  AT#XCELLPOS=2
-
-  OK
-
-  #XCELLPOS: 1,35.534999,139.722362,1801
-  AT#XCELLPOS=0
-
+  AT+CFUN=0
   OK
 
 Read command
@@ -591,15 +565,15 @@ Syntax
 
 ::
 
-   #XCELLPOS=?
+   #XGPSDEL=?
 
 Example
 ~~~~~~~
 
 ::
 
-  AT#XCELLPOS=?
+  AT#XGPSDEL=?
 
-  #XCELLPOS: (0,1,2)
+  #XGPSDEL: <mask>
 
   OK

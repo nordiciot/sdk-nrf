@@ -13,7 +13,8 @@
  * @{
  */
 
-#include "event_manager.h"
+#include <app_event_manager.h>
+#include <app_event_manager_profiler_tracer.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,17 +27,20 @@ enum net_state {
 	NET_STATE_DISCONNECTED,
 	NET_STATE_CONNECTED,
 
-	NET_STATE_COUNT
+	NET_STATE_COUNT,
+
+	/** Unused in code, required for inter-core compatibility. */
+	APP_EM_ENFORCE_ENUM_SIZE(NET_STATE)
 };
 
 /** @brief NET state event. */
 struct net_state_event {
-	struct event_header header;
+	struct app_event_header header;
 
 	enum net_state state;
 	const void *id;
 };
-EVENT_TYPE_DECLARE(net_state_event);
+APP_EVENT_TYPE_DECLARE(net_state_event);
 
 
 #ifdef __cplusplus

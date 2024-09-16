@@ -10,23 +10,23 @@ Bluetooth: Central BAS
 The Central BAS sample demonstrates how do use the :ref:`bas_client_readme`.
 It uses the BAS Client to receive battery level information from a compatible device.
 
-Overview
-********
-
-When connected, the sample subscribes to battery level notifications.
-Every notification that is received is printed to the terminal.
-If the device does not support notifications for the Battery Level Characteristic, you can request to read the battery level by pressing Button 1.
-
 Requirements
 ************
 
 The sample supports the following development kits:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp_and_cpuapp_ns , nrf52840dk_nrf52840, nrf52833dk_nrf52833, nrf52833dk_nrf52820, nrf52dk_nrf52832
+.. table-from-sample-yaml::
 
-The sample also requires a device running a BAS Server to connect with (for example, another development kit running the :ref:`peripheral_hids_mouse` or :ref:`peripheral_hids_keyboard` sample, or a Bluetooth® Low Energy dongle and nRF Connect for Desktop).
+.. include:: /includes/tfm.txt
+
+The sample also requires a device running a BAS Server to connect with (for example, another development kit running the :ref:`peripheral_hids_mouse` or :ref:`peripheral_hids_keyboard` sample, or a computer with a Bluetooth® Low Energy dongle and `nRF Connect for Desktop`_).
+
+Overview
+********
+
+When connected, the sample subscribes to battery level notifications.
+Every notification that is received is printed to the terminal.
+If the device does not support notifications for the Battery Level Characteristic, press **Button 1** to request for reading the battery level.
 
 User interface
 **************
@@ -34,13 +34,12 @@ User interface
 Button 1:
    Send read request for the battery level value.
 
-
 Building and running
 ********************
 
 .. |sample path| replace:: :file:`samples/bluetooth/central_bas`
 
-.. include:: /includes/build_and_run.txt
+.. include:: /includes/build_and_run_ns.txt
 
 .. _central_bas_testing:
 
@@ -79,21 +78,22 @@ Testing with nRF Connect for Desktop
 
 1. |connect_terminal_specific|
 #. Reset the kit.
-#. Start `nRF Connect for Desktop`_ and select the connected dongle that is used for communication.
-#. Go to the :guilabel:`Server setup` tab.
+#. Start `nRF Connect for Desktop`_.
+#. Open the Bluetooth Low Energy app and select the connected dongle that is used for communication.
+#. Open the :guilabel:`SERVER SETUP` tab.
    Click the dongle configuration and select :guilabel:`Load setup`.
    Load the :file:`hids_keyboard.ncs` file that is located under :file:`samples/bluetooth/central_bas` in the |NCS| folder structure.
 #. Click :guilabel:`Apply to device`.
-#. Go to the :guilabel:`Connection Map` tab.
+#. Open the :guilabel:`CONNECTION MAP` tab.
    Click the dongle configuration and select :guilabel:`Advertising setup`.
 
-   The current version of nRF Connect cannot store the advertising setup, so it must be configured manually.
+   The current version of the Bluetooth Low Energy app cannot store the advertising setup, so it must be configured manually.
    See the following image for the required target configuration:
 
    .. figure:: /images/bt_central_hids_nrfc_ad.png
       :alt: Advertising setup for HIDS keyboard simulator
 
-   Advertising setup for HIDS keyboard simulator
+      Advertising setup for HIDS keyboard simulator
 
    Complete the following steps to configure the advertising setup:
 
@@ -107,7 +107,7 @@ Testing with nRF Connect for Desktop
    #. Add a **Complete local name** of your choice to the **Scan response data**.
    #. Click :guilabel:`Apply` and :guilabel:`Close`.
 
-#. In the Adapter settings, choose :guilabel:`Start advertising`.
+#. In the **Adapter settings**, select :guilabel:`Start advertising`.
 #. Wait until the kit that runs the Central BAS sample connects.
    In the terminal window, check for information similar to the following::
 
@@ -135,19 +135,23 @@ This sample uses the following |NCS| libraries:
 
 In addition, it uses the following Zephyr libraries:
 
-* ``include/zephyr/types.h``
-* ``boards/arm/nrf*/board.h``
+* :file:`include/zephyr/types.h`
+* :file:`boards/arm/nrf*/board.h`
 * :ref:`zephyr:kernel_api`:
 
-  * ``include/kernel.h``
+  * :file:`include/kernel.h`
 
 * :ref:`zephyr:api_peripherals`:
 
-   * ``include/uart.h``
+   * :file:`include/uart.h`
 
 * :ref:`zephyr:bluetooth_api`:
 
-  * ``include/bluetooth/bluetooth.h``
-  * ``include/bluetooth/gatt.h``
-  * ``include/bluetooth/hci.h``
-  * ``include/bluetooth/uuid.h``
+  * :file:`include/bluetooth/bluetooth.h`
+  * :file:`include/bluetooth/gatt.h`
+  * :file:`include/bluetooth/hci.h`
+  * :file:`include/bluetooth/uuid.h`
+
+The sample also uses the following secure firmware component:
+
+* :ref:`Trusted Firmware-M <ug_tfm>`

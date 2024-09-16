@@ -34,88 +34,96 @@ config SRAM_BASE_ADDRESS
 
 menu "Zephyr subsystem configurations"
 
+DT_CHOSEN_Z_IPC_SHM := zephyr,ipc_shm
+
+config RPMSG_NRF53_SRAM_SIZE
+	hex "RPMsg shared memory size"
+	default "$(dt_chosen_reg_size_hex,$(DT_CHOSEN_Z_IPC_SHM))"
+	depends on IPC_SERVICE && SOC_NRF5340_CPUAPP
+	depends on PARTITION_MANAGER_ENABLED
+	help
+	  This option specifies size of the memory region to be used
+	  for the RPMsg shared memory
+
 if FILE_SYSTEM_LITTLEFS
 partition=LITTLEFS
 partition-size=0x6000
-rsource "Kconfig.template.partition_size"
+rsource "Kconfig.template.partition_config"
+rsource "Kconfig.template.partition_region"
 endif
 
 
-if SETTINGS
+if SETTINGS_FCB || SETTINGS_NVS
 partition=SETTINGS_STORAGE
 partition-size=0x2000
-rsource "Kconfig.template.partition_size"
+rsource "Kconfig.template.partition_config"
+rsource "Kconfig.template.partition_region"
+
+config PM_PARTITION_ALIGN_SETTINGS_STORAGE
+	hex "Settings storage partition alignment"
+	default NRF_SPU_FLASH_REGION_SIZE if BUILD_WITH_TFM
+	default FPROTECT_BLOCK_SIZE
+	help
+	  Alignment of the settings storage partition.
+
 endif
 
 if NVS && !SETTINGS_NVS
 partition=NVS_STORAGE
 partition-size=0x6000
-rsource "Kconfig.template.partition_size"
+rsource "Kconfig.template.partition_config"
+rsource "Kconfig.template.partition_region"
 endif
 
 if ZIGBEE && !SOC_NRF52833
 partition=ZBOSS_NVRAM
 partition-size=0x8000
-rsource "Kconfig.template.partition_size"
+rsource "Kconfig.template.partition_config"
 endif
 
 if ZIGBEE && SOC_NRF52833
 partition=ZBOSS_NVRAM
 partition-size=0x4000
-rsource "Kconfig.template.partition_size"
+rsource "Kconfig.template.partition_config"
 endif
 
 if ZIGBEE
 partition=ZBOSS_PRODUCT_CONFIG
 partition-size=0x1000
-rsource "Kconfig.template.partition_size"
+rsource "Kconfig.template.partition_config"
+endif
+
+if EMDS
+partition=EMDS_STORAGE
+partition-size=0x1000
+rsource "Kconfig.template.partition_config"
+endif
+
+if NRF_CLOUD_PGPS_STORAGE_PARTITION
+partition=PGPS
+partition-size=NRF_CLOUD_PGPS_PARTITION_SIZE
+rsource "Kconfig.template.partition_config"
+rsource "Kconfig.template.partition_region"
+
+config PM_PGPS_ALIGN
+	hex
+	default NRF_SPU_FLASH_REGION_SIZE if BUILD_WITH_TFM
+	default NRF_CLOUD_PGPS_PARTITION_ALIGN
+	depends on PM_PARTITION_REGION_PGPS_EXTERNAL && BUILD_WITH_TFM
+
+endif
+
+if DFU_TARGET_FULL_MODEM_USE_EXT_PARTITION
+partition=FMFU_STORAGE
+partition-size=DFU_TARGET_FULL_MODEM_EXT_FLASH_SIZE
+rsource "Kconfig.template.partition_config"
+rsource "Kconfig.template.partition_region"
 endif
 
 endmenu # Zephyr subsystem configurations
-
-
-menu "Zephyr samples configurations"
-
-if BT_RPMSG_NRF53 && SOC_NRF5340_CPUAPP
-module=HCI_RPMSG
-source "${ZEPHYR_BASE}/../nrf/subsys/partition_manager/Kconfig.template.build_strategy_domain"
-
-DT_CHOSEN_Z_IPC_SHM := zephyr,ipc_shm
-
-config RPMSG_NRF53_SRAM_SIZE
-	# Hidden configuration to expose DT property as kconfig variable
-	hex
-	default "$(dt_chosen_reg_size_hex,$(DT_CHOSEN_Z_IPC_SHM))"
-
-endif
-
-endmenu # Zephyr samples configurations
-
 menu "NCS subsystem configurations"
 
 endmenu # NCS subsystem configurations
-
-menu "NCS samples configurations"
-
-if NRF_802154_SER_HOST && SOC_NRF5340_CPUAPP
-module=802154_RPMSG
-source "${ZEPHYR_BASE}/../nrf/subsys/partition_manager/Kconfig.template.build_strategy_domain"
-endif
-
-if BT_RPC && SOC_NRF5340_CPUAPP
-module=RPC_HOST
-source "${ZEPHYR_BASE}/../nrf/subsys/partition_manager/Kconfig.template.build_strategy_domain"
-
-DT_CHOSEN_Z_IPC_SHM := zephyr,ipc_shm
-
-config BT_RPC_HOST_NRF53_SRAM_SIZE
-	# Hidden configuration to expose DT property as kconfig variable
-	hex
-	default "$(dt_chosen_reg_size_hex,$(DT_CHOSEN_Z_IPC_SHM))"
-
-endif
-
-endmenu # NCS samples configurations
 
 config PM_SINGLE_IMAGE
 	bool "Use the Partition Manager for single image builds" if !BUILD_WITH_TFM
@@ -131,51 +139,50 @@ config PM_SINGLE_IMAGE
 	  Secure Execution environment is generated.
 
 DT_CHOSEN_EXT_FLASH:= nordic,pm-ext-flash
+DT_CHOSEN_EXT_FLASH_PATH := $(dt_chosen_path,$(DT_CHOSEN_EXT_FLASH))
 
-config PM_EXTERNAL_FLASH
-	bool "[DEPRECATED] Support external flash in Partition Manager"
-	depends on !$(dt_chosen_enabled,$(DT_CHOSEN_EXT_FLASH))
+config PM_EXTERNAL_FLASH_HAS_DRIVER
+	bool
+	default y if NORDIC_QSPI_NOR || SPI_NOR
+	default y if PM_OVERRIDE_EXTERNAL_DRIVER_CHECK
 	help
-	  [DEPRECATED] This value is extracted directly from devicetree. Remove
-	  its configuration. See 'Using external flash memory partitions'
-	  chapter in the documentation for instructions on how to fix this.
-
-config PM_EXTERNAL_FLASH_SUPPORT_LEGACY
-	bool "Support legacy external flash partitioning"
-	help
-	  The PM_EXTERNAL_FLASH Kconfig settings has been deprecated in favor of devicetree support.
-	  Enable this setting if your system is depending upon the old behavior.
-	depends on !$(dt_chosen_enabled,$(DT_CHOSEN_EXT_FLASH))
-	depends on PM_EXTERNAL_FLASH
-
-config PM_EXTERNAL_FLASH_DEV_NAME
-	string "[DEPRECATED] Name of the external flash device"
-	depends on !$(dt_chosen_enabled,$(DT_CHOSEN_EXT_FLASH))
-	help
-	  [DEPRECATED] This value is extracted directly from devicetree. Remove
-	  its configuration. See 'Using external flash memory partitions'
-	  chapter in the documentation for instructions on how to fix this.
-
-config PM_EXTERNAL_FLASH_SIZE
-	hex "[DEPRECATED] External flash size (in bytes)"
-	depends on !$(dt_chosen_enabled,$(DT_CHOSEN_EXT_FLASH))
-	default 0
-	help
-	  [DEPRECATED] This value is extracted directly from devicetree. Remove
-	  its configuration. See 'Using external flash memory partitions'
-	  chapter in the documentation for instructions on how to fix this.
+	  This option needs to be enabled by flash drivers that provide
+	  support for external flash devices with partition manager
+	  controlled partitions on them.
+	  Partitions on devices without drivers will not have partition map
+	  entries generated and will not be available from Flash Map API.
 
 config PM_EXTERNAL_FLASH_BASE
 	hex "External flash base address"
 	default 0
+
+config PM_EXTERNAL_FLASH_ENABLED
+	bool
+	default $(dt_chosen_enabled,$(DT_CHOSEN_EXT_FLASH))
+	help
+	  Internal PM_EXTERNAL_FLASH kconfig for exporting devicetree to sysbuild.
+
+config PM_EXTERNAL_FLASH_PATH
+	string
+	default "$(DT_CHOSEN_EXT_FLASH_PATH)"
+	help
+	  Internal PM_EXTERNAL_FLASH kconfig for exporting devicetree to sysbuild.
+
+config PM_EXTERNAL_FLASH_SIZE_BITS
+	int
+	default $(dt_node_int_prop_int,$(DT_CHOSEN_EXT_FLASH_PATH),size) if PM_EXTERNAL_FLASH_ENABLED
+	default 0
+	help
+	  Internal PM_EXTERNAL_FLASH kconfig for exporting devicetree to sysbuild.
 
 config PM_EXTERNAL_FLASH_MCUBOOT_SECONDARY
 	bool "Place MCUboot secondary in external flash"
 	depends on BOOTLOADER_MCUBOOT || MCUBOOT
 	# Only depend on the chosen for the parent image. The value of this
 	# option is propagated to the MCUboot child image automatically.
-	depends on $(dt_chosen_enabled,$(DT_CHOSEN_EXT_FLASH)) || PM_EXTERNAL_FLASH || MCUBOOT
+	depends on PM_EXTERNAL_FLASH_ENABLED || MCUBOOT
 	default y if BOOTLOADER_MCUBOOT
+	imply ADD_MCUBOOT_MEDIATE_SIM_FLASH_DTS
 	help
 	  Place the secondary partition of MCUboot in the external flash instead
 	  of the internal flash. This option should only be enabled by the user
@@ -186,6 +193,13 @@ config PM_IMAGE_NOT_BUILT_FROM_SOURCE
 	help
 	  Promptless helper config used to indicate that one or more
 	  image is not built from source.
+
+config PM_OVERRIDE_EXTERNAL_DRIVER_CHECK
+	bool "Override external driver check"
+	help
+	  When enabled, will include all external flash stroage areas without
+	  being gated on the NORDIC_QSPI_NOR Kconfig, can be enabled to use
+	  non-QSPI external flash chips from partition manager.
 
 # Helper configs needed since 'SRAM_SIZE/BASE' use the chosen node.
 config PM_SRAM_BASE

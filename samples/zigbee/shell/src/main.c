@@ -9,42 +9,50 @@
  * @brief Zigbee shell sample.
  */
 
-#include <zephyr.h>
-#include <logging/log.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 #include <dk_buttons_and_leds.h>
 
 #include <zboss_api.h>
 #include <zigbee/zigbee_error_handler.h>
 #include <zigbee/zigbee_app_utils.h>
 #include <zb_nrf_platform.h>
+#include "zb_range_extender.h"
 
 
 /* Device endpoint, used to receive ZCL commands. */
-#define APP_ZIGBEE_ENDPOINT             CONFIG_ZIGBEE_SHELL_ENDPOINT
+#define APP_ZIGBEE_ENDPOINT              CONFIG_ZIGBEE_SHELL_ENDPOINT
 
 /* Type of power sources available for the device.
  * For possible values see section 3.2.2.2.8 of ZCL specification.
  */
-#define BULB_INIT_BASIC_POWER_SOURCE    ZB_ZCL_BASIC_POWER_SOURCE_DC_SOURCE
+#define SHELL_INIT_BASIC_POWER_SOURCE    ZB_ZCL_BASIC_POWER_SOURCE_DC_SOURCE
 
 /* LED indicating that device successfully joined Zigbee network. */
-#define ZIGBEE_NETWORK_STATE_LED        DK_LED3
+#define ZIGBEE_NETWORK_STATE_LED         DK_LED3
 
 /* LED used for device identification. */
-#define IDENTIFY_LED                    DK_LED4
+#ifdef CONFIG_BOARD_NRF52840DONGLE_NRF52840
+#define IDENTIFY_LED                     DK_LED1
+#else
+#define IDENTIFY_LED                     DK_LED4
+#endif /* defined CONFIG_BOARD_NRF52840DONGLE_NRF52840 */
 
 /* Button used to enter the Identify mode. */
-#define IDENTIFY_MODE_BUTTON            DK_BTN4_MSK
+#ifdef CONFIG_BOARD_NRF52840DONGLE_NRF52840
+#define IDENTIFY_MODE_BUTTON             DK_BTN1_MSK
+#else
+#define IDENTIFY_MODE_BUTTON             DK_BTN4_MSK
+#endif /* defined CONFIG_BOARD_NRF52840DONGLE_NRF52840 */
 
-
-LOG_MODULE_REGISTER(app);
+LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
 /* Main application customizable context.
  * Stores all settings and static values.
  */
 struct zb_device_ctx {
-	zb_zcl_basic_attrs_t     basic_attr;
-	zb_zcl_identify_attrs_t  identify_attr;
+	zb_zcl_basic_attrs_t basic_attr;
+	zb_zcl_identify_attrs_t identify_attr;
 };
 
 /* Zigbee device application context storage. */
@@ -59,12 +67,12 @@ ZB_ZCL_DECLARE_BASIC_ATTRIB_LIST(
 	&dev_ctx.basic_attr.zcl_version,
 	&dev_ctx.basic_attr.power_source);
 
-ZB_HA_DECLARE_RANGE_EXTENDER_CLUSTER_LIST(
+ZB_DECLARE_RANGE_EXTENDER_CLUSTER_LIST(
 	app_template_clusters,
 	basic_attr_list,
 	identify_attr_list);
 
-ZB_HA_DECLARE_RANGE_EXTENDER_EP(
+ZB_DECLARE_RANGE_EXTENDER_EP(
 	app_zigbee_ep,
 	APP_ZIGBEE_ENDPOINT,
 	app_template_clusters);
@@ -79,7 +87,7 @@ static void app_clusters_attr_init(void)
 {
 	/* Basic cluster attributes data */
 	dev_ctx.basic_attr.zcl_version = ZB_ZCL_VERSION;
-	dev_ctx.basic_attr.power_source = BULB_INIT_BASIC_POWER_SOURCE;
+	dev_ctx.basic_attr.power_source = SHELL_INIT_BASIC_POWER_SOURCE;
 
 	/* Identify cluster attributes data. */
 	dev_ctx.identify_attr.identify_time =
@@ -118,28 +126,37 @@ static void identify_cb(zb_bufid_t bufid)
 	}
 }
 
-/**@breif Starts identifying the device.
+/**@brief Starts identifying the device.
  *
  * @param  bufid  Unused parameter, required by ZBOSS scheduler API.
  */
 static void start_identifying(zb_bufid_t bufid)
 {
-	zb_ret_t zb_err_code;
-
 	ZVUNUSED(bufid);
 
-	/* Check if endpoint is in identifying mode,
-	 * if not put desired endpoint in identifying mode.
-	 */
-	if (dev_ctx.identify_attr.identify_time ==
-	    ZB_ZCL_IDENTIFY_IDENTIFY_TIME_DEFAULT_VALUE) {
-		LOG_INF("Enter identify mode");
-		zb_err_code = zb_bdb_finding_binding_target(
-			APP_ZIGBEE_ENDPOINT);
-		ZB_ERROR_CHECK(zb_err_code);
+	if (ZB_JOINED()) {
+		/* Check if endpoint is in identifying mode,
+		 * if not put desired endpoint in identifying mode.
+		 */
+		if (dev_ctx.identify_attr.identify_time ==
+		    ZB_ZCL_IDENTIFY_IDENTIFY_TIME_DEFAULT_VALUE) {
+
+			zb_ret_t zb_err_code = zb_bdb_finding_binding_target(
+				APP_ZIGBEE_ENDPOINT);
+
+			if (zb_err_code == RET_OK) {
+				LOG_INF("Enter identify mode");
+			} else if (zb_err_code == RET_INVALID_STATE) {
+				LOG_WRN("RET_INVALID_STATE - Cannot enter identify mode");
+			} else {
+				ZB_ERROR_CHECK(zb_err_code);
+			}
+		} else {
+			LOG_INF("Cancel identify mode");
+			zb_bdb_finding_binding_target_cancel();
+		}
 	} else {
-		LOG_INF("Cancel identify mode");
-		zb_bdb_finding_binding_target_cancel();
+		LOG_WRN("Device not in a network - cannot enter identify mode");
 	}
 }
 
@@ -150,13 +167,13 @@ static void start_identifying(zb_bufid_t bufid)
  */
 static void button_changed(uint32_t button_state, uint32_t has_changed)
 {
-	/* Calculate bitmask of buttons that are pressed
-	 * and have changed their state.
-	 */
-	uint32_t buttons = button_state & has_changed;
-
-	if (buttons & IDENTIFY_MODE_BUTTON) {
-		ZB_SCHEDULE_APP_CALLBACK(start_identifying, 0);
+	if (IDENTIFY_MODE_BUTTON & has_changed) {
+		if (IDENTIFY_MODE_BUTTON & button_state) {
+			/* Button changed its state to pressed */
+		} else {
+			/* Button changed its state to released */
+			ZB_SCHEDULE_APP_CALLBACK(start_identifying, 0);
+		}
 	}
 }
 
@@ -204,9 +221,6 @@ void zboss_signal_handler(zb_bufid_t bufid)
 		} else {
 			LOG_ERR("Unable to leave network (status: %d)", status);
 		}
-		if (!IS_ENABLED(CONFIG_ZIGBEE_ROLE_END_DEVICE)) {
-			zb_enable_auto_pan_id_conflict_resolution(ZB_FALSE);
-		}
 		break;
 	default:
 		/* Call default signal handler. */
@@ -219,7 +233,7 @@ void zboss_signal_handler(zb_bufid_t bufid)
 	}
 }
 
-void main(void)
+int main(void)
 {
 	LOG_INF("Starting Zigbee shell application");
 
@@ -235,4 +249,6 @@ void main(void)
 	ZB_AF_SET_IDENTIFY_NOTIFICATION_HANDLER(APP_ZIGBEE_ENDPOINT, identify_cb);
 
 	LOG_INF("Zigbee shell application started");
+
+	return 0;
 }

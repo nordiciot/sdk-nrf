@@ -8,23 +8,30 @@
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
-#include <sys/printk.h>
-#include <sys/byteorder.h>
-#include <zephyr.h>
-#include <drivers/gpio.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/gpio.h>
 #include <soc.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
 
 #include <bluetooth/gatt_dm.h>
+
+#include <dk_buttons_and_leds.h>
 
 #define DEVICE_NAME             CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN         (sizeof(DEVICE_NAME) - 1)
 
+/* Key used to accept or reject passkey value */
+#define KEY_PAIRING_ACCEPT DK_BTN1_MSK
+#define KEY_PAIRING_REJECT DK_BTN2_MSK
+
+static struct bt_conn *pairing_confirmation_conn;
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
@@ -108,7 +115,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 	}
 }
 
-static struct bt_conn_cb conn_callbacks = {
+BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected        = connected,
 	.disconnected     = disconnected,
 	.security_changed = security_changed,
@@ -129,9 +136,11 @@ static void pairing_confirm(struct bt_conn *conn)
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-	bt_conn_auth_pairing_confirm(conn);
+	__ASSERT_NO_MSG(!pairing_confirmation_conn);
+	pairing_confirmation_conn = bt_conn_ref(conn);
 
-	printk("Pairing confirmed: %s\n", addr);
+	printk("Pairing confirmation required for %s\n", addr);
+	printk("Press Button 1 to confirm, Button 2 to reject.\n");
 }
 
 static void pairing_complete(struct bt_conn *conn, bool bonded)
@@ -150,45 +159,100 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
 	printk("Pairing failed conn: %s, reason %d\n", addr, reason);
+
+	if (pairing_confirmation_conn) {
+		bt_conn_unref(pairing_confirmation_conn);
+		pairing_confirmation_conn = NULL;
+	}
 }
 
 static struct bt_conn_auth_cb conn_auth_callbacks = {
 	.cancel = auth_cancel,
 	.pairing_confirm = pairing_confirm,
+};
+
+static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {
 	.pairing_complete = pairing_complete,
 	.pairing_failed = pairing_failed
 };
 
-void main(void)
+static void button_changed(uint32_t button_state, uint32_t has_changed)
+{
+	int err;
+	uint32_t buttons = button_state & has_changed;
+
+	if (buttons & KEY_PAIRING_ACCEPT) {
+		struct bt_conn *conn = pairing_confirmation_conn;
+		pairing_confirmation_conn = NULL;
+
+		if (conn) {
+			err = bt_conn_auth_pairing_confirm(conn);
+			if (err) {
+				printk("Failed to confirm the pairing: %d\n", err);
+			} else {
+				printk("Pairing confirmed\n");
+			}
+
+			bt_conn_unref(conn);
+			conn = NULL;
+		}
+	}
+
+	if (buttons & KEY_PAIRING_REJECT) {
+		struct bt_conn *conn = pairing_confirmation_conn;
+		pairing_confirmation_conn = NULL;
+
+		if (conn) {
+			err = bt_conn_auth_cancel(conn);
+			if (err) {
+				printk("Failed to reject the pairing: %d\n", err);
+			} else {
+				printk("Pairing rejected\n");
+			}
+
+			bt_conn_unref(conn);
+			conn = NULL;
+		}
+	}
+}
+
+int main(void)
 {
 	int err;
 
 	printk("Starting GATT Discovery Manager example\n");
 
+	err = dk_buttons_init(button_changed);
+	if (err) {
+		printk("Cannot init buttons (err: %d)\n", err);
+	}
+
 	err = bt_enable(NULL);
 	if (err) {
 		printk("BLE init failed with error code %d\n", err);
-		return;
-	}
-
-	bt_conn_cb_register(&conn_callbacks);
-	if (err) {
-		printk("Failed to register connection callbacks.\n");
-		return;
+		return 0;
 	}
 
 	err = bt_conn_auth_cb_register(&conn_auth_callbacks);
 	if (err) {
 		printk("Failed to register authorization callbacks.\n");
-		return;
+		return 0;
+	}
+
+	err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
+	if (err) {
+		printk("Failed to register authorization info callbacks.\n");
+		return 0;
 	}
 
 	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
 			      NULL, 0);
 	if (err) {
 		printk("Advertising failed to start (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Advertising successfully started\n");
+
+	return 0;
 }

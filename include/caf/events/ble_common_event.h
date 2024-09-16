@@ -14,10 +14,11 @@
  * @brief CAF Bluetooth LE Common Event.
  */
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/conn.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
 
-#include "event_manager.h"
+#include <app_event_manager.h>
+#include <app_event_manager_profiler_tracer.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,7 +50,10 @@ enum peer_state {
 	PEER_STATE_CONN_FAILED,
 
 	/** Number of peer states. */
-	PEER_STATE_COUNT
+	PEER_STATE_COUNT,
+
+	/** Unused in code, required for inter-core compatibility. */
+	APP_EM_ENFORCE_ENUM_SIZE(PEER_STATE)
 };
 
 /** @brief Peer operations.
@@ -93,7 +97,10 @@ enum peer_operation {
 	PEER_OPERATION_CANCEL,
 
 	/** Number of peer operations. */
-	PEER_OPERATION_COUNT
+	PEER_OPERATION_COUNT,
+
+	/** Unused in code, required for inter-core compatibility. */
+	APP_EM_ENFORCE_ENUM_SIZE(PEER_OPERATION)
 };
 
 /** @brief Bluetooth LE peer event.
@@ -103,7 +110,7 @@ enum peer_operation {
  */
 struct ble_peer_event {
 	/** Event header. */
-	struct event_header header;
+	struct app_event_header header;
 
 	/** State of the Bluetooth LE peer. */
 	enum peer_state state;
@@ -123,7 +130,7 @@ struct ble_peer_event {
  */
 struct ble_peer_operation_event {
 	/** Event header. */
-	struct event_header header;
+	struct app_event_header header;
 
 	/** Bluetooth LE peer operation. */
 	enum peer_operation op;
@@ -147,7 +154,7 @@ struct ble_peer_operation_event {
  */
 struct ble_peer_conn_params_event {
 	/** Event header. */
-	struct event_header header;
+	struct app_event_header header;
 
 	/** ID used to identify Bluetooth connection - pointer to the bt_conn. */
 	void *id;
@@ -172,15 +179,25 @@ struct ble_peer_conn_params_event {
 
 /** @brief Bluetooth LE peer search event.
  *
- * The Bluetooth LE peer search event is submitted to inform if applcation is currently looking for
+ * The Bluetooth LE peer search event is submitted to inform if application is currently looking for
  * a Bluetooth peer. The event can be related either to Bluetooth scanning or advertising.
  */
 struct ble_peer_search_event {
 	/** Event header. */
-	struct event_header header;
+	struct app_event_header header;
 
 	/** Information if application is currently looking for a Bluetooth peer. */
 	bool active;
+};
+
+/** @brief Bluetooth LE advertising data update event.
+ *
+ * The Bluetooth LE advertising data update event is submitted to trigger update of advertising data
+ * and scan response data.
+ */
+struct ble_adv_data_update_event {
+	/** Event header. */
+	struct app_event_header header;
 };
 
 #ifdef __cplusplus
@@ -195,10 +212,11 @@ struct ble_peer_search_event {
 extern "C" {
 #endif
 
-EVENT_TYPE_DECLARE(ble_peer_event);
-EVENT_TYPE_DECLARE(ble_peer_operation_event);
-EVENT_TYPE_DECLARE(ble_peer_conn_params_event);
-EVENT_TYPE_DECLARE(ble_peer_search_event);
+APP_EVENT_TYPE_DECLARE(ble_peer_event);
+APP_EVENT_TYPE_DECLARE(ble_peer_operation_event);
+APP_EVENT_TYPE_DECLARE(ble_peer_conn_params_event);
+APP_EVENT_TYPE_DECLARE(ble_peer_search_event);
+APP_EVENT_TYPE_DECLARE(ble_adv_data_update_event);
 
 #ifdef __cplusplus
 }

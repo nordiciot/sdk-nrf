@@ -6,21 +6,22 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <sys/byteorder.h>
+#include <zephyr/sys/byteorder.h>
 #include <stddef.h>
 #include <string.h>
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <zephyr/types.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/gatt.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/uuid.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/att.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/uuid.h>
 
 #include <bluetooth/services/hids.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 #define BOOT_MOUSE_INPUT_REPORT_MIN_SIZE 3
 
@@ -136,8 +137,12 @@ static ssize_t hids_protocol_mode_write(struct bt_conn *conn,
 
 	uint8_t *cur_pm = &conn_data->pm_ctx_value;
 
-	if (offset + len > sizeof(uint8_t)) {
+	if (offset > 0) {
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+	}
+
+	if (len > sizeof(uint8_t)) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 	}
 
 	switch (*new_pm) {
@@ -616,6 +621,7 @@ static ssize_t hids_boot_kb_outp_report_read(struct bt_conn *conn,
 	if (rep->handler) {
 		struct bt_hids_rep report = {
 		    .data = buf,
+		    .size = sizeof(conn_data->hids_boot_kb_outp_rep_ctx),
 		};
 		rep->handler(&report, conn, false);
 	}
@@ -685,11 +691,15 @@ static ssize_t hids_ctrl_point_write(struct bt_conn *conn,
 
 	struct bt_hids_cp *cp = (struct bt_hids_cp *)attr->user_data;
 
-	uint8_t cur_cp = cp->value;
+	uint8_t *cur_cp = &cp->value;
 	uint8_t const *new_cp = (uint8_t const *)buf;
 
-	if (offset + len > sizeof(uint8_t)) {
+	if (offset > 0) {
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+	}
+
+	if (len > sizeof(uint8_t)) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 	}
 
 	switch (*new_cp) {
@@ -707,7 +717,7 @@ static ssize_t hids_ctrl_point_write(struct bt_conn *conn,
 		return BT_GATT_ERR(BT_ATT_ERR_NOT_SUPPORTED);
 	}
 
-	memcpy(&cur_cp + offset, new_cp, len);
+	memcpy(cur_cp + offset, new_cp, len);
 	return len;
 }
 
@@ -869,6 +879,11 @@ int bt_hids_init(struct bt_hids *hids_obj,
 		 const struct bt_hids_init_param *init_param)
 {
 	LOG_DBG("Initializing HIDS.");
+
+	if (init_param->rep_map.size > BT_ATT_MAX_ATTRIBUTE_LEN) {
+		LOG_WRN("Report map size exceeds max ATT attribute length");
+		return -EMSGSIZE;
+	}
 
 	hids_obj->pm.evt_handler = init_param->pm_evt_handler;
 	hids_obj->cp.evt_handler = init_param->cp_evt_handler;
@@ -1329,8 +1344,9 @@ int bt_hids_boot_kb_inp_rep_send(struct bt_hids *hids_obj,
 	rep_data = conn_data->hids_boot_kb_inp_rep_ctx;
 
 	memcpy(rep_data, rep, len);
-	memset(&rep_data[len], 0,
-	       (sizeof(conn_data->hids_boot_kb_inp_rep_ctx) - len));
+	if (len < sizeof(conn_data->hids_boot_kb_inp_rep_ctx)) {
+		memset(&rep_data[len], 0, (sizeof(conn_data->hids_boot_kb_inp_rep_ctx) - len));
+	}
 
 	struct bt_gatt_notify_params params = {0};
 

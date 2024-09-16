@@ -4,26 +4,28 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <kernel.h>
-#include <console/console.h>
-#include <sys/printk.h>
+#include <zephyr/kernel.h>
+#include <zephyr/console/console.h>
+#include <zephyr/sys/printk.h>
 #include <string.h>
 #include <stdlib.h>
 #include <zephyr/types.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/crypto.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/gatt.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/uuid.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/crypto.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/uuid.h>
 #include <bluetooth/services/throughput.h>
 #include <bluetooth/scan.h>
 #include <bluetooth/gatt_dm.h>
 
-#include <shell/shell_uart.h>
+#include <zephyr/shell/shell_uart.h>
 
 #include <dk_buttons_and_leds.h>
+
+#include "main.h"
 
 #define DEVICE_NAME	CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
@@ -54,9 +56,9 @@ static const struct bt_data sd[] = {
 	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
 };
 
-static const char img[][81] = {
+static const char img[] =
 #include "img.file"
-};
+;
 
 static void button_handler_cb(uint32_t button_state, uint32_t has_changed);
 
@@ -123,7 +125,7 @@ static void exchange_func(struct bt_conn *conn, uint8_t att_err,
 		return;
 	}
 
-	if (info.role == BT_CONN_ROLE_MASTER) {
+	if (info.role == BT_CONN_ROLE_CENTRAL) {
 		instruction_print();
 		test_ready = true;
 	}
@@ -200,10 +202,10 @@ static void connected(struct bt_conn *conn, uint8_t hci_err)
 	}
 
 	printk("Connected as %s\n",
-	       info.role == BT_CONN_ROLE_MASTER ? "master" : "slave");
+	       info.role == BT_CONN_ROLE_CENTRAL ? "central" : "peripheral");
 	printk("Conn. interval is %u units\n", info.le.interval);
 
-	if (info.role == BT_CONN_ROLE_MASTER) {
+	if (info.role == BT_CONN_ROLE_CENTRAL) {
 		err = bt_gatt_dm_start(default_conn,
 				       BT_UUID_THROUGHPUT,
 				       &discovery_cb,
@@ -296,7 +298,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	}
 
 	/* Re-connect using same roles */
-	if (info.role == BT_CONN_ROLE_MASTER) {
+	if (info.role == BT_CONN_ROLE_CENTRAL) {
 		scan_start();
 	} else {
 		adv_start();
@@ -394,25 +396,39 @@ static struct button_handler button = {
 	.cb = button_handler_cb,
 };
 
-static void button_handler_cb(uint32_t button_state, uint32_t has_changed)
+void select_role(bool is_central)
 {
 	int err;
-	uint32_t buttons = button_state & has_changed;
+	static bool role_selected;
 
-	if (buttons & DK_BTN1_MSK) {
-		printk("\nMaster role. Starting scanning\n");
-		scan_start();
-	} else if (buttons & DK_BTN2_MSK) {
-		printk("\nSlave role. Starting advertising\n");
-		adv_start();
-	} else {
+	if (role_selected) {
+		printk("\nCannot change role after it was selected once.\n");
 		return;
+	} else if (is_central) {
+		printk("\nCentral. Starting scanning\n");
+		scan_start();
+	} else {
+		printk("\nPeripheral. Starting advertising\n");
+		adv_start();
 	}
+
+	role_selected = true;
 
 	/* The role has been selected, button are not needed any more. */
 	err = dk_button_handler_remove(&button);
 	if (err) {
 		printk("Button disable error: %d\n", err);
+	}
+}
+
+static void button_handler_cb(uint32_t button_state, uint32_t has_changed)
+{
+	ARG_UNUSED(has_changed);
+
+	if (button_state & DK_BTN1_MSK) {
+		select_role(true);
+	} else if (button_state & DK_BTN2_MSK) {
+		select_role(false);
 	}
 }
 
@@ -446,9 +462,9 @@ static int connection_configuration_set(const struct shell *shell,
 		return err;
 	}
 
-	if (info.role != BT_CONN_ROLE_MASTER) {
+	if (info.role != BT_CONN_ROLE_CENTRAL) {
 		shell_error(shell,
-		"'run' command shall be executed only on the master board");
+		"'run' command shall be executed only on the central board");
 	}
 
 	err = bt_conn_le_phy_update(default_conn, phy);
@@ -512,10 +528,14 @@ int test_run(const struct shell *shell,
 	uint64_t stamp;
 	int64_t delta;
 	uint32_t data = 0;
-	uint32_t prog = 0;
+
+	const char *img_ptr = img;
+	char str_buf[7];
+	int str_len;
+
 
 	/* a dummy data buffer */
-	static char dummy[256];
+	static char dummy[495];
 
 	if (!default_conn) {
 		shell_error(shell, "Device is disconnected %s",
@@ -536,6 +556,9 @@ int test_run(const struct shell *shell,
 		return err;
 	}
 
+	/* Make sure that all BLE procedures are finished. */
+	k_sleep(K_MSEC(500));
+
 	/* reset peer metrics */
 	err = bt_throughput_write(&throughput, dummy, 1);
 	if (err) {
@@ -543,23 +566,39 @@ int test_run(const struct shell *shell,
 		return err;
 	}
 
-	/* Make sure that all BLE procedures are finished. */
-	k_sleep(K_MSEC(500));
-
 	/* get cycle stamp */
 	stamp = k_uptime_get_32();
 
-	while (prog < IMG_SIZE) {
-		err = bt_throughput_write(&throughput, dummy, 244);
-		if (err) {
-			shell_error(shell, "GATT write failed (err %d)", err);
-			break;
-		}
+	if (IS_ENABLED(CONFIG_BT_THROUGHPUT_FILE)) {
+		while (*img_ptr) {
+			err = bt_throughput_write(&throughput, dummy, 495);
+			if (err) {
+				shell_error(shell, "GATT write failed (err %d)", err);
+				break;
+			}
 
-		/* print graphics */
-		printk("%c", img[prog / IMG_X][prog % IMG_X]);
-		data += 244;
-		prog++;
+			/* print graphics */
+			str_len = (*img_ptr == '\x1b') ? 6 : 1;
+			memcpy(str_buf, img_ptr, str_len);
+			str_buf[str_len] = '\0';
+			img_ptr += str_len;
+			printk("%s", str_buf);
+
+			data += 495;
+		}
+	} else {
+		delta = 0;
+		while (true) {
+			err = bt_throughput_write(&throughput, dummy, 495);
+			if (err) {
+				shell_error(shell, "GATT write failed (err %d)", err);
+				break;
+			}
+			data += 495;
+			if (k_uptime_get_32() - stamp > CONFIG_BT_THROUGHPUT_DURATION) {
+				break;
+			}
+		}
 	}
 
 	delta = k_uptime_delta(&stamp);
@@ -582,27 +621,25 @@ int test_run(const struct shell *shell,
 	return 0;
 }
 
-void main(void)
+BT_CONN_CB_DEFINE(conn_callbacks) = {
+	.connected = connected,
+	.disconnected = disconnected,
+	.le_param_req = le_param_req,
+	.le_param_updated = le_param_updated,
+	.le_phy_updated = le_phy_updated,
+	.le_data_len_updated = le_data_length_updated
+};
+
+int main(void)
 {
 	int err;
 
-	static struct bt_conn_cb conn_callbacks = {
-	    .connected = connected,
-	    .disconnected = disconnected,
-	    .le_param_req = le_param_req,
-	    .le_param_updated = le_param_updated,
-	    .le_phy_updated = le_phy_updated,
-	    .le_data_len_updated = le_data_length_updated
-	};
-
 	printk("Starting Bluetooth Throughput example\n");
-
-	bt_conn_cb_register(&conn_callbacks);
 
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Bluetooth initialized\n");
@@ -612,12 +649,14 @@ void main(void)
 	err = bt_throughput_init(&throughput, &throughput_cb);
 	if (err) {
 		printk("Throughput service initialization failed.\n");
-		return;
+		return 0;
 	}
 
 	printk("\n");
-	printk("Press button 1 on the master board.\n");
-	printk("Press button 2 on the slave board.\n");
+	printk("Press button 1 or type \"central\" on the central board.\n");
+	printk("Press button 2 or type \"peripheral\" on the peripheral board.\n");
 
 	buttons_init();
+
+	return 0;
 }

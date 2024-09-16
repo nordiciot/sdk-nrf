@@ -13,40 +13,40 @@ The source of such events could be any other module in |NCS|.
 The module uses Zephyr's :ref:`zephyr:led_api` driver for setting the LED color, either RGB or monochromatic.
 Zephyr's LED driver can use the implementation based on either GPIO or PWM.
 Use the PWM-based implementation to achieve smooth changes of brightness.
-Use the GPIO-based implementation if your board does not support PWM or if you want to control LEDs connected via GPIO expander.
+Use the GPIO-based implementation if your board does not support PWM or if you want to control LEDs connected using the GPIO expander.
 
 Configuration
 *************
 
-To use the module, you must conplete the following requirements:
+To use the module, you must fulfill the following requirements:
 
 1. Enable the following Kconfig options:
 
-   * :kconfig:`CONFIG_CAF_LEDS` - This option enables the LEDs module.
-   * :kconfig:`CONFIG_LED` - This option enables the LED driver API.
+   * :kconfig:option:`CONFIG_CAF_LEDS` - This option enables the LEDs module.
+   * :kconfig:option:`CONFIG_LED` - This option enables the LED driver API.
 
 #. Complete one of the following steps to choose and configure the LED driver implementation:
 
    a. For the PWM-based implementation, Zephyr's :ref:`zephyr:pwm_api` driver is used for setting the LED color (that is, the brightness of the diodes).
       For this reason, set the following options:
 
-      * :kconfig:`CONFIG_CAF_LEDS_PWM`
-      * :kconfig:`CONFIG_LED_PWM`
-      * :kconfig:`CONFIG_PWM`
+      * :kconfig:option:`CONFIG_CAF_LEDS_PWM`
+      * :kconfig:option:`CONFIG_LED_PWM`
+      * :kconfig:option:`CONFIG_PWM`
 
    b. For the GPIO-based implementation, Zephyr's :ref:`zephyr:gpio_api` driver is used for setting the LED color (that is, the brightness of the diodes).
       For this reason, set the following options:
 
-      * :kconfig:`CONFIG_CAF_LEDS_GPIO`
-      * :kconfig:`CONFIG_LED_GPIO`
-      * :kconfig:`CONFIG_GPIO`
+      * :kconfig:option:`CONFIG_CAF_LEDS_GPIO`
+      * :kconfig:option:`CONFIG_LED_GPIO`
+      * :kconfig:option:`CONFIG_GPIO`
 
 #. Configure LEDs in DTS.
    See `Configuring LEDs in DTS`_ for details.
 
 The following Kconfig options are also available for this module:
 
-* :kconfig:`CONFIG_CAF_LEDS_PM_EVENTS` - This option enables the reaction to `Power management events`_.
+* :kconfig:option:`CONFIG_CAF_LEDS_PM_EVENTS` - This option enables the reaction to `Power management events`_.
 
 .. note::
    The GPIO-based LED driver implementation supports only turning LED on or off.
@@ -87,37 +87,86 @@ Make sure to configure all PWM ports and channels that are used by the applicati
 Enabling the PWM ports
 ~~~~~~~~~~~~~~~~~~~~~~
 
-To enable the PWM ports, you must set the PWM port status to ``"okay"`` in the devicetree file and specify the PWM channel in relation to the GPIO pin number.
+To enable the PWM ports, you must set the PWM port status to ``"okay"`` in the devicetree file and configure an appropriate pin control configuration.
 
 The following code snippets show examples of the DTS nodes:
 
 * Example 1 (enabling an existing port node):
 
-  .. code-block:: none
+  .. code-block:: devicetree
 
-	&pwm0 {
-		status = "okay";
-		ch0-pin = <8>;
+	&pinctrl {
+		pwm0_default_alt: pwm0_default_alt {
+			group1 {
+				psels = <NRF_PSEL(PWM_OUT0, 0, 8)>;
+			};
+		};
+
+		pwm0_sleep_alt: pwm0_sleep_alt {
+			group1 {
+				psels = <NRF_PSEL(PWM_OUT0, 0, 8)>;
+				low-power-enable;
+			};
+		};
 	};
 
-  In this example, the ``pwm0`` has its ``ch0`` channel bound to the GPIO pin number ``8``.
+	&pwm0 {
+		status = "okay";
+		pinctrl-0 = <&pwm0_default_alt>;
+		pinctrl-1 = <&pwm0_sleep_alt>;
+		pinctrl-names = "default", "sleep";
+	};
+
+  In this example, the ``pwm0`` has its channel 0 bound to the GPIO pin number ``8``.
 * Example 2 (enabling an existing port node):
 
-  .. code-block:: none
+  .. code-block:: devicetree
+
+	&pinctrl {
+		pwm0_default_alt: pwm0_default_alt {
+			group1 {
+				psels = <NRF_PSEL(PWM_OUT0, 0, 11)>,
+					<NRF_PSEL(PWM_OUT1, 0, 26)>,
+					<NRF_PSEL(PWM_OUT2, 0, 27)>;
+				nordic,invert;
+			};
+		};
+
+		pwm0_sleep_alt: pwm0_sleep_alt {
+			group1 {
+				psels = <NRF_PSEL(PWM_OUT0, 0, 11)>,
+					<NRF_PSEL(PWM_OUT1, 0, 26)>,
+					<NRF_PSEL(PWM_OUT2, 0, 27)>;
+				low-power-enable;
+			};
+		};
+
+		pwm1_default_alt: pwm1_default_alt {
+			group1 {
+				psels = <NRF_PSEL(PWM_OUT0, 0, 4)>;
+			};
+		};
+
+		pwm1_sleep_alt: pwm1_sleep_alt {
+			group1 {
+				psels = <NRF_PSEL(PWM_OUT0, 0, 4)>;
+				low-power-enable;
+			};
+		};
+	};
 
 	&pwm0 {
 		status = "okay";
-		ch0-pin = <11>;
-		ch0-inverted;
-		ch1-pin = <26>;
-		ch1-inverted;
-		ch2-pin = <27>;
-		ch2-inverted;
+		pinctrl-0 = <&pwm0_default_alt>;
+		pinctrl-1 = <&pwm0_sleep_alt>;
+		pinctrl-names = "default", "sleep";
 	};
 
 	&pwm1 {
 		status = "okay";
-		ch0-pin = <4>;
+		pinctrl-0 = <&pwm1_default_alt>;
+		pinctrl-1 = <&pwm1_sleep_alt>;
+		pinctrl-names = "default", "sleep";
 	};
 
 Enabling the LED PWM nodes
@@ -127,7 +176,7 @@ To enable the LED PWM nodes in the devicetree file, you must set their status to
 You can also decide to create these nodes from scratch.
 There is no limit to the number of node instances you can create.
 
-For the LEDs to be configured correctly, make sure that LED PWM node pin numbers in the :file:`dts` file are matching the PWM nodes set when `Enabling the PWM ports`_.
+For the LEDs to be configured correctly, make sure that LED PWM node channel numbers in the :file:`dts` file are matching the PWM nodes set when `Enabling the PWM ports`_.
 
 The following code snippets show examples of the DTS nodes:
 
@@ -137,11 +186,11 @@ The following code snippets show examples of the DTS nodes:
 
 	&pwm_led0 {
 		status = "okay";
-		pwms = <&pwm0 8>;
+		pwms = <&pwm0 0 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
 		label = "LED0";
 	};
 
-  In this example, the ``pwms`` property is pointing to the ``pwm0`` PWM node set in Example 1 in `Enabling the PWM ports`_, with the respective channel GPIO pin number (``8``).
+  In this example, the ``pwms`` property is pointing to the ``pwm0`` PWM node set in Example 1 in `Enabling the PWM ports`_, with the respective channel number (``0``).
 * Example 2 (creating new LED PWM nodes):
 
   .. code-block:: none
@@ -152,19 +201,19 @@ The following code snippets show examples of the DTS nodes:
 
 		pwm_led0: led_pwm_0 {
 			status = "okay";
-			pwms = <&pwm0 11>;
+			pwms = <&pwm0 0 PWM_MSEC(1) PWM_POLARITY_INVERTED>;
 			label = "LED0 red";
 		};
 
 		pwm_led1: led_pwm_1 {
 			status = "okay";
-			pwms = <&pwm0 26>;
+			pwms = <&pwm0 1 PWM_MSEC(1) PWM_POLARITY_INVERTED>;
 			label = "LED0 green";
 		};
 
 		pwm_led2: led_pwm_2 {
 			status = "okay";
-			pwms = <&pwm0 27>;
+			pwms = <&pwm0 2 PWM_MSEC(1) PWM_POLARITY_INVERTED>;
 			label = "LED0 blue";
 		};
 	};
@@ -175,13 +224,19 @@ The following code snippets show examples of the DTS nodes:
 
 		pwm_led3: led_pwm_3 {
 			status = "okay";
-			pwms = <&pwm1 4>;
+			pwms = <&pwm1 0 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
 			label = "LED1";
 		};
 	};
 
-     In this example, ``pwmleds0`` is a tri-channel color LED node, while ``pwmleds1`` is a monochromatic LED node.
-     Both ``pwmleds`` nodes are pointing to the ``pwms`` properties corresponding to PWM nodes set in Example 2 in `Enabling the PWM ports`_, with the respective channel GPIO pin numbers.
+  In this example, ``pwmleds0`` is a tri-channel color LED node, while ``pwmleds1`` is a monochromatic LED node.
+  Both ``pwmleds`` nodes are pointing to the ``pwms`` properties corresponding to PWM nodes set in Example 2 in `Enabling the PWM ports`_, with the respective channel numbers.
+
+.. note::
+   Set the PWM period for the LED to a smaller value, such as 1 millisecond, to avoid glitches during tri-channel LED color updates.
+   Because of the limitations of Zephyr's :ref:`zephyr:pwm_api`, color channels are not updated simultaneously.
+   The first LED channel is updated one PWM period before other channels.
+   A short LED PWM period mitigates the glitches.
 
 Configuring GPIO LEDs
 ---------------------
@@ -192,7 +247,7 @@ Enabling the GPIOs
 ~~~~~~~~~~~~~~~~~~
 
 In general, boards in Zephyr configure and enable the GPIO drivers by default, so no additional configuration is needed.
-You can also use the LED GPIO driver to control LEDs connected via a GPIO expander supported by Zephyr.
+You can also use the LED GPIO driver to control LEDs connected using a GPIO expander supported by Zephyr.
 For example, the DTS configuration of the ``thingy52_nrf52832`` board supports ``sx1509b`` GPIO expander, which is used to control lightwell RGB LEDs.
 
 Enabling the LED GPIO nodes
@@ -205,7 +260,7 @@ There is no limit to the number of node instances you can create.
 The LED GPIO is configured as a node that is compatible with ``gpio-leds``.
 The following code snippets show examples of DTS nodes:
 
-* Example 1 - RGB LED controlled via GPIO expander (``sx1509b``)
+* Example 1 - RGB LED controlled using GPIO expander (``sx1509b``)
 
   .. code-block:: none
 
@@ -293,7 +348,7 @@ If the flag is not set, the sequence stops and the given LED effect ends.
 Power management events
 =======================
 
-If the :kconfig:`CONFIG_CAF_LEDS_PM_EVENTS` Kconfig option is enabled, the module can react to following power management events:
+If the :kconfig:option:`CONFIG_CAF_LEDS_PM_EVENTS` Kconfig option is enabled, the module can react to following power management events:
 
 * ``power_down_event``
 * ``wake_up_event``

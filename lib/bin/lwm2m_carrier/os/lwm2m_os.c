@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Nordic Semiconductor ASA
+ * Copyright (c) 2019-2022 Nordic Semiconductor ASA
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
@@ -9,53 +9,76 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <string.h>
 #include <nrf_modem.h>
-#include <modem/at_cmd.h>
-#include <modem/at_notif.h>
-#include <modem/at_cmd_parser.h>
-#include <modem/at_params.h>
-#include <modem/lte_lc.h>
 #include <modem/pdn.h>
-#include <modem/nrf_modem_lib.h>
-#include <modem/modem_key_mgmt.h>
 #include <modem/sms.h>
 #include <net/download_client.h>
-#include <sys/reboot.h>
-#include <sys/__assert.h>
-#include <sys/util.h>
-#include <toolchain.h>
-#include <fs/nvs.h>
-#include <logging/log.h>
+#include <zephyr/storage/flash_map.h>
+#include <zephyr/sys/reboot.h>
+#include <zephyr/sys/__assert.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/random/rand32.h>
+#include <zephyr/toolchain.h>
+#include <zephyr/fs/nvs.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
 #include <nrf_errno.h>
+#include <modem/at_monitor.h>
 
 /* NVS-related defines */
 
-/* Multiple of FLASH_PAGE_SIZE */
-#define NVS_SECTOR_SIZE DT_PROP(DT_CHOSEN(zephyr_flash), erase_block_size)
-/* At least 2 sectors */
-#define NVS_SECTOR_COUNT 3
+/* Divide flash area into NVS sectors */
+#define NVS_SECTOR_SIZE     (CONFIG_LWM2M_CARRIER_STORAGE_SECTOR_SIZE)
+#define NVS_SECTOR_COUNT    (FLASH_AREA_SIZE(lwm2m_carrier) / NVS_SECTOR_SIZE)
 /* Start address of the filesystem in flash */
-#define NVS_STORAGE_OFFSET DT_REG_ADDR(DT_NODE_BY_FIXED_PARTITION_LABEL(storage))
+#define NVS_STORAGE_OFFSET  (FLASH_AREA_OFFSET(lwm2m_carrier))
+/* Flash Device runtime structure */
+#define NVS_FLASH_DEVICE    (DEVICE_DT_GET(DT_CHOSEN(zephyr_flash_controller)))
 
 static struct nvs_fs fs = {
 	.sector_size = NVS_SECTOR_SIZE,
 	.sector_count = NVS_SECTOR_COUNT,
 	.offset = NVS_STORAGE_OFFSET,
+	.flash_device = NVS_FLASH_DEVICE,
 };
 
-K_THREAD_STACK_ARRAY_DEFINE(lwm2m_os_work_q_client_stack, LWM2M_OS_MAX_WORK_QS, 2048);
-struct k_work_q lwm2m_os_work_qs[LWM2M_OS_MAX_WORK_QS];
+K_THREAD_STACK_ARRAY_DEFINE(lwm2m_os_work_q_client_stack, LWM2M_OS_MAX_WORK_QS,
+			    CONFIG_LWM2M_CARRIER_WORKQ_STACK_SIZE);
+static struct k_work_q lwm2m_os_work_qs[LWM2M_OS_MAX_WORK_QS];
+
+K_THREAD_STACK_ARRAY_DEFINE(lwm2m_os_thread_stack, LWM2M_OS_MAX_THREAD_COUNT,
+			    CONFIG_LWM2M_CARRIER_THREAD_STACK_SIZE);
+static struct k_thread lwm2m_os_threads[LWM2M_OS_MAX_THREAD_COUNT];
 
 static struct k_sem lwm2m_os_sems[LWM2M_OS_MAX_SEM_COUNT];
 static uint8_t lwm2m_os_sems_used;
 
-int lwm2m_os_init(void)
+/* AT monitor for notifications used by the library */
+AT_MONITOR(lwm2m_carrier_at_handler, ANY, lwm2m_os_at_handler);
+
+/* LwM2M carrier OS logs. */
+LOG_MODULE_REGISTER(lwm2m_os, LOG_LEVEL_DBG);
+
+/* OS initialization. */
+
+static int lwm2m_os_init(void)
 {
+#if defined CONFIG_LOG_RUNTIME_FILTERING
+	log_filter_set(NULL, CONFIG_LOG_DOMAIN_ID, LOG_CURRENT_MODULE_ID(),
+		       CONFIG_LOG_DEFAULT_LEVEL);
+#endif /* CONFIG_LOG_RUNTIME_FILTERING */
+
 	/* Initialize storage */
-	return nvs_init(&fs, DT_CHOSEN_ZEPHYR_FLASH_CONTROLLER_LABEL);
+	if (!device_is_ready(fs.flash_device)) {
+		return -ENODEV;
+	}
+
+	return nvs_mount(&fs);
 }
+
+SYS_INIT(lwm2m_os_init, APPLICATION, 0);
 
 /* Memory management. */
 
@@ -81,40 +104,34 @@ int64_t lwm2m_os_uptime_delta(int64_t *ref)
 	return k_uptime_delta(ref);
 }
 
-int lwm2m_os_sleep(int ms)
-{
-	return k_sleep(K_MSEC(ms));
-}
-
 /* OS functions */
 
 void lwm2m_os_sys_reset(void)
 {
+	LOG_PANIC();
 	sys_reboot(SYS_REBOOT_COLD);
 	CODE_UNREACHABLE;
 }
 
 uint32_t lwm2m_os_rand_get(void)
 {
-	return k_cycle_get_32();
+	return sys_rand32_get();
 }
 
 /* Semaphore functions */
 
 int lwm2m_os_sem_init(lwm2m_os_sem_t **sem, unsigned int initial_count, unsigned int limit)
 {
-	if (PART_OF_ARRAY(lwm2m_os_sems, (struct k_sem *)*sem)) {
-		goto reinit;
+	if (*sem == NULL) {
+		__ASSERT(lwm2m_os_sems_used < LWM2M_OS_MAX_SEM_COUNT,
+			 "Not enough semaphores in glue layer");
+
+		*sem = (lwm2m_os_sem_t *)&lwm2m_os_sems[lwm2m_os_sems_used++];
+	} else {
+		__ASSERT(PART_OF_ARRAY(lwm2m_os_sems, (struct k_sem *)*sem),
+			 "Uninitialised semaphore");
 	}
 
-	__ASSERT(lwm2m_os_sems_used < LWM2M_OS_MAX_SEM_COUNT,
-		 "Not enough semaphores in glue layer");
-
-	*sem = (lwm2m_os_sem_t *)&lwm2m_os_sems[lwm2m_os_sems_used];
-
-	lwm2m_os_sems_used++;
-
-reinit:
 	return k_sem_init((struct k_sem *)*sem, initial_count, limit);
 }
 
@@ -143,21 +160,15 @@ void lwm2m_os_sem_reset(lwm2m_os_sem_t *sem)
 
 int lwm2m_os_storage_delete(uint16_t id)
 {
-	__ASSERT((id >= LWM2M_OS_STORAGE_BASE) || (id <= LWM2M_OS_STORAGE_END),
+	__ASSERT((id >= LWM2M_OS_STORAGE_BASE) && (id <= LWM2M_OS_STORAGE_END),
 		 "Storage ID out of range");
-
-	if ((id == LWM2M_OS_STORAGE_END - 16) ||
-	    (id == LWM2M_OS_STORAGE_END - 18) ||
-	    (id == LWM2M_OS_STORAGE_END - 19)) {
-		return 0;
-	}
 
 	return nvs_delete(&fs, id);
 }
 
 int lwm2m_os_storage_read(uint16_t id, void *data, size_t len)
 {
-	__ASSERT((id >= LWM2M_OS_STORAGE_BASE) || (id <= LWM2M_OS_STORAGE_END),
+	__ASSERT((id >= LWM2M_OS_STORAGE_BASE) && (id <= LWM2M_OS_STORAGE_END),
 		 "Storage ID out of range");
 
 	return nvs_read(&fs, id, data, len);
@@ -165,7 +176,7 @@ int lwm2m_os_storage_read(uint16_t id, void *data, size_t len)
 
 int lwm2m_os_storage_write(uint16_t id, const void *data, size_t len)
 {
-	__ASSERT((id >= LWM2M_OS_STORAGE_BASE) || (id <= LWM2M_OS_STORAGE_END),
+	__ASSERT((id >= LWM2M_OS_STORAGE_BASE) && (id <= LWM2M_OS_STORAGE_END),
 		 "Storage ID out of range");
 
 	return nvs_write(&fs, id, data, len);
@@ -186,7 +197,7 @@ static void work_handler(struct k_work *work)
 	struct k_work_delayable *delayed_work = CONTAINER_OF(work, struct k_work_delayable, work);
 	struct lwm2m_work *lwm2m_work = CONTAINER_OF(delayed_work, struct lwm2m_work, work_item);
 
-	lwm2m_work->handler(lwm2m_work);
+	lwm2m_work->handler((lwm2m_os_timer_t *)lwm2m_work);
 }
 
 /* Delayed work queue functions */
@@ -198,6 +209,7 @@ lwm2m_os_work_q_t *lwm2m_os_work_q_start(int index, const char *name)
 	if (index >= LWM2M_OS_MAX_WORK_QS) {
 		return NULL;
 	}
+
 	lwm2m_os_work_q_t *work_q = (lwm2m_os_work_q_t *)&lwm2m_os_work_qs[index];
 
 	k_work_queue_start(&lwm2m_os_work_qs[index], lwm2m_os_work_q_client_stack[index],
@@ -209,11 +221,17 @@ lwm2m_os_work_q_t *lwm2m_os_work_q_start(int index, const char *name)
 	return work_q;
 }
 
-lwm2m_os_timer_t *lwm2m_os_timer_get(lwm2m_os_timer_handler_t handler)
+void lwm2m_os_timer_get(lwm2m_os_timer_handler_t handler, lwm2m_os_timer_t **timer)
 {
 	struct lwm2m_work *work = NULL;
 
 	uint32_t key = irq_lock();
+
+	/* Check whether timer exists */
+	if (*timer != NULL) {
+		__ASSERT(PART_OF_ARRAY(lwm2m_works, *timer), "get unknown timer");
+		return;
+	}
 
 	/* Find free delayed work */
 	for (int i = 0; i < ARRAY_SIZE(lwm2m_works); i++) {
@@ -232,7 +250,7 @@ lwm2m_os_timer_t *lwm2m_os_timer_get(lwm2m_os_timer_handler_t handler)
 		k_work_init_delayable(&work->work_item, work_handler);
 	}
 
-	return work;
+	*timer = (lwm2m_os_timer_t *)work;
 }
 
 void lwm2m_os_timer_release(lwm2m_os_timer_t *timer)
@@ -245,13 +263,10 @@ void lwm2m_os_timer_release(lwm2m_os_timer_t *timer)
 		return;
 	}
 
-	/* Workaround. The work is being reused by the library without ever reassigning
-	 * the handler, hence the timer cannot be released. Instead, only cancel the work.
-	 */
-	k_work_cancel_delayable_sync(&work->work_item, &work->work_sync);
+	work->handler = NULL;
 }
 
-int lwm2m_os_timer_start(lwm2m_os_timer_t *timer, int64_t msec)
+int lwm2m_os_timer_start(lwm2m_os_timer_t *timer, int64_t delay)
 {
 	struct lwm2m_work *work = (struct lwm2m_work *)timer;
 
@@ -261,12 +276,12 @@ int lwm2m_os_timer_start(lwm2m_os_timer_t *timer, int64_t msec)
 		return -EINVAL;
 	}
 
-	k_work_reschedule(&work->work_item, K_MSEC(msec));
+	k_work_reschedule(&work->work_item, K_MSEC(delay));
 
 	return 0;
 }
 
-int lwm2m_os_timer_start_on_q(lwm2m_os_work_q_t *work_q, lwm2m_os_timer_t *timer, int64_t msec)
+int lwm2m_os_timer_start_on_q(lwm2m_os_work_q_t *work_q, lwm2m_os_timer_t *timer, int64_t delay)
 {
 	struct k_work_q *queue = (struct k_work_q *)work_q;
 	struct lwm2m_work *work = (struct lwm2m_work *)timer;
@@ -278,7 +293,7 @@ int lwm2m_os_timer_start_on_q(lwm2m_os_work_q_t *work_q, lwm2m_os_timer_t *timer
 		return -EINVAL;
 	}
 
-	k_work_reschedule_for_queue(queue, &work->work_item, K_MSEC(msec));
+	k_work_reschedule_for_queue(queue, &work->work_item, K_MSEC(delay));
 
 	return 0;
 }
@@ -322,311 +337,62 @@ bool lwm2m_os_timer_is_pending(lwm2m_os_timer_t *timer)
 	return k_work_delayable_is_pending(&work->work_item);
 }
 
-/* LWM2M logs. */
+/* Thread functions */
 
-LOG_MODULE_REGISTER(lwm2m, CONFIG_LOG_DEFAULT_LEVEL);
-
-static const uint8_t log_level_lut[] = {
-	LOG_LEVEL_NONE, /* LWM2M_LOG_LEVEL_NONE */
-	LOG_LEVEL_ERR,	/* LWM2M_LOG_LEVEL_ERR */
-	LOG_LEVEL_WRN,	/* LWM2M_LOG_LEVEL_WRN */
-	LOG_LEVEL_INF,	/* LWM2M_LOG_LEVEL_INF */
-	LOG_LEVEL_DBG,	/* LWM2M_LOG_LEVEL_TRC */
-};
-
-const char *lwm2m_os_log_strdup(const char *str)
+int lwm2m_os_thread_start(int index, lwm2m_os_thread_entry_t entry, const char *name)
 {
-	if (IS_ENABLED(CONFIG_LOG)) {
-		return log_strdup(str);
+	__ASSERT(index < LWM2M_OS_MAX_THREAD_COUNT, "Not enough threads in glue layer");
+
+	if (index >= LWM2M_OS_MAX_THREAD_COUNT) {
+		return -EINVAL;
 	}
 
-	return str;
+	k_tid_t thread = k_thread_create(&lwm2m_os_threads[index], lwm2m_os_thread_stack[index],
+					 K_THREAD_STACK_SIZEOF(lwm2m_os_thread_stack[index]),
+					 entry, NULL, NULL, NULL, K_LOWEST_APPLICATION_THREAD_PRIO,
+					 0, K_NO_WAIT);
+
+	k_thread_name_set(thread, name);
+	k_thread_start(thread);
+
+	return 0;
 }
 
-void lwm2m_os_log(int level, const char *fmt, ...)
+void lwm2m_os_thread_resume(int index)
 {
-	if (IS_ENABLED(CONFIG_LOG)) {
-		struct log_msg_ids src_level = {
-			.level = log_level_lut[level],
-			.domain_id = CONFIG_LOG_DOMAIN_ID,
-			.source_id = LOG_CURRENT_MODULE_ID()
-		};
+	__ASSERT(index < LWM2M_OS_MAX_THREAD_COUNT, "Invalid thread index");
 
-		va_list ap;
-
-		va_start(ap, fmt);
-		log_generic(src_level, fmt, ap, LOG_STRDUP_SKIP);
-		va_end(ap);
-	}
+	k_thread_resume(&lwm2m_os_threads[index]);
 }
 
-void lwm2m_os_logdump(int level, const char *str, const void *data, size_t len)
+int lwm2m_os_sleep(int ms)
 {
-	if (IS_ENABLED(CONFIG_LOG)) {
-		struct log_msg_ids src_level = {
-			.level = log_level_lut[level],
-			.domain_id = CONFIG_LOG_DOMAIN_ID,
-			.source_id = LOG_CURRENT_MODULE_ID()
-		};
-		log_hexdump(str, data, len, src_level);
-	}
-}
+	k_timeout_t timeout = (ms == -1) ? K_FOREVER : K_MSEC(ms);
 
-int lwm2m_os_nrf_modem_init(void)
-{
-	int err;
-
-	err = nrf_modem_lib_init(NORMAL_MODE);
-
-	switch (err) {
-	case MODEM_DFU_RESULT_OK:
-		lwm2m_os_log(LOG_LEVEL_INF, "Modem firmware update successful.");
-		lwm2m_os_log(LOG_LEVEL_INF, "Modem will run the new firmware after reboot.");
-		break;
-	case MODEM_DFU_RESULT_UUID_ERROR:
-	case MODEM_DFU_RESULT_AUTH_ERROR:
-		lwm2m_os_log(LOG_LEVEL_ERR, "Modem firmware update failed.");
-		lwm2m_os_log(LOG_LEVEL_ERR, "Modem will run non-updated firmware on reboot.");
-		break;
-	case MODEM_DFU_RESULT_HARDWARE_ERROR:
-	case MODEM_DFU_RESULT_INTERNAL_ERROR:
-		lwm2m_os_log(LOG_LEVEL_ERR, "Modem firmware update failed.");
-		lwm2m_os_log(LOG_LEVEL_ERR, "Fatal error.");
-		break;
-	case -1:
-		lwm2m_os_log(LOG_LEVEL_ERR, "Could not initialize modem library.");
-		lwm2m_os_log(LOG_LEVEL_ERR, "Fatal error.");
-		break;
-	default:
-		break;
-	}
-
-	return err;
-}
-
-int lwm2m_os_nrf_modem_shutdown(void)
-{
-	return nrf_modem_lib_shutdown();
+	return k_sleep(timeout);
 }
 
 /* AT command module abstractions. */
 
-int lwm2m_os_at_init(void)
+static lwm2m_os_at_handler_callback_t at_handler_callback;
+
+int lwm2m_os_at_init(lwm2m_os_at_handler_callback_t callback)
 {
-	int err;
-
-	err = at_cmd_init();
-	if (err) {
-		return -1;
-	}
-
-	err = at_notif_init();
-	if (err) {
-		return -1;
-	}
+	at_handler_callback = callback;
 
 	return 0;
 }
 
-int lwm2m_os_at_notif_register_handler(void *context, lwm2m_os_at_cmd_handler_t handler)
+static void lwm2m_os_at_handler(const char *notif)
 {
-	return at_notif_register_handler(context, handler);
-}
-
-int lwm2m_os_at_cmd_write(const char *const cmd, char *buf, size_t buf_len)
-{
-	return at_cmd_write(cmd, buf, buf_len, (enum at_cmd_state *)NULL);
-}
-
-static void at_params_list_get(struct at_param_list *dst, struct lwm2m_os_at_param_list *src)
-{
-	struct at_param *src_param = src->params;
-
-	dst->param_count = src->param_count;
-	for (size_t i = 0; i < src->param_count; i++) {
-		dst->params[i].size = src_param[i].size;
-		dst->params[i].type = src_param[i].type;
-		switch (src_param[i].type) {
-		case AT_PARAM_TYPE_INVALID:
-		case AT_PARAM_TYPE_EMPTY:
-			break;
-		case AT_PARAM_TYPE_NUM_INT:
-			dst->params[i].value.int_val = src_param[i].value.int_val;
-			break;
-		case AT_PARAM_TYPE_STRING:
-			dst->params[i].value.str_val = src_param[i].value.str_val;
-			break;
-		case AT_PARAM_TYPE_ARRAY:
-			dst->params[i].value.array_val = src_param[i].value.array_val;
-			break;
-		default:
-			break;
-		}
+	if (at_handler_callback != NULL) {
+		at_handler_callback(notif);
 	}
-}
-
-static void at_params_list_translate(struct lwm2m_os_at_param_list *dst, struct at_param_list *src)
-{
-	struct at_param *dst_param = dst->params;
-
-	dst->param_count = src->param_count;
-	for (size_t i = 0; i < src->param_count; i++) {
-		dst_param[i].size = src->params[i].size;
-		dst_param[i].type = src->params[i].type;
-		switch (src->params[i].type) {
-		case AT_PARAM_TYPE_INVALID:
-		case AT_PARAM_TYPE_EMPTY:
-			break;
-		case AT_PARAM_TYPE_NUM_INT:
-			dst_param[i].value.int_val = src->params[i].value.int_val;
-			break;
-		case AT_PARAM_TYPE_STRING:
-			dst_param[i].value.str_val = src->params[i].value.str_val;
-			/* Detach this pointer from the source list
-			 * so that it's not freed when we free at_param_list.
-			 */
-			src->params[i].value.str_val = NULL;
-			break;
-		case AT_PARAM_TYPE_ARRAY:
-			/* Detach this pointer from the source list
-			 * so that it's not freed when we free at_param_list.
-			 */
-			dst_param[i].value.array_val = src->params[i].value.array_val;
-			src->params[i].value.array_val = NULL;
-			break;
-		default:
-			break;
-		}
-	}
-}
-
-int lwm2m_os_at_params_list_init(struct lwm2m_os_at_param_list *list, size_t max_params_count)
-{
-	if (list == NULL) {
-		return -EINVAL;
-	}
-
-	/* Array initialized with empty parameters. */
-	list->params = k_calloc(max_params_count, sizeof(struct at_param));
-	if (list->params == NULL) {
-		return -ENOMEM;
-	}
-
-	list->param_count = max_params_count;
-
-	return 0;
-}
-
-void lwm2m_os_at_params_list_free(struct lwm2m_os_at_param_list *list)
-{
-	struct at_param_list tmp_list = {
-		.param_count = list->param_count,
-		.params = (struct at_param *)list->params,
-	};
-
-	at_params_list_free(&tmp_list);
-}
-
-int lwm2m_os_at_params_int_get(struct lwm2m_os_at_param_list *list, size_t index, uint32_t *value)
-{
-	int err;
-	struct at_param_list tmp_list;
-
-	err = at_params_list_init(&tmp_list, list->param_count);
-	if (err != 0) {
-		return err;
-	}
-
-	at_params_list_get(&tmp_list, list);
-	err = at_params_int_get(&tmp_list, index, value);
-	at_params_list_translate(list, &tmp_list);
-
-	at_params_list_free(&tmp_list);
-
-	return err;
-}
-
-int lwm2m_os_at_params_short_get(struct lwm2m_os_at_param_list *list, size_t index, uint16_t *value)
-{
-	int err;
-	struct at_param_list tmp_list;
-
-	err = at_params_list_init(&tmp_list, list->param_count);
-	if (err != 0) {
-		return err;
-	}
-
-	at_params_list_get(&tmp_list, list);
-	err = at_params_short_get(&tmp_list, index, value);
-	at_params_list_translate(list, &tmp_list);
-
-	at_params_list_free(&tmp_list);
-
-	return err;
-}
-
-int lwm2m_os_at_params_string_get(struct lwm2m_os_at_param_list *list, size_t index, char *value,
-				  size_t *len)
-{
-	int err;
-	struct at_param_list tmp_list;
-
-	err = at_params_list_init(&tmp_list, list->param_count);
-	if (err != 0) {
-		return err;
-	}
-
-	at_params_list_get(&tmp_list, list);
-	err = at_params_string_get(&tmp_list, index, value, len);
-	at_params_list_translate(list, &tmp_list);
-
-	at_params_list_free(&tmp_list);
-
-	return err;
-}
-
-int lwm2m_os_at_parser_params_from_str(const char *at_params_str, char **next_param_str,
-				       struct lwm2m_os_at_param_list *const list)
-{
-	int err;
-	struct at_param_list tmp_list;
-
-	err = at_params_list_init(&tmp_list, list->param_count);
-	if (err != 0) {
-		return err;
-	}
-
-	err = at_parser_params_from_str(at_params_str, next_param_str, &tmp_list);
-
-	at_params_list_translate(list, &tmp_list);
-
-	at_params_list_free(&tmp_list);
-
-	return err;
-}
-
-int lwm2m_os_at_params_valid_count_get(struct lwm2m_os_at_param_list *list)
-{
-	int err;
-	struct at_param_list tmp_list;
-
-	err = at_params_list_init(&tmp_list, list->param_count);
-	if (err != 0) {
-		return err;
-	}
-
-	at_params_list_get(&tmp_list, list);
-	err = at_params_valid_count_get(&tmp_list);
-	at_params_list_translate(list, &tmp_list);
-
-	at_params_list_free(&tmp_list);
-
-	return err;
 }
 
 /* SMS subscriber module abstraction.*/
 
-/**@brief Forward declaration */
+/** @brief Forward declaration */
 static lwm2m_os_sms_callback_t lib_sms_callback;
 
 /**
@@ -679,17 +445,17 @@ int lwm2m_os_sms_client_register(lwm2m_os_sms_callback_t callback, void *context
 	lib_sms_callback = callback;
 	ret = sms_register_listener(sms_callback, context);
 	if (ret < 0) {
-		lwm2m_os_log(LOG_LEVEL_ERR, "Unable to register as SMS listener");
-		return -1;
+		LOG_ERR("Unable to register as SMS listener");
+		return -EIO;
 	}
-	lwm2m_os_log(LOG_LEVEL_INF, "Registered as SMS listener");
-	return ret;
+	LOG_INF("Registered as SMS listener");
+	return 0;
 }
 
 void lwm2m_os_sms_client_deregister(int handle)
 {
 	sms_unregister_listener(handle);
-	lwm2m_os_log(LOG_LEVEL_INF, "Deregistered as SMS listener");
+	LOG_INF("Deregistered as SMS listener");
 }
 
 /* Download client module abstractions. */
@@ -697,14 +463,15 @@ void lwm2m_os_sms_client_deregister(int handle)
 static struct download_client http_downloader;
 static lwm2m_os_download_callback_t lwm2m_os_lib_callback;
 
-int lwm2m_os_download_connect(const char *host, const struct lwm2m_os_download_cfg *cfg)
+int lwm2m_os_download_get(const char *host, const struct lwm2m_os_download_cfg *cfg, size_t from)
 {
 	struct download_client_cfg config = {
-		.sec_tag = cfg->sec_tag,
+		.sec_tag_list = cfg->sec_tag_list,
+		.sec_tag_count = cfg->sec_tag_count,
 		.pdn_id = cfg->pdn_id,
 	};
 
-	return download_client_connect(&http_downloader, host, &config);
+	return download_client_get(&http_downloader, host, &config, NULL, from);
 }
 
 int lwm2m_os_download_disconnect(void)
@@ -728,6 +495,9 @@ static void download_client_evt_translate(const struct download_client_evt *even
 		lwm2m_os_event->id = LWM2M_OS_DOWNLOAD_EVT_ERROR;
 		lwm2m_os_event->error = event->error;
 		break;
+	case DOWNLOAD_CLIENT_EVT_CLOSED:
+		lwm2m_os_event->id = LWM2M_OS_DOWNLOAD_EVT_CLOSED;
+		break;
 	default:
 		break;
 	}
@@ -749,46 +519,17 @@ int lwm2m_os_download_init(lwm2m_os_download_callback_t lib_callback)
 	return download_client_init(&http_downloader, callback);
 }
 
-int lwm2m_os_download_start(const char *file, size_t from)
-{
-	return download_client_start(&http_downloader, file, from);
-}
-
 int lwm2m_os_download_file_size_get(size_t *size)
 {
 	return download_client_file_size_get(&http_downloader, size);
 }
 
+#if defined(CONFIG_LTE_LINK_CONTROL)
+#include <modem/lte_lc.h>
+
 /* LTE LC module abstractions. */
 
-int lwm2m_os_lte_link_up(void)
-{
-	int err;
-	static bool initialized;
-
-	if (!initialized) {
-		initialized = true;
-
-		err = lte_lc_init();
-		if (err) {
-			return err;
-		}
-	}
-
-	return lte_lc_connect();
-}
-
-int lwm2m_os_lte_link_down(void)
-{
-	return lte_lc_offline();
-}
-
-int lwm2m_os_lte_power_down(void)
-{
-	return lte_lc_power_off();
-}
-
-int32_t lwm2m_os_lte_mode_get(void)
+size_t lwm2m_os_lte_modes_get(int32_t *modes)
 {
 	enum lte_lc_system_mode mode;
 
@@ -797,21 +538,118 @@ int32_t lwm2m_os_lte_mode_get(void)
 	switch (mode) {
 	case LTE_LC_SYSTEM_MODE_LTEM:
 	case LTE_LC_SYSTEM_MODE_LTEM_GPS:
-		return LWM2M_OS_LTE_MODE_CAT_M1;
+		modes[0] = LWM2M_OS_LTE_MODE_CAT_M1;
+		return 1;
 	case LTE_LC_SYSTEM_MODE_NBIOT:
 	case LTE_LC_SYSTEM_MODE_NBIOT_GPS:
-		return LWM2M_OS_LTE_MODE_CAT_NB1;
+		modes[0] = LWM2M_OS_LTE_MODE_CAT_NB1;
+		return 1;
+	case LTE_LC_SYSTEM_MODE_LTEM_NBIOT:
+	case LTE_LC_SYSTEM_MODE_LTEM_NBIOT_GPS:
+		modes[0] = LWM2M_OS_LTE_MODE_CAT_M1;
+		modes[1] = LWM2M_OS_LTE_MODE_CAT_NB1;
+		return 2;
 	default:
-		return LWM2M_OS_LTE_MODE_NONE;
+		return 0;
 	}
 }
+
+void lwm2m_os_lte_mode_request(int32_t prefer)
+{
+	enum lte_lc_system_mode mode;
+	enum lte_lc_system_mode_preference preference;
+	static enum lte_lc_system_mode_preference application_preference;
+
+	(void)lte_lc_system_mode_get(&mode, &preference);
+
+	switch (prefer) {
+	case LWM2M_OS_LTE_MODE_CAT_M1:
+		application_preference = preference;
+		preference = LTE_LC_SYSTEM_MODE_PREFER_LTEM;
+		break;
+	case LWM2M_OS_LTE_MODE_CAT_NB1:
+		application_preference = preference;
+		preference = LTE_LC_SYSTEM_MODE_PREFER_NBIOT;
+		break;
+	case LWM2M_OS_LTE_MODE_NONE:
+		preference = application_preference;
+		break;
+	}
+
+	(void)lte_lc_system_mode_set(mode, preference);
+}
+#else
+#include <nrf_modem_at.h>
+
+size_t lwm2m_os_lte_modes_get(int32_t *modes)
+{
+	int err, ltem_mode, nbiot_mode, gps_mode, preference;
+
+	/* It's expected to have all 4 arguments matched */
+	err = nrf_modem_at_scanf("AT%XSYSTEMMODE?", "%%XSYSTEMMODE: %d,%d,%d,%d",
+				 &ltem_mode, &nbiot_mode, &gps_mode, &preference);
+	if (err != 4) {
+		LOG_ERR("Failed to get system mode, error: %d", err);
+		return 0;
+	}
+
+	if (ltem_mode && nbiot_mode) {
+		modes[0] = LWM2M_OS_LTE_MODE_CAT_M1;
+		modes[1] = LWM2M_OS_LTE_MODE_CAT_NB1;
+		return 2;
+	} else if (ltem_mode) {
+		modes[0] = LWM2M_OS_LTE_MODE_CAT_M1;
+		return 1;
+	} else if (nbiot_mode) {
+		modes[0] = LWM2M_OS_LTE_MODE_CAT_NB1;
+		return 1;
+	}
+
+	return 0;
+}
+
+void lwm2m_os_lte_mode_request(int32_t prefer)
+{
+	int err, ltem_mode, nbiot_mode, gps_mode, preference;
+	static int application_preference;
+
+	/* It's expected to have all 4 arguments matched */
+	err = nrf_modem_at_scanf("AT%XSYSTEMMODE?", "%%XSYSTEMMODE: %d,%d,%d,%d",
+				 &ltem_mode, &nbiot_mode, &gps_mode, &preference);
+	if (err != 4) {
+		LOG_ERR("Failed to get system mode, error: %d", err);
+		return;
+	}
+
+	switch (prefer) {
+	case LWM2M_OS_LTE_MODE_CAT_M1:
+		application_preference = preference;
+		preference = 1;
+		break;
+	case LWM2M_OS_LTE_MODE_CAT_NB1:
+		application_preference = preference;
+		preference = 2;
+		break;
+	case LWM2M_OS_LTE_MODE_NONE:
+		preference = application_preference;
+		break;
+	}
+
+	err = nrf_modem_at_printf("AT%%XSYSTEMMODE=%d,%d,%d,%d",
+				  ltem_mode, nbiot_mode, gps_mode, preference);
+	if (err) {
+		LOG_ERR("Could not send AT command, error: %d", err);
+	}
+}
+#endif
 
 /* PDN abstractions */
 
 BUILD_ASSERT(
 	(int)LWM2M_OS_PDN_FAM_IPV4 == (int)PDN_FAM_IPV4 &&
 	(int)LWM2M_OS_PDN_FAM_IPV6 == (int)PDN_FAM_IPV6 &&
-	(int)LWM2M_OS_PDN_FAM_IPV4V6 == (int)PDN_FAM_IPV4V6,
+	(int)LWM2M_OS_PDN_FAM_IPV4V6 == (int)PDN_FAM_IPV4V6 &&
+	(int)LWM2M_OS_PDN_FAM_NONIP == (int)PDN_FAM_NONIP,
 	"Incompatible enums"
 );
 BUILD_ASSERT(
@@ -819,14 +657,10 @@ BUILD_ASSERT(
 	(int)LWM2M_OS_PDN_EVENT_ACTIVATED == (int)PDN_EVENT_ACTIVATED &&
 	(int)LWM2M_OS_PDN_EVENT_DEACTIVATED == (int)PDN_EVENT_DEACTIVATED &&
 	(int)LWM2M_OS_PDN_EVENT_IPV6_UP == (int)PDN_EVENT_IPV6_UP &&
-	(int)LWM2M_OS_PDN_EVENT_IPV6_DOWN == (int)PDN_EVENT_IPV6_DOWN,
+	(int)LWM2M_OS_PDN_EVENT_IPV6_DOWN == (int)PDN_EVENT_IPV6_DOWN &&
+	(int)LWM2M_OS_PDN_EVENT_NETWORK_DETACHED == (int)PDN_EVENT_NETWORK_DETACH,
 	"Incompatible enums"
 );
-
-int lwm2m_os_pdn_init(void)
-{
-	return pdn_init();
-}
 
 int lwm2m_os_pdn_ctx_create(uint8_t *cid, lwm2m_os_pdn_event_handler_t cb)
 {
@@ -843,9 +677,9 @@ int lwm2m_os_pdn_ctx_destroy(uint8_t cid)
 	return pdn_ctx_destroy(cid);
 }
 
-int lwm2m_os_pdn_activate(uint8_t cid, int *esm)
+int lwm2m_os_pdn_activate(uint8_t cid, int *esm, enum lwm2m_os_pdn_fam *family)
 {
-	return pdn_activate(cid, esm, NULL);
+	return pdn_activate(cid, esm, (enum pdn_fam *)family);
 }
 
 int lwm2m_os_pdn_deactivate(uint8_t cid)
@@ -865,153 +699,256 @@ int lwm2m_os_pdn_default_apn_get(char *buf, size_t len)
 
 int lwm2m_os_pdn_default_callback_set(lwm2m_os_pdn_event_handler_t cb)
 {
-	return pdn_default_callback_set((pdn_event_handler_t)cb);
+	return pdn_default_ctx_cb_reg((pdn_event_handler_t)cb);
 }
 
-#ifndef ENOKEY
-#define ENOKEY 2001
-#endif
-
-#ifndef EKEYEXPIRED
-#define EKEYEXPIRED 2002
-#endif
-
-#ifndef EKEYREVOKED
-#define EKEYREVOKED 2003
-#endif
-
-#ifndef EKEYREJECTED
-#define EKEYREJECTED 2004
-#endif
-
 /* errno handling. */
-int lwm2m_os_errno(void)
+int lwm2m_os_nrf_errno(void)
 {
-	switch (errno) {
-	case 0:
+	/* nrf_errno have the same values as newlibc errno */
+	return errno;
+}
+
+/* Application firmware upgrade abstractions */
+
+#if CONFIG_DFU_TARGET_MCUBOOT
+
+#include <dfu/dfu_target.h>
+#include <dfu/dfu_target_mcuboot.h>
+#include <dfu/dfu_target_stream.h>
+#include <pm_config.h>
+#include <zephyr/sys/crc.h>
+
+#define MCUBOOT_SECONDARY_ADDR	PM_MCUBOOT_SECONDARY_ADDRESS
+
+#if DT_NODE_EXISTS(PM_MCUBOOT_SECONDARY_DEV)
+#define MCUBOOT_SECONDARY_MTD	PM_MCUBOOT_SECONDARY_DEV
+#else
+#define MCUBOOT_SECONDARY_MTD	DT_NODELABEL(PM_MCUBOOT_SECONDARY_DEV)
+#endif
+
+static bool dfu_started;
+static bool dfu_in_progress;
+static uint8_t dfu_stream_buf[1024] __aligned(4);
+
+static void dfu_target_cb(enum dfu_target_evt_id evt_id)
+{
+	/* This event handler is not in use by LwM2M carrier library. */
+	ARG_UNUSED(evt_id);
+}
+
+static int crc_validate_fragment(const uint8_t *buf, size_t len, uint32_t crc32)
+{
+	if (crc32 != crc32_ieee(buf, len)) {
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int crc_validate_stored_image(size_t len, uint32_t crc32)
+{
+	uintptr_t image_addr = MCUBOOT_SECONDARY_ADDR;
+
+	/* If the image is stored on the same memory technology device (and address space)
+	 * as this code, then it is best to CRC-validate the contents directly.
+	 */
+	if (DT_SAME_NODE(MCUBOOT_SECONDARY_MTD, DT_CHOSEN(zephyr_flash_controller))) {
+		return crc_validate_fragment((const uint8_t *)image_addr, len, crc32);
+	}
+
+	/* Otherwise, the image contents may need to be validated progressively,
+	 * with the help of a different driver (e.g., when using external flash over SPI).
+	 * Repurpose `dfu_stream_buf` to buffer the flash reads.
+	 */
+	uint32_t actual_crc32 = 0;
+	const struct device *image_dev = DEVICE_DT_GET_OR_NULL(MCUBOOT_SECONDARY_MTD);
+
+	if (!device_is_ready(image_dev)) {
+		return -EIO;
+	}
+
+	while (len > 0) {
+		size_t fragment_len = MIN(len, sizeof(dfu_stream_buf));
+		int err = flash_read(image_dev, image_addr, dfu_stream_buf, fragment_len);
+
+		if (err) {
+			return -EIO;
+		}
+
+		actual_crc32 = crc32_ieee_update(actual_crc32, dfu_stream_buf, fragment_len);
+
+		len -= fragment_len;
+		image_addr += fragment_len;
+	}
+
+	if (crc32 != actual_crc32) {
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+int lwm2m_os_app_fota_start(size_t max_file_size)
+{
+	int err, offset;
+
+	if (dfu_started) {
+		return -EBUSY;
+	}
+
+	err = dfu_target_mcuboot_set_buf(dfu_stream_buf, sizeof(dfu_stream_buf));
+	if (err) {
+		return -EIO;
+	}
+
+	err = dfu_target_init(DFU_TARGET_IMAGE_TYPE_MCUBOOT, 0, max_file_size, dfu_target_cb);
+	if (err == -EBUSY) {
+		return -EBUSY;
+	} else if ((err == -ENOMEM) || (err == -E2BIG) || (err == -EFBIG)) {
+		return -ENOMEM;
+	} else if (err) {
+		return -EIO;
+	}
+
+	err = dfu_target_offset_get(&offset);
+	if (err) {
+		return -EIO;
+	}
+
+	dfu_started = true;
+	if (offset > 0) {
+		dfu_in_progress = true;
+	}
+
+	return offset;
+}
+
+int lwm2m_os_app_fota_fragment(const char *buf, uint16_t len, uint16_t offset, uint32_t crc32)
+{
+	int err;
+
+	if ((buf == NULL) || (offset > len)) {
+		/* Invalid arguments. */
+		return -EIO;
+	}
+
+	if (!dfu_started) {
+		return -EACCES;
+	}
+
+	/* CRC-validate whole fragment. */
+	err = crc_validate_fragment(buf, len, crc32);
+	if (err) {
+		return err;
+	}
+
+	if (!dfu_in_progress) {
+		/* First fragment. Check image type. */
+		if (!dfu_target_mcuboot_identify(buf)) {
+			lwm2m_os_app_fota_abort();
+			return -ENOTSUP;
+		}
+
+		dfu_in_progress = true;
+	}
+
+	/* Partial write starting from offset. */
+	err = dfu_target_write(&buf[offset], len - offset);
+	if (!err) {
+		/* Success. */
 		return 0;
-	case EPERM:
-		return NRF_EPERM;
-	case ENOENT:
-		return NRF_ENOENT;
-	case EIO:
-		return NRF_EIO;
-	case ENOEXEC:
-		return NRF_ENOEXEC;
-	case EBADF:
-		return NRF_EBADF;
-	case ENOMEM:
-		return NRF_ENOMEM;
-	case EACCES:
-		return NRF_EACCES;
-	case EFAULT:
-		return NRF_EFAULT;
-	case EINVAL:
-		return NRF_EINVAL;
-	case EMFILE:
-		return NRF_EMFILE;
-	case EAGAIN:
-		return NRF_EAGAIN;
-	case EPROTOTYPE:
-		return NRF_EPROTOTYPE;
-	case ENOPROTOOPT:
-		return NRF_ENOPROTOOPT;
-	case EPROTONOSUPPORT:
-		return NRF_EPROTONOSUPPORT;
-	case ESOCKTNOSUPPORT:
-		return NRF_ESOCKTNOSUPPORT;
-	case EOPNOTSUPP:
-		return NRF_EOPNOTSUPP;
-	case EAFNOSUPPORT:
-		return NRF_EAFNOSUPPORT;
-	case EADDRINUSE:
-		return NRF_EADDRINUSE;
-	case ENETDOWN:
-		return NRF_ENETDOWN;
-	case ENETUNREACH:
-		return NRF_ENETUNREACH;
-	case ECONNREFUSED:
-		return NRF_ECONNREFUSED;
-	case ENETRESET:
-		return NRF_ENETRESET;
-	case ECONNRESET:
-		return NRF_ECONNRESET;
-	case EISCONN:
-		return NRF_EISCONN;
-	case ENOTCONN:
-		return NRF_ENOTCONN;
-	case ETIMEDOUT:
-		return NRF_ETIMEDOUT;
-	case ENOBUFS:
-		return NRF_ENOBUFS;
-	case EHOSTDOWN:
-		return NRF_EHOSTDOWN;
-	case EINPROGRESS:
-		return NRF_EINPROGRESS;
-	case ECANCELED:
-		return NRF_ECANCELED;
-	case ENOKEY:
-		return NRF_ENOKEY;
-	case EKEYEXPIRED:
-		return NRF_EKEYEXPIRED;
-	case EKEYREVOKED:
-		return NRF_EKEYREVOKED;
-	case EKEYREJECTED:
-		return NRF_EKEYREJECTED;
-	case EMSGSIZE:
-		return NRF_EMSGSIZE;
-	default:
-		__ASSERT(false, "Untranslated errno %d", errno);
-		return 0xDEADBEEF;
+	}
+
+	/* Cancel DFU and handle error. */
+	lwm2m_os_app_fota_abort();
+
+	if ((err == -ENOMEM) || (err == -E2BIG) || (err == -EFBIG)) {
+		return -ENOMEM;
+	}
+
+	return -EIO;
+}
+
+int lwm2m_os_app_fota_finish(uint32_t crc32)
+{
+	int err = 0;
+	size_t bytes_written;
+
+	if (!dfu_started) {
+		return -EACCES;
+	}
+
+	/* Ensure that the whole image is flushed into flash before CRC-validating it. */
+	err = dfu_target_stream_done(true);
+	if (!err) {
+		err = dfu_target_stream_offset_get(&bytes_written);
+	}
+	if (err) {
+		err = -EIO;
+		goto abort;
+	}
+
+	err = crc_validate_stored_image(bytes_written, crc32);
+	if (err) {
+		goto abort;
+	}
+
+	err = dfu_target_done(true);
+	if (!err) {
+		err = dfu_target_schedule_update(0);
+	}
+	if (err) {
+		err = -EIO;
+		goto abort;
+	}
+
+	return 0;
+
+abort:
+	lwm2m_os_app_fota_abort();
+	return err;
+}
+
+void lwm2m_os_app_fota_abort(void)
+{
+	if (dfu_started) {
+		dfu_target_reset();
+
+		dfu_in_progress = false;
+		dfu_started = false;
 	}
 }
 
-const char *lwm2m_os_strerror(void)
+#else
+
+int lwm2m_os_app_fota_start(size_t max_file_size)
 {
-	return strerror(errno);
+	ARG_UNUSED(max_file_size);
+
+	return -ENOTSUP;
 }
 
-int lwm2m_os_sec_ca_chain_exists(uint32_t sec_tag, bool *exists, uint8_t *flags)
+int lwm2m_os_app_fota_fragment(const char *buf, uint16_t len, uint16_t offset, uint32_t crc32)
 {
-	return modem_key_mgmt_exists(sec_tag, MODEM_KEY_MGMT_CRED_TYPE_CA_CHAIN, exists);
+	ARG_UNUSED(buf);
+	ARG_UNUSED(len);
+	ARG_UNUSED(offset);
+	ARG_UNUSED(crc32);
+
+	return -ENOTSUP;
 }
 
-int lwm2m_os_sec_ca_chain_cmp(uint32_t sec_tag, const void *buf, size_t len)
+int lwm2m_os_app_fota_finish(uint32_t crc32)
 {
-	return modem_key_mgmt_cmp(sec_tag, MODEM_KEY_MGMT_CRED_TYPE_CA_CHAIN, buf, len);
+	ARG_UNUSED(crc32);
+
+	return -ENOTSUP;
 }
 
-int lwm2m_os_sec_ca_chain_write(uint32_t sec_tag, const void *buf, size_t len)
+void lwm2m_os_app_fota_abort(void)
 {
-	return modem_key_mgmt_write(sec_tag, MODEM_KEY_MGMT_CRED_TYPE_CA_CHAIN, buf, len);
+	/* Do nothing. */
 }
 
-int lwm2m_os_sec_psk_exists(uint32_t sec_tag, bool *exists, uint8_t *perm_flags)
-{
-	return modem_key_mgmt_exists(sec_tag, MODEM_KEY_MGMT_CRED_TYPE_PSK, exists);
-}
-
-int lwm2m_os_sec_psk_write(uint32_t sec_tag, const void *buf, uint16_t len)
-{
-	return modem_key_mgmt_write(sec_tag, MODEM_KEY_MGMT_CRED_TYPE_PSK, buf, len);
-}
-
-int lwm2m_os_sec_psk_delete(uint32_t sec_tag)
-{
-	return modem_key_mgmt_delete(sec_tag, MODEM_KEY_MGMT_CRED_TYPE_PSK);
-}
-
-int lwm2m_os_sec_identity_exists(uint32_t sec_tag, bool *exists, uint8_t *perm_flags)
-{
-	return modem_key_mgmt_exists(sec_tag, MODEM_KEY_MGMT_CRED_TYPE_IDENTITY, exists);
-}
-
-int lwm2m_os_sec_identity_write(uint32_t sec_tag, const void *buf, uint16_t len)
-{
-	return modem_key_mgmt_write(sec_tag, MODEM_KEY_MGMT_CRED_TYPE_IDENTITY, buf, len);
-}
-
-int lwm2m_os_sec_identity_delete(uint32_t sec_tag)
-{
-	return modem_key_mgmt_delete(sec_tag, MODEM_KEY_MGMT_CRED_TYPE_IDENTITY);
-}
+#endif /* CONFIG_DFU_TARGET_MCUBOOT */

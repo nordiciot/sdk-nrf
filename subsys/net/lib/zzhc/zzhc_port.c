@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(zzhc_port, CONFIG_ZZHC_LOG_LEVEL);
 
-#include <zephyr.h>
-#include <sys/base64.h>
-#include <data/json.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/base64.h>
+#include <zephyr/data/json.h>
 #include <modem/at_cmd_parser.h>
 #include "zzhc_internal.h"
 
@@ -156,7 +156,7 @@ bool zzhc_check_http_payload(struct zzhc *ctx)
 	return (res_code && res_desc);
 }
 
-int zzhc_get_at_param_short(struct zzhc *ctx, char *data, int idx)
+int zzhc_get_at_param_short(struct zzhc *ctx, const char *data, int idx)
 {
 	int rc;
 	uint16_t evt;

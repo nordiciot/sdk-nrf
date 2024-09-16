@@ -77,7 +77,10 @@ def get_config_lines(gpm_config, greg_config, head, split, dest, current_domain=
 
             if dest is DEST_HEADER:
                 if partition_has_device(partition):
-                    add_line(f'{name_upper}_DEV_NAME', f"\"{region['device']}\"")
+                    add_line(f'{name_upper}_DEV', region['device'])
+                    if region['default_driver_kconfig']:
+                        add_line(f'{name_upper}_DEFAULT_DRIVER_KCONFIG', region['default_driver_kconfig'])
+
             elif dest is DEST_KCONFIG:
                 if 'span' in partition.keys():
                     add_line(f'{name_upper}_SPAN', string_of_strings(partition['span']))
@@ -163,7 +166,8 @@ def write_kconfig_file(gpm_config, regions_config, out_path):
 def parse_args():
     parser = argparse.ArgumentParser(
         description='''Creates files based on Partition Manager results.''',
-        formatter_class=argparse.RawDescriptionHelpFormatter)
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False)
 
     parser.add_argument('--input-partitions', required=True, type=str, nargs='+',
                         help='Paths to the input .yml files, one per domain.')

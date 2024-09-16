@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 
 #include "led_state_def.h"
 
 #include <caf/events/led_event.h>
-#include "ml_state_event.h"
+#include "ml_app_mode_event.h"
 #include "ml_result_event.h"
 #include "ei_data_forwarder_event.h"
 #include "sensor_sim_event.h"
@@ -17,7 +17,7 @@
 #define MODULE led_state
 #include <caf/events/module_state_event.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_ML_APP_LED_STATE_LOG_LEVEL);
 
 #define DISPLAY_ML_RESULTS		IS_ENABLED(CONFIG_ML_APP_ML_RESULT_EVENTS)
@@ -32,7 +32,7 @@ BUILD_ASSERT(PREDICTION_STREAK_THRESH > 0);
 
 #define DEFAULT_EFFECT			(&ml_result_led_effects[0])
 
-static enum ml_state ml_state = ML_STATE_COUNT;
+static enum ml_app_mode ml_app_mode = ML_APP_MODE_COUNT;
 static enum ei_data_forwarder_state forwarder_state = DISPLAY_DATA_FORWARDER ?
 	EI_DATA_FORWARDER_STATE_DISCONNECTED : EI_DATA_FORWARDER_STATE_TRANSMITTING;
 
@@ -69,7 +69,7 @@ static void send_led_event(size_t led_id, const struct led_effect *led_effect)
 
 	event->led_id = led_id;
 	event->led_effect = led_effect;
-	EVENT_SUBMIT(event);
+	APP_EVENT_SUBMIT(event);
 }
 
 static const struct ml_result_led_effect *get_led_effect(const char *label)
@@ -92,16 +92,6 @@ static const struct ml_result_led_effect *get_led_effect(const char *label)
 	return result;
 }
 
-static void ml_result_set_signin_state(bool state)
-{
-	struct ml_result_signin_event *event = new_ml_result_signin_event();
-
-	event->module_idx = MODULE_IDX(MODULE);
-	event->state = state;
-	EVENT_SUBMIT(event);
-	LOG_INF("Currently %s result event", state ? "signed in" : "signed off from");
-}
-
 static void display_sensor_sim(const char *label)
 {
 	static const struct ml_result_led_effect *sensor_sim_effect;
@@ -122,7 +112,7 @@ static void display_sensor_sim(const char *label)
 
 static void display_ml_result(const char *label, bool force_update)
 {
-	__ASSERT_NO_MSG(ml_state == ML_STATE_MODEL_RUNNING);
+	__ASSERT_NO_MSG(ml_app_mode == ML_APP_MODE_MODEL_RUNNING);
 
 	static const struct ml_result_led_effect *ml_result_effect;
 	const struct ml_result_led_effect *new_effect = get_led_effect(label);
@@ -154,10 +144,8 @@ static void display_ml_result(const char *label, bool force_update)
 
 	if (is_led_effect_blocking(&ml_result_effect->effect)) {
 		blocking_led_effect = &ml_result_effect->effect;
-		ml_result_set_signin_state(false);
 	} else {
 		blocking_led_effect = NULL;
-		ml_result_set_signin_state(true);
 	}
 }
 
@@ -215,7 +203,7 @@ static void validate_configuration(void)
 
 static bool handle_ml_result_event(const struct ml_result_event *event)
 {
-	if ((ml_state == ML_STATE_MODEL_RUNNING) && !blocking_led_effect) {
+	if ((ml_app_mode == ML_APP_MODE_MODEL_RUNNING) && !blocking_led_effect) {
 		update_ml_result(event->label, event->value, event->anomaly);
 	}
 
@@ -236,7 +224,7 @@ static bool handle_ei_data_forwarder_event(const struct ei_data_forwarder_event 
 
 	__ASSERT_NO_MSG(is_led_effect_valid(&ei_data_forwarder_led_effects[forwarder_state]));
 
-	if (ml_state == ML_STATE_DATA_FORWARDING) {
+	if (ml_app_mode == ML_APP_MODE_DATA_FORWARDING) {
 		send_led_event(led_map[LED_ID_ML_STATE],
 			       &ei_data_forwarder_led_effects[forwarder_state]);
 	}
@@ -247,7 +235,7 @@ static bool handle_ei_data_forwarder_event(const struct ei_data_forwarder_event 
 static bool handle_led_ready_event(const struct led_ready_event *event)
 {
 	if ((event->led_id == led_map[LED_ID_ML_STATE]) &&
-	    (ml_state == ML_STATE_MODEL_RUNNING) &&
+	    (ml_app_mode == ML_APP_MODE_MODEL_RUNNING) &&
 	    (blocking_led_effect == event->led_effect)) {
 		display_ml_result(NULL, true);
 	}
@@ -255,14 +243,14 @@ static bool handle_led_ready_event(const struct led_ready_event *event)
 	return false;
 }
 
-static bool handle_ml_state_event(const struct ml_state_event *event)
+static bool handle_ml_app_mode_event(const struct ml_app_mode_event *event)
 {
-	ml_state = event->state;
+	ml_app_mode = event->mode;
 
-	if (event->state == ML_STATE_MODEL_RUNNING) {
+	if (event->mode == ML_APP_MODE_MODEL_RUNNING) {
 		clear_prediction();
 		display_ml_result(NULL, true);
-	} else if (event->state == ML_STATE_DATA_FORWARDING) {
+	} else if (event->mode == ML_APP_MODE_DATA_FORWARDING) {
 		send_led_event(led_map[LED_ID_ML_STATE],
 			       &ei_data_forwarder_led_effects[forwarder_state]);
 	} else {
@@ -287,39 +275,38 @@ static bool handle_module_state_event(const struct module_state_event *event)
 		__ASSERT_NO_MSG(!initialized);
 		module_set_state(MODULE_STATE_READY);
 		initialized = true;
-		ml_result_set_signin_state(true);
 	}
 
 	return false;
 }
 
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
 	if (DISPLAY_ML_RESULTS &&
-	    is_ml_result_event(eh)) {
-		return handle_ml_result_event(cast_ml_result_event(eh));
+	    is_ml_result_event(aeh)) {
+		return handle_ml_result_event(cast_ml_result_event(aeh));
 	}
 
 	if (DISPLAY_SIM_SIGNAL &&
-	    is_sensor_sim_event(eh)) {
-		return handle_sensor_sim_event(cast_sensor_sim_event(eh));
+	    is_sensor_sim_event(aeh)) {
+		return handle_sensor_sim_event(cast_sensor_sim_event(aeh));
 	}
 
 	if (DISPLAY_DATA_FORWARDER &&
-	    is_ei_data_forwarder_event(eh)) {
-		return handle_ei_data_forwarder_event(cast_ei_data_forwarder_event(eh));
+	    is_ei_data_forwarder_event(aeh)) {
+		return handle_ei_data_forwarder_event(cast_ei_data_forwarder_event(aeh));
 	}
 
-	if (is_led_ready_event(eh)) {
-		return handle_led_ready_event(cast_led_ready_event(eh));
+	if (is_led_ready_event(aeh)) {
+		return handle_led_ready_event(cast_led_ready_event(aeh));
 	}
 
-	if (is_ml_state_event(eh)) {
-		return handle_ml_state_event(cast_ml_state_event(eh));
+	if (is_ml_app_mode_event(aeh)) {
+		return handle_ml_app_mode_event(cast_ml_app_mode_event(aeh));
 	}
 
-	if (is_module_state_event(eh)) {
-		return handle_module_state_event(cast_module_state_event(eh));
+	if (is_module_state_event(aeh)) {
+		return handle_module_state_event(cast_module_state_event(aeh));
 	}
 
 	/* If event is unhandled, unsubscribe. */
@@ -328,16 +315,16 @@ static bool event_handler(const struct event_header *eh)
 	return false;
 }
 
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
-EVENT_SUBSCRIBE(MODULE, ml_state_event);
-EVENT_SUBSCRIBE(MODULE, led_ready_event);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
+APP_EVENT_SUBSCRIBE(MODULE, ml_app_mode_event);
+APP_EVENT_SUBSCRIBE(MODULE, led_ready_event);
 #if DISPLAY_DATA_FORWARDER
-EVENT_SUBSCRIBE(MODULE, ei_data_forwarder_event);
+APP_EVENT_SUBSCRIBE(MODULE, ei_data_forwarder_event);
 #endif /* DISPLAY_DATA_FORWARDER */
 #if DISPLAY_ML_RESULTS
-EVENT_SUBSCRIBE(MODULE, ml_result_event);
+APP_EVENT_SUBSCRIBE(MODULE, ml_result_event);
 #endif /* DISPLAY_ML_RESULTS */
 #if DISPLAY_SIM_SIGNAL
-EVENT_SUBSCRIBE(MODULE, sensor_sim_event);
+APP_EVENT_SUBSCRIBE(MODULE, sensor_sim_event);
 #endif /* DISPLAY_SIM_SIGNAL */

@@ -13,49 +13,59 @@
  * @{
  */
 
-#include "event_manager.h"
+#include <app_event_manager.h>
+#include <app_event_manager_profiler_tracer.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#if defined(CONFIG_DEBUG_MODULE_MEMFAULT_USE_EXTERNAL_TRANSPORT)
-#define MEMFAULT_BUFFER_SIZE_MAX CONFIG_DEBUG_MODULE_MEMFAULT_CHUNK_SIZE_MAX
-#else
-#define MEMFAULT_BUFFER_SIZE_MAX 0
-#endif /* if defined(CONFIG_DEBUG_MODULE_MEMFAULT_USE_EXTERNAL_TRANSPORT) */
-
 enum debug_module_event_type {
-	/** Event carrying memfault data that should be forwarded via the configured cloud
+	/** Event carrying Memfault data that should be forwarded via the configured cloud
 	 *  backend to Memfault cloud. Only sent if
 	 *  CONFIG_DEBUG_MODULE_MEMFAULT_USE_EXTERNAL_TRANSPORT is enabled.
 	 *  Payload is of type @ref debug_module_memfault_data.
+	 *
+	 *  The payload is heap allocated and must be freed after use.
 	 */
 	DEBUG_EVT_MEMFAULT_DATA_READY,
 
-	/** Event submitted by the debug module upon an irrecoverable error. The event includes
-	 *  a code indicating the cause of error.
+	/** Event sent after boot when building for PC. This event acts as a placeholder for
+	 *  MODEM_EVT_INITIALIZED which is not sent due to the modem module being disabled for
+	 *  PC builds.
+	 */
+	DEBUG_EVT_EMULATOR_INITIALIZED,
+
+	/** Event sent when the application is built for PC.
+	 *  When built for PC it is assumed that the application
+	 *  is connected to the network.
+	 */
+	DEBUG_EVT_EMULATOR_NETWORK_CONNECTED,
+
+	/** An irrecoverable error has occurred in the debug module. Error details are
+	 *  attached in the event structure.
 	 */
 	DEBUG_EVT_ERROR
 };
 
 struct debug_module_memfault_data {
-	uint8_t buf[MEMFAULT_BUFFER_SIZE_MAX];
+	uint8_t *buf;
 	size_t len;
 };
 
 /** @brief Debug event. */
 struct debug_module_event {
-	struct event_header header;
+	struct app_event_header header;
 	enum debug_module_event_type type;
 
 	union {
 		struct debug_module_memfault_data memfault;
+		/** Code signifying the cause of error. */
 		int err;
 	} data;
 };
 
-EVENT_TYPE_DECLARE(debug_module_event);
+APP_EVENT_TYPE_DECLARE(debug_module_event);
 
 #ifdef __cplusplus
 }

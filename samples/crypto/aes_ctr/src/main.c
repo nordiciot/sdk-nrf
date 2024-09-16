@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
-#include <sys/printk.h>
-#include <logging/log.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/logging/log.h>
 #include <stdio.h>
 #include <psa/crypto.h>
 #include <psa/crypto_extra.h>
@@ -32,7 +32,7 @@ LOG_MODULE_REGISTER(aes_ctr, LOG_LEVEL_DBG);
 /* ====================================================================== */
 /*			Global variables/defines for the AES CTR example			  */
 
-#define NRF_CRYPTO_EXAMPLE_AES_MAX_TEXT_SIZE (100)
+#define NRF_CRYPTO_EXAMPLE_AES_MAX_TEXT_SIZE (128)
 #define NRF_CRYPTO_EXAMPLE_AES_BLOCK_SIZE (16)
 
 /* AES IV buffer */

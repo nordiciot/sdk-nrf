@@ -4,16 +4,19 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <kernel.h>
-#include <drivers/uart.h>
+#include <zephyr/device.h>
+#include <zephyr/devicetree.h>
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/uart.h>
 #include <zboss_api.h>
 #include "zb_nrf_platform.h"
-#include <sys/ring_buffer.h>
+#include <zephyr/sys/ring_buffer.h>
 
 static K_SEM_DEFINE(tx_done_sem, 1, 1);
 static K_SEM_DEFINE(rx_done_sem, 1, 1);
-static const struct device *uart_dev;
+static const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(ncs_zigbee_uart));
 static bool is_sleeping;
+static bool uart_initialized;
 
 static zb_callback_t char_handler;
 static serial_recv_data_cb_t rx_data_cb;
@@ -207,7 +210,7 @@ static void interrupt_handler(const struct device *dev, void *user_data)
 
 void zb_osif_async_serial_init(void)
 {
-	if (uart_dev != NULL) {
+	if (uart_initialized) {
 		return;
 	}
 
@@ -233,8 +236,7 @@ void zb_osif_async_serial_init(void)
 	uart_tx_buf_bak = NULL;
 #endif /* CONFIG_ZBOSS_TRACE_BINARY_NCP_TRANSPORT_LOGGING */
 
-	uart_dev = device_get_binding(CONFIG_ZIGBEE_UART_DEVICE_NAME);
-	if (uart_dev == NULL) {
+	if (!device_is_ready(uart_dev)) {
 		return;
 	}
 
@@ -243,6 +245,8 @@ void zb_osif_async_serial_init(void)
 
 	/* Enable rx interrupts. */
 	uart_irq_rx_enable(uart_dev);
+
+	uart_initialized = true;
 }
 
 void zb_osif_async_serial_sleep(void)
@@ -340,7 +344,7 @@ void zb_osif_serial_send_data(zb_uint8_t *buf, zb_ushort_t len)
 	uart_tx_buf_len = len;
 	uart_tx_buf_offset = 0;
 
-	/* Pass the TX callback for a single (ongoing) tranmission. */
+	/* Pass the TX callback for a single (ongoing) transmission. */
 	tx_trx_data_cb = tx_data_cb;
 
 	/* Enable TX ready event. */
@@ -369,6 +373,7 @@ void zb_osif_set_user_io_buffer(zb_byte_array_t *buf_ptr, zb_ushort_t capacity)
 	(void)k_sem_take(&tx_done_sem, K_FOREVER);
 
 	uart_tx_buf = buf_ptr->ring_buf;
+	uart_tx_buf_bak = uart_tx_buf;
 	uart_tx_buf_size = capacity;
 
 	k_sem_give(&tx_done_sem);

@@ -142,7 +142,8 @@ iperf_tcp_send(struct iperf_stream *sp)
 
 #else
 	    /* 64bit variable printing is not working */
-        printf("sent %d bytes of %d, total %d\n", r, sp->settings->blksize, (uint32_t)sp->result->bytes_sent);
+        iperf_printf(sp->test, "sent %d bytes of %d, total %d\n",
+                        r, sp->settings->blksize, (uint32_t)sp->result->bytes_sent);
 #endif        
     }
     return r;
@@ -233,15 +234,6 @@ iperf_tcp_listen(struct iperf_test *test)
         hints.ai_flags = (AI_PDNSERV | AI_NUMERICSERV);
         snprintf(portstr, 12, "%d:%s", test->server_port, test->pdn_id_str);
     }
-    else if (test->apn_str != NULL) {
-        hints.ai_next = test->apn_str ?
-                &(struct addrinfo) {
-                    .ai_family    = AF_LTE,
-                    .ai_socktype  = SOCK_MGMT,
-                    .ai_protocol  = NPROTO_PDN,
-                    .ai_canonname = (char *)test->apn_str
-                } : NULL;
-    }
 #endif
 
 	/*
@@ -270,18 +262,11 @@ iperf_tcp_listen(struct iperf_test *test)
         }
 
 #if defined (CONFIG_NRF_IPERF3_MULTICONTEXT_SUPPORT)
-        /* Set PDN based on PDN ID or APN if requested */
+        /* Set PDN based on PDN ID if requested */
         if (test->pdn_id_str != NULL) {
             int ret = iperf_util_socket_pdn_id_set(s, test->pdn_id_str);
             if (ret != 0) {
                 iperf_printf(test, "iperf_tcp_listen: cannot bind socket with PDN ID %s\n", test->pdn_id_str);
-                i_errno = IESTREAMLISTEN;
-                return -1;
-            }				
-        } else if (test->apn_str != NULL) {
-            int ret = iperf_util_socket_apn_set(s, test->apn_str);
-            if (ret != 0) {
-                iperf_printf(test, "iperf_tcp_listen: cannot bind socket to apn %s\n", test->apn_str);
                 i_errno = IESTREAMLISTEN;
                 return -1;
             }				
@@ -508,15 +493,6 @@ iperf_tcp_connect(struct iperf_test *test)
         hints.ai_flags = (AI_PDNSERV | AI_NUMERICSERV);
         snprintf(portstr, 12, "%d:%s", test->server_port, test->pdn_id_str);
     }
-    else if (test->apn_str != NULL) {
-        hints.ai_next = test->apn_str ?
-                &(struct addrinfo) {
-                    .ai_family    = AF_LTE,
-                    .ai_socktype  = SOCK_MGMT,
-                    .ai_protocol  = NPROTO_PDN,
-                    .ai_canonname = (char *)test->apn_str
-                } : NULL;
-    }
 #endif
 
     if ((gerror = getaddrinfo(test->server_hostname, portstr, &hints, &server_res)) != 0) {
@@ -538,22 +514,15 @@ iperf_tcp_connect(struct iperf_test *test)
     }
 
 #if defined (CONFIG_NRF_IPERF3_MULTICONTEXT_SUPPORT)
-    /* Set PDN based on PDN ID or APN if requested */
+    /* Set PDN based on PDN ID if requested */
     if (test->pdn_id_str != NULL) {
         int ret = iperf_util_socket_pdn_id_set(s, test->pdn_id_str);
         if (ret != 0) {
-            iperf_printf(test, "iperf_tcp_listen: cannot bind socket with PDN ID %s\n", test->pdn_id_str);
+            iperf_printf(test, "iperf_tcp_connect: cannot bind socket with PDN ID %s\n", test->pdn_id_str);
             i_errno = IESTREAMLISTEN;
             return -1;
         }				
-    } else if (test->apn_str != NULL) {
-		int ret = iperf_util_socket_apn_set(s, test->apn_str);
-		if (ret != 0) {
-			iperf_printf(test, "Cannot bind socket to apn %s\n", test->apn_str);
-            i_errno = IESTREAMCONNECT;            
-			return -1;
-		}				
-	}
+    }
 #endif
 
     /*

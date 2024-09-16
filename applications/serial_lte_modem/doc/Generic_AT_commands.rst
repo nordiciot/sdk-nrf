@@ -12,12 +12,13 @@ The following commands list contains generic AT commands.
 SLM version #XSLMVER
 ====================
 
-The ``#XSLMVER`` command requests the SLM version.
+The ``#XSLMVER`` command return the versions of the |NCS| in which the SLM application is built.
+It also returns the version of the modem library that SLM uses to communicate with the modem.
 
 Set command
 -----------
 
-The set command requests the SLM version.
+The set command returns the versions of the |NCS| and the modem library.
 
 Syntax
 ~~~~~~
@@ -31,19 +32,21 @@ Response syntax
 
 ::
 
-   #XSLMVERSION: <version>
+   #XSLMVER: <ncs_version>,<libmodem_version>
 
-The ``<version>`` value returns a string containing the SLM version.
+The ``<ncs_version>`` value returns a string containing the version of the |NCS|.
+
+The ``<libmodem_version>`` value returns a string containing the version of the modem library.
 
 Example
 ~~~~~~~
 
-The following command example reads the SLM version:
+The following command example reads the versions:
 
 ::
 
    AT#XSLMVER
-   #XSLMVER: 1.2
+   #XSLMVER: "2.3.0","2.3.0"
    OK
 
 Read command
@@ -116,36 +119,43 @@ The test command is not supported.
 Power saving #XSLEEP
 ====================
 
-The ``#XSLEEP`` command makes the nRF91 development kit go into idle or sleep mode.
+The ``#XSLEEP`` command makes the nRF9160 System in Package (SiP) enter idle or sleep mode.
 
-If you are going to do power measurements on the nRF9160 DK while running the SLM application it is recommended to disable unused peripherals.
-By default UART2 is enabled in the :file:`nrf9160dk_nrf9160_ns.overlay` file so disable the UART2 by switching the status.
-Change the line ``status = "okay"`` to ``status = "disabled"`` and then save the :file:`nrf9160dk_nrf9160_ns.overlay`` file to make sure you will get the expected power consumption numbers when doing the measurements.
+If you want to do power measurements on the nRF9160 development kit while running the SLM application, disable unused peripherals.
 
 Set command
 -----------
 
-The set command makes the nRF91 development kit go into either idle or sleep mode, or it powers off the UART device.
+The set command makes the nRF9160 SiP enter either Idle or Sleep mode.
 
 Syntax
 ~~~~~~
 
 ::
 
-   #XSLEEP=<shutdown_mode>
+   #XSLEEP=<sleep_mode>
 
-The ``<shutdown_mode>`` parameter accepts only the following integer values:
+The ``<sleep_mode>`` parameter accepts only the following integer values:
 
-* ``0`` - Enter Idle.
-  In this mode, the SLM service is terminated, but the LTE connection is maintained.
+* ``0`` - Deprecated.
 * ``1`` - Enter Sleep.
   In this mode, both the SLM service and the LTE connection are terminated.
-* ``2`` - Power off UART.
-  In this mode, both the SLM service and the LTE connection are maintained.
 
-* In case of Idle, it will exit by interface GPIO.
-* In case of Sleep, it will wake up by interface GPIO.
-* In case of UART power off, UART will be powered on by interface GPIO or internally by SLM when needed.
+  The nRF9160 SiP can be woken up using the :ref:`CONFIG_SLM_WAKEUP_PIN <CONFIG_SLM_WAKEUP_PIN>`.
+
+* ``2`` - Enter Idle.
+
+  In this mode, both the SLM service and the LTE connection are maintained.
+  The nRF9160 SiP can be made to exit idle using the :ref:`CONFIG_SLM_WAKEUP_PIN <CONFIG_SLM_WAKEUP_PIN>`.
+  If the :ref:`CONFIG_SLM_INDICATE_PIN <CONFIG_SLM_INDICATE_PIN>` is defined, SLM toggle this GPIO when there is data for MCU.
+  MCU could in turn make SLM to exit idle by :ref:`CONFIG_SLM_WAKEUP_PIN <CONFIG_SLM_WAKEUP_PIN>`.
+  The data is buffered during the idle status and sent to MCU after exiting the idle status.
+
+.. note::
+
+   * This parameter does not accept ``0`` anymore.
+   * If the modem is on, entering Sleep mode sends a ``+CFUN=0`` command to the modem, which causes a non-volatile memory (NVM) write.
+     Take the NVM wear into account, or put the modem in flight mode by issuing a ``AT+CFUN=4`` before Sleep mode.
 
 Examples
 ~~~~~~~~
@@ -153,9 +163,19 @@ Examples
 ::
 
    AT#XSLEEP=0
-   OK
+   ERROR
 
 ::
+
+   AT#XSLEEP=1
+   OK
+
+See the following for an example of when the modem is on:
+
+::
+
+   AT+CFUN=4
+   OK
 
    AT#XSLEEP=1
    OK
@@ -194,8 +214,85 @@ Example
 
 ::
 
-   #XSLEEP: (0,1,2)
+   #XSLEEP: (1,2)
    OK
+
+Power off #XSHUTDOWN
+====================
+
+The ``#XSHUTDOWN`` command makes the nRF9160 SiP enter System OFF mode, which is the deepest power saving mode.
+
+Set command
+-----------
+
+The set command makes the nRF9160 SiP enter System OFF mode.
+
+Syntax
+~~~~~~
+
+::
+
+   #XSHUTDOWN
+
+.. note::
+
+   In this case the nRF9160 SiP cannot be woken up using the :ref:`CONFIG_SLM_WAKEUP_PIN <CONFIG_SLM_WAKEUP_PIN>`..
+
+Examples
+~~~~~~~~
+
+::
+
+   AT#XSHUTDOWN
+   OK
+
+
+Read command
+------------
+
+The read command is not supported.
+
+Test command
+------------
+
+The test command is not supported.
+
+Reset #XRESET
+=============
+
+The ``#XRESET`` command performs a soft reset to the nRF9160 SiP.
+
+Set command
+-----------
+
+The set command resets the nRF9160 SiP.
+
+Syntax
+~~~~~~
+
+::
+
+   #XRESET
+
+Examples
+~~~~~~~~
+
+::
+
+   AT#XRESET
+   OK
+   Ready
+
+Read command
+------------
+
+The read command is not supported.
+
+Test command
+------------
+
+The test command is not supported.
+
 
 SLM UART #XSLMUART
 ==================
@@ -205,17 +302,17 @@ The ``#XSLMUART`` command manages the UART settings.
 Set command
 -----------
 
-The set command changes the UART settings.
+The set command changes the UART baud rate setting.
+This setting is stored in the flash memory and applied during the application startup.
 
 Syntax
 ~~~~~~
-
 ::
 
    #XSLMUART[=<baud_rate>]
 
 The ``<baud_rate>`` parameter is an integer.
-It accepts only the following values:
+It accepts the following values:
 
 * ``1200`` - 1200 bps
 * ``2400`` - 2400 bps
@@ -231,7 +328,10 @@ It accepts only the following values:
 * ``921600`` - 921600 bps
 * ``1000000`` - 1000000 bps
 
-The default value is ``115200``.
+Its default value is ``115200``.
+When not specified, it is set to the last value set for the variable and stored in the flash memory.
+If there is no value stored for the variable, it is set to its default value.
+If not specified, the previous value is used.
 
 Response syntax
 ~~~~~~~~~~~~~~~
@@ -301,7 +401,6 @@ Example
    AT#XSLMUART=?
    #XSLMUART: (1200,2400,4800,9600,14400,19200,38400,57600,115200,230400,460800,921600,1000000)
 
-
 Device UUID #XUUID
 ==================
 
@@ -348,3 +447,130 @@ Test command
 ------------
 
 The test command is not supported.
+
+Native TLS CMNG #XCMNG
+======================
+
+The ``#XCMNG`` command manages the credentials to support :ref:`CONFIG_SLM_NATIVE_TLS <CONFIG_SLM_NATIVE_TLS>`.
+This command is similar to the modem ``%CMNG`` command.
+
+Set command
+-----------
+
+The set command is used for credential storage management.
+The command writes, reads, deletes, and checks the existence of keys and certificates.
+
+Syntax
+~~~~~~
+
+The following is the syntax when :ref:`CONFIG_SLM_NATIVE_TLS <CONFIG_SLM_NATIVE_TLS>` is selected:
+::
+
+   #XCMNG=<opcode>[,<sec_tag>[,<type>[,<content>]]]
+
+The ``<opcode>`` parameter is an integer.
+It accepts the following values:
+
+* ``0`` - Write a credential.
+* ``1`` - List credentials (currently not supported).
+* ``2`` - Read a credential (currently not supported).
+* ``3`` - Delete a credential.
+
+The ``<sec_tag>`` parameter is an integer ranging between ``0`` and ``2147483647``.
+It is mandatory for *write*, *read*, and *delete* operations.
+It is optional for *list* operations.
+
+The ``<type>`` parameter is an integer.
+It accepts the following values:
+
+* ``0`` - Root CA certificate (ASCII text)
+* ``1`` - Certificate (ASCII text)
+* ``2`` - Private key (ASCII text)
+
+The ``<content>`` parameter is a string.
+It is mandatory if ``<opcode>`` is ``0`` (write a credential).
+It is the content of a Privacy Enhanced Mail (PEM) file enclosed in double quotes (X.509 PEM entities).
+An empty string is not allowed.
+
+Response syntax
+~~~~~~~~~~~~~~~
+
+There is no response.
+
+Example
+~~~~~~~
+
+::
+
+   AT#XCMNG=0,10,0,"-----BEGIN CERTIFICATE-----
+   MIICpTCCAkugAwIBAgIUS+wVM0VsVmpDIV8NTW8N2KEdRdowCgYIKoZIzj0EAwIw
+   gacxCzAJBgNVBAYTAlRXMQ8wDQYDVQQIDAZUYWl3YW4xDzANBgNVBAcMBlRhaXBl
+   aTEWMBQGA1UECgwNTm9yZGljIFRhaXBlaTEOMAwGA1UECwwFU2FsZXMxETAPBgNV
+   BAMMCExhcnJ5IENBMTswOQYJKoZIhvcNAQkBFixsYXJyeS52ZXJ5bG9uZ2xvbmds
+   b25nbG9uZ2xvbmdAbm9yZGljc2VtaS5ubzAeFw0yMDExMTcxMTE3MDlaFw0zMDEx
+   MTUxMTE3MDlaMIGnMQswCQYDVQQGEwJUVzEPMA0GA1UECAwGVGFpd2FuMQ8wDQYD
+   VQQHDAZUYWlwZWkxFjAUBgNVBAoMDU5vcmRpYyBUYWlwZWkxDjAMBgNVBAsMBVNh
+   bGVzMREwDwYDVQQDDAhMYXJyeSBDQTE7MDkGCSqGSIb3DQEJARYsbGFycnkudmVy
+   eWxvbmdsb25nbG9uZ2xvbmdsb25nQG5vcmRpY3NlbWkubm8wWTATBgcqhkjOPQIB
+   BggqhkjOPQMBBwNCAASvk+LcLXwteWokU1In+FQUWkkbQhkpW61u7d0jV1y/eF3Q
+   PTDAoEz//SnU1kIZccAqV64fFrrd2nkXknLCrhtxo1MwUTAdBgNVHQ4EFgQUMYSO
+   cWPI+SQUs1oVatNQvN/F0UowHwYDVR0jBBgwFoAUMYSOcWPI+SQUs1oVatNQvN/F
+   0UowDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiB2IrzpUmQqcUIw
+   OVqOMNAlzR6v4YHlI9InxU01quIRtQIhAOTITnLNuA0r0571SSBKZyrNGzxJxcPO
+   FDkGjew9OVov
+   -----END CERTIFICATE-----"
+
+   OK
+
+Read command
+------------
+
+The read command is not supported.
+
+Test command
+------------
+
+The test command is not supported.
+
+Modem fault #XMODEM
+===================
+
+The application monitors the modem status.
+When the application detects a *modem fault*, it sends the ``#XMODEM`` unsolicited notification.
+
+Unsolicited notification
+------------------------
+
+The application sends the following unsolicited notification when it detects a modem fault:
+
+::
+
+   #XMODEM: FAULT,<reason>,<program_count>
+
+The ``<reason>`` value returns a hexadecimal integer indicating the reason of the modem fault.
+The ``<program_count>`` value returns a hexadecimal integer indicating the address of the modem fault.
+
+The application sends the following unsolicited notification when it shuts down libmodem:
+
+::
+
+   #XMODEM: SHUTDOWN,<result>
+
+The ``<result>`` value returns an integer indicating the result of the shutdown of libmodem.
+
+The application sends the following unsolicited notification when it re-initializes libmodem:
+
+::
+
+   #XMODEM: INIT,<result>
+
+The ``<result>`` value returns an integer indicating the result of the re-initialization of libmodem.
+
+.. note::
+   After libmodem is re-initialized, the MCU side must restart the current active service as follows:
+
+   1. Stopping the service.
+      For example, disconnecting the TCP connection and closing the socket.
+   #. Connecting again using LTE.
+   #. Restarting the service.
+      For example, opening the socket and re-establishing the TCP connection.

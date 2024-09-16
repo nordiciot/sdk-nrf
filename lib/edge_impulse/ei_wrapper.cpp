@@ -5,14 +5,16 @@
  */
 
 #include <assert.h>
+#include <math.h>
 #include <ei_run_classifier.h>
 #include <ei_wrapper.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(ei_wrapper, CONFIG_EI_WRAPPER_LOG_LEVEL);
 
 #define INPUT_FRAME_SIZE	EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME
 #define INPUT_WINDOW_SIZE	EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE
+#define INPUT_FREQUENCY		EI_CLASSIFIER_FREQUENCY
 #define HAS_ANOMALY		EI_CLASSIFIER_HAS_ANOMALY
 #define RESULT_LABEL_COUNT	EI_CLASSIFIER_LABEL_COUNT
 
@@ -47,6 +49,7 @@ static K_SEM_DEFINE(ei_sem, 0, 1);
 
 static struct data_buffer ei_input;
 static ei_impulse_result_t ei_result;
+static int cur_res_idx;
 static ei_wrapper_result_ready_cb user_cb;
 
 
@@ -233,6 +236,27 @@ size_t ei_wrapper_get_window_size(void)
 	return INPUT_WINDOW_SIZE;
 }
 
+size_t ei_wrapper_get_classifier_frequency(void)
+{
+	return INPUT_FREQUENCY;
+}
+
+size_t ei_wrapper_get_classifier_label_count(void)
+{
+	return RESULT_LABEL_COUNT;
+}
+
+const char *ei_wrapper_get_classifier_label(size_t idx)
+{
+	BUILD_ASSERT(ARRAY_SIZE(ei_classifier_inferencing_categories) == RESULT_LABEL_COUNT);
+
+	if (idx >= ei_wrapper_get_classifier_label_count()) {
+		return NULL;
+	}
+
+	return ei_classifier_inferencing_categories[idx];
+}
+
 int ei_wrapper_add_data(const float *data, size_t data_size)
 {
 	if (data_size % INPUT_FRAME_SIZE) {
@@ -281,12 +305,14 @@ static void processing_finished(int err)
 	__ASSERT_NO_MSG(user_cb);
 
 	buf_processing_end(&ei_input);
+	cur_res_idx = -1;
 	user_cb(err);
 }
 
 static void edge_impulse_thread_fn(void)
 {
 	signal_t features_signal;
+	int64_t start_time;
 
 	while (true) {
 		k_sem_take(&ei_sem, K_FOREVER);
@@ -294,9 +320,23 @@ static void edge_impulse_thread_fn(void)
 		features_signal.get_data = &raw_feature_get_data;
 		features_signal.total_length = INPUT_WINDOW_SIZE;
 
+		if (IS_ENABLED(CONFIG_EI_WRAPPER_PROFILING)) {
+			start_time = k_uptime_get();
+		}
+
 		/* Invoke the impulse. */
 		EI_IMPULSE_ERROR err = run_classifier(&features_signal,
 						      &ei_result, DEBUG_MODE);
+		if (IS_ENABLED(CONFIG_EI_WRAPPER_PROFILING)) {
+			int64_t delta = k_uptime_delta(&start_time);
+
+			LOG_INF("run_classifier execution time: %dms", (int32_t)delta);
+			LOG_INF("sampling: %dms dsp: %dms classification: %dms anomaly: %dms",
+				ei_result.timing.sampling,
+				ei_result.timing.dsp,
+				ei_result.timing.classification,
+				ei_result.timing.anomaly);
+		}
 
 		if (err) {
 			LOG_ERR("run_classifier err=%d", err);
@@ -312,50 +352,105 @@ static bool can_read_result(void)
 	return (k_current_get() == ei_thread_id);
 }
 
-int ei_wrapper_get_classification_results(const char **label, float *value,
-					  float *anomaly)
+static int get_next_result_idx(int cur_idx)
+{
+	float limit = INFINITY;
+
+	if (cur_idx == RESULT_LABEL_COUNT) {
+		return cur_idx;
+	}
+
+	if (cur_idx >= 0) {
+		limit = ei_result.classification[cur_idx].value;
+	}
+
+	float max_val = -INFINITY;
+	int max_idx = RESULT_LABEL_COUNT;
+
+	for (int idx = 0; idx < RESULT_LABEL_COUNT; idx++) {
+		float val = ei_result.classification[idx].value;
+
+		if ((idx > cur_idx) && (val == limit)) {
+			return idx;
+		}
+
+		if ((val < limit) &&
+		    ((val > max_val) || ((val == -INFINITY) && (max_idx == RESULT_LABEL_COUNT)))) {
+			max_idx = idx;
+			max_val = val;
+		}
+	}
+
+	return max_idx;
+}
+
+int ei_wrapper_get_next_classification_result(const char **label, float *value, size_t *idx)
 {
 	if (!can_read_result()) {
 		LOG_WRN("Result can be read only from callback context");
 		return -EACCES;
 	}
 
-	float max_val = ei_result.classification[0].value;
-	size_t max_idx = 0;
+	cur_res_idx = get_next_result_idx(cur_res_idx);
 
-	for (size_t idx = 1; idx < RESULT_LABEL_COUNT; idx++) {
-		if (max_val < ei_result.classification[idx].value) {
-			max_idx = idx;
-			max_val = ei_result.classification[idx].value;
-		}
+	__ASSERT_NO_MSG((cur_res_idx >= 0) && (cur_res_idx <= RESULT_LABEL_COUNT));
+
+	if (cur_res_idx == RESULT_LABEL_COUNT) {
+		return -ENOENT;
 	}
 
-	*label = ei_result.classification[max_idx].label;
-	*value = ei_result.classification[max_idx].value;
-	if (HAS_ANOMALY) {
-		*anomaly = ei_result.anomaly;
-	} else {
-		*anomaly = 0.0;
+	if (label) {
+		*label = ei_result.classification[cur_res_idx].label;
+	}
+
+	if (value) {
+		*value = ei_result.classification[cur_res_idx].value;
+	}
+
+	if (idx) {
+		*idx = cur_res_idx;
 	}
 
 	return 0;
 }
 
-int ei_wrapper_get_timing(int *dsp_time, int *classification_time,
-			  int *anomaly_time)
+int ei_wrapper_get_anomaly(float *anomaly)
 {
 	if (!can_read_result()) {
 		LOG_WRN("Result can be read only from callback context");
 		return -EACCES;
 	}
 
-	*dsp_time = ei_result.timing.dsp;
-	*classification_time = ei_result.timing.classification;
+	if (!HAS_ANOMALY) {
+		return -ENOTSUP;
+	}
 
-	if (HAS_ANOMALY) {
-		*anomaly_time = ei_result.timing.anomaly;
-	} else {
-		*anomaly_time = -1;
+	if (anomaly) {
+		*anomaly = ei_result.anomaly;
+	}
+
+	return 0;
+}
+
+int ei_wrapper_get_timing(int *dsp_time, int *classification_time, int *anomaly_time)
+{
+	if (!can_read_result()) {
+		LOG_WRN("Result can be read only from callback context");
+		return -EACCES;
+	}
+
+	if (dsp_time) {
+		*dsp_time = ei_result.timing.dsp;
+	}
+
+	if (classification_time) {
+		*classification_time = ei_result.timing.classification;
+	}
+
+	float anomaly_res = (HAS_ANOMALY) ? (ei_result.timing.anomaly) : (-1);
+
+	if (anomaly_time) {
+		*anomaly_time = anomaly_res;
 	}
 
 	return 0;

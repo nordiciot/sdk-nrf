@@ -4,19 +4,19 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
-#include <sys/printk.h>
-#include <sys/byteorder.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/sys/byteorder.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
 #include <bluetooth/gatt_dm.h>
 #include <bluetooth/services/ancs_client.h>
 #include <bluetooth/services/gattp.h>
 
-#include <settings/settings.h>
+#include <zephyr/settings/settings.h>
 
 #include <dk_buttons_and_leds.h>
 
@@ -218,15 +218,22 @@ static void discover_gattp_completed_cb(struct bt_gatt_dm *dm, void *ctx)
 	struct bt_gattp *gattp = (struct bt_gattp *)ctx;
 	struct bt_conn *conn = bt_gatt_dm_conn_get(dm);
 
-	printk("The discovery procedure for GATT Service succeeded\n");
+	/* Checks if the service is empty.
+	 * Discovery Manager handles empty services.
+	 */
+	if (bt_gatt_dm_attr_cnt(dm) > 1) {
+		printk("The discovery procedure for GATT Service succeeded\n");
 
-	bt_gatt_dm_data_print(dm);
+		bt_gatt_dm_data_print(dm);
 
-	err = bt_gattp_handles_assign(dm, gattp);
-	if (err) {
-		printk("Could not init GATT Service client object, error: %d\n", err);
+		err = bt_gattp_handles_assign(dm, gattp);
+		if (err) {
+			printk("Could not init GATT Service client object, error: %d\n", err);
+		} else {
+			enable_gattp_indications(gattp);
+		}
 	} else {
-		enable_gattp_indications(gattp);
+		printk("GATT Service could not be found during the discovery\n");
 	}
 
 	err = bt_gatt_dm_data_release(dm);
@@ -361,7 +368,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 	}
 }
 
-static struct bt_conn_cb conn_callbacks = {
+BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected = connected,
 	.disconnected = disconnected,
 	.security_changed = security_changed,
@@ -376,17 +383,6 @@ static void auth_cancel(struct bt_conn *conn)
 	printk("Pairing cancelled: %s\n", addr);
 
 	bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
-}
-
-static void pairing_confirm(struct bt_conn *conn)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-	bt_conn_auth_pairing_confirm(conn);
-
-	printk("Pairing confirmed: %s\n", addr);
 }
 
 static void pairing_complete(struct bt_conn *conn, bool bonded)
@@ -411,7 +407,9 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 
 static struct bt_conn_auth_cb conn_auth_callbacks = {
 	.cancel = auth_cancel,
-	.pairing_confirm = pairing_confirm,
+};
+
+static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {
 	.pairing_complete = pairing_complete,
 	.pairing_failed = pairing_failed
 };
@@ -677,7 +675,7 @@ static void button_changed(uint32_t button_state, uint32_t has_changed)
 	}
 }
 
-void main(void)
+int main(void)
 {
 	int blink_status = 0;
 	int err;
@@ -687,53 +685,53 @@ void main(void)
 	err = ancs_c_init();
 	if (err) {
 		printk("ANCS client init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	err = gattp_init();
 	if (err) {
 		printk("GATT Service client init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	err = dk_leds_init();
 	if (err) {
 		printk("LEDs init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	err = dk_buttons_init(button_changed);
 	if (err) {
 		printk("Button init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	err = bt_enable(NULL);
 	if (err) {
 		printk("BLE init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
 		settings_load();
 	}
 
-	bt_conn_cb_register(&conn_callbacks);
-	if (err) {
-		printk("Failed to register connection callbacks\n");
-		return;
-	}
-
 	err = bt_conn_auth_cb_register(&conn_auth_callbacks);
 	if (err) {
 		printk("Failed to register authorization callbacks\n");
-		return;
+		return 0;
+	}
+
+	err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
+	if (err) {
+		printk("Failed to register authorization info callbacks.\n");
+		return 0;
 	}
 
 	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), NULL, 0);
 	if (err) {
 		printk("Advertising failed to start (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Advertising successfully started\n");

@@ -4,32 +4,38 @@
 # SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
 #
 
-target_sources_ifdef(CONFIG_CAF_BLE_BOND_SUPPORTED
+target_sources_ifdef(CONFIG_DESKTOP_BLE_BOND_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ble_bond.c)
 
 target_sources_ifdef(CONFIG_DESKTOP_BLE_ENABLE_PASSKEY
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ble_passkey.c)
 
-target_sources_ifdef(CONFIG_BT_PERIPHERAL
+target_sources_ifdef(CONFIG_DESKTOP_BLE_LATENCY_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ble_latency.c)
 
-target_sources_ifdef(CONFIG_BT_CENTRAL
+target_sources_ifdef(CONFIG_DESKTOP_BLE_CONN_PARAMS_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ble_conn_params.c)
 
 target_sources_ifdef(CONFIG_DESKTOP_BLE_DISCOVERY_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ble_discovery.c)
 
-target_sources_ifdef(CONFIG_DESKTOP_BLE_SCANNING_ENABLE
+target_sources_ifdef(CONFIG_DESKTOP_BLE_SCAN_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ble_scan.c)
 
 target_sources_ifdef(CONFIG_DESKTOP_BLE_QOS_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ble_qos.c)
 
-target_sources_ifdef(CONFIG_SETTINGS
-		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/settings_loader.c)
-
 target_sources_ifdef(CONFIG_DESKTOP_CONFIG_CHANNEL_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/info.c)
+
+target_sources_ifdef(CONFIG_DESKTOP_FACTORY_RESET
+		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/factory_reset.c)
+
+target_sources_ifdef(CONFIG_DESKTOP_FAST_PAIR
+		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fast_pair.c)
+
+target_sources_ifdef(CONFIG_DESKTOP_SWIFT_PAIR
+		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/swift_pair.c)
 
 target_sources_ifdef(CONFIG_DESKTOP_HID_FORWARD_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/hid_forward.c)
@@ -55,6 +61,9 @@ target_sources_ifdef(CONFIG_DESKTOP_LED_STREAM_ENABLE
 target_sources_ifdef(CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dfu.c)
 
+target_sources_ifdef(CONFIG_DESKTOP_DFU_MCUMGR_ENABLE
+		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dfu_mcumgr.c)
+
 target_sources_ifdef(CONFIG_DESKTOP_FN_KEYS_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fn_keys.c)
 
@@ -67,7 +76,7 @@ target_sources_ifdef(CONFIG_DESKTOP_BAS_ENABLE
 target_sources_ifdef(CONFIG_DESKTOP_QOS_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/qos.c)
 
-target_sources_ifdef(CONFIG_BT_PERIPHERAL
+target_sources_ifdef(CONFIG_DESKTOP_DEV_DESCR_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dev_descr.c)
 
 target_sources_ifdef(CONFIG_DESKTOP_HIDS_ENABLE
@@ -85,5 +94,5 @@ target_sources_ifdef(CONFIG_DESKTOP_FAILSAFE_ENABLE
 target_sources_ifdef(CONFIG_DESKTOP_CPU_MEAS_ENABLE
 		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cpu_meas.c)
 
-target_sources_ifdef(CONFIG_DESKTOP_PROFILER_SYNC_GPIO_ENABLE
-		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/profiler_sync.c)
+target_sources_ifdef(CONFIG_DESKTOP_NRF_PROFILER_SYNC_GPIO_ENABLE
+		     app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/nrf_profiler_sync.c)

@@ -7,19 +7,20 @@ Generic Default Transition Time Server
    :local:
    :depth: 2
 
-The DTT Server provides a common way to specify the state transition time for other models on the same element.
-If other generic models on the same element receive state change commands without transition parameters, they will use the default transition time specified by the DTT Server model.
-This way, the DTT Server can define a consistent transition time for all states on their elements, without depending on client configurations.
+The DTT Server provides a common way to specify the state transition time for other models on any element.
+If a DTT Server is not present on the model's element, use the DTT Server model instance that is present on the element with the largest address that is smaller than the address of the given element.
+This way, if other generic models on any element receive state change commands without transition parameters, they will use the default transition time specified by the DTT Server model.
+The DTT Server can then define a consistent transition time for all states on their elements, without depending on client configurations.
 
 Configuration
 =============
 
 The following configuration parameters are associated with the Generic DTT Server model:
 
-* :kconfig:`CONFIG_BT_MESH_DTT_SRV_PERSISTENT` - Control whether changes to the Generic Default Transition Time are stored persistently.
+* :kconfig:option:`CONFIG_BT_MESH_DTT_SRV_PERSISTENT` - Control whether changes to the Generic Default Transition Time are stored persistently.
 
   .. note::
-    This option is only available if :kconfig:`CONFIG_BT_SETTINGS` is enabled.
+    This option is only available if :kconfig:option:`CONFIG_BT_SETTINGS` is enabled.
 
 States
 ======
@@ -58,7 +59,7 @@ None.
 Persistent storage
 ==================
 
-The Generic Default Transition Time is stored persistently if :kconfig:`CONFIG_BT_MESH_DTT_SRV_PERSISTENT` is enabled.
+The Generic Default Transition Time is stored persistently if :kconfig:option:`CONFIG_BT_MESH_DTT_SRV_PERSISTENT` is enabled.
 
 API documentation
 =================

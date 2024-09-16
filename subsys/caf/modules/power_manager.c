@@ -3,24 +3,26 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <zephyr/types.h>
-#include <pm/pm.h>
+#include <zephyr/pm/pm.h>
+#include <zephyr/pm/policy.h>
 
-#include <device.h>
-#include <drivers/gpio.h>
+#include <zephyr/device.h>
 #include <hal/nrf_power.h>
+#include <helpers/nrfx_reset_reason.h>
+#include <zephyr/sys/reboot.h>
 
-#include <event_manager.h>
-#include <profiler.h>
+#include <app_event_manager.h>
+#include <nrf_profiler.h>
 
 #include <caf/events/power_event.h>
 
 #define MODULE power_manager
 #include <caf/events/module_state_event.h>
 
-#include <logging/log_ctrl.h>
-#include <logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_CAF_POWER_MANAGER_LOG_LEVEL);
 
 #include <caf/events/power_manager_event.h>
@@ -116,10 +118,10 @@ static void restrict_power_state(size_t module, enum power_manager_level lvl)
 		}
 		module_flags_clear_bit(&power_mode_restrict_flags[current], module);
 	}
-	LOG_INF("Power state SUSPENDED: %s",
+	LOG_DBG("Power state SUSPENDED: %s",
 		check_if_power_state_allowed(POWER_MANAGER_LEVEL_SUSPENDED) ?
 			"ALLOWED" : "BLOCKED");
-	LOG_INF("Power state OFF: %s",
+	LOG_DBG("Power state OFF: %s",
 		check_if_power_state_allowed(POWER_MANAGER_LEVEL_OFF) ?
 			"ALLOWED" : "BLOCKED");
 }
@@ -128,11 +130,20 @@ static void system_off(void)
 {
 	if (!IS_ENABLED(CONFIG_CAF_POWER_MANAGER_STAY_ON) &&
 	    check_if_power_state_allowed(POWER_MANAGER_LEVEL_OFF)) {
-		profiler_term();
+		nrf_profiler_term();
 		set_power_state(POWER_STATE_OFF);
 		LOG_WRN("System turned off");
 		LOG_PANIC();
-		pm_power_state_force((struct pm_state_info){PM_STATE_SOFT_OFF, 0, 0});
+		/* Clear RESETREAS to avoid starting serial recovery if nobody
+		 * has cleared it already.
+		 */
+		nrfx_reset_reason_clear(nrfx_reset_reason_get());
+
+		const struct pm_state_info si = {PM_STATE_SOFT_OFF, 0, 0, 0};
+
+		if (!pm_state_force(0, &si)) {
+			LOG_ERR("Failed to force soft off state");
+		}
 	} else {
 		LOG_WRN("System suspended");
 	}
@@ -144,7 +155,11 @@ static void system_off_on_error(void)
 	LOG_WRN("System turned off because of unrecoverable error");
 	LOG_PANIC();
 
-	pm_power_state_force((struct pm_state_info){PM_STATE_SOFT_OFF, 0, 0});
+	const struct pm_state_info si = {PM_STATE_SOFT_OFF, 0, 0, 0};
+
+	if (!pm_state_force(0, &si)) {
+		LOG_ERR("Failed to force soft off state");
+	}
 }
 
 static void power_down(struct k_work *work)
@@ -171,19 +186,20 @@ static void power_down(struct k_work *work)
 
 	event->error = false;
 	set_power_state(POWER_STATE_SUSPENDING);
-	EVENT_SUBMIT(event);
+	APP_EVENT_SUBMIT(event);
 }
 
 static void send_wake_up(void)
 {
 	struct wake_up_event *event = new_wake_up_event();
 
-	EVENT_SUBMIT(event);
+	APP_EVENT_SUBMIT(event);
 }
 
-struct pm_state_info pm_policy_next_state(int32_t ticks)
+const struct pm_state_info *pm_policy_next_state(uint8_t cpu, int32_t ticks)
 {
-	return (struct pm_state_info){PM_STATE_ACTIVE, 0, 0};
+	/* Return NULL, system should remain into PM_STATE_ACTIVE. */
+	return NULL;
 }
 
 static void error(struct k_work *work)
@@ -192,19 +208,19 @@ static void error(struct k_work *work)
 
 	/* Turning off all the modules (including leds). */
 	event->error = false;
-	EVENT_SUBMIT(event);
+	APP_EVENT_SUBMIT(event);
 	set_power_state(POWER_STATE_ERROR_SUSPENDED);
 }
 
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
-	if (IS_ENABLED(CONFIG_CAF_KEEP_ALIVE_EVENTS) && is_keep_alive_event(eh)) {
+	if (IS_ENABLED(CONFIG_CAF_KEEP_ALIVE_EVENTS) && is_keep_alive_event(aeh)) {
 		keep_alive_flag = true;
 
 		return false;
 	}
 
-	if (IS_ENABLED(CONFIG_CAF_FORCE_POWER_DOWN_EVENTS) && is_force_power_down_event(eh)) {
+	if (IS_ENABLED(CONFIG_CAF_FORCE_POWER_DOWN_EVENTS) && is_force_power_down_event(aeh)) {
 		if (power_state != POWER_STATE_IDLE) {
 			return false;
 		}
@@ -214,13 +230,13 @@ static bool event_handler(const struct event_header *eh)
 		LOG_INF("Force power down processing ");
 		event->error = false;
 		set_power_state(POWER_STATE_SUSPENDING);
-		EVENT_SUBMIT(event);
+		APP_EVENT_SUBMIT(event);
 		return false;
 	}
 
-	if (is_power_manager_restrict_event(eh)) {
+	if (is_power_manager_restrict_event(aeh)) {
 		const struct power_manager_restrict_event *event =
-			cast_power_manager_restrict_event(eh);
+			cast_power_manager_restrict_event(aeh);
 
 		bool was_sus_allowed = check_if_power_state_allowed(POWER_MANAGER_LEVEL_SUSPENDED);
 		bool was_off_allowed = check_if_power_state_allowed(POWER_MANAGER_LEVEL_OFF);
@@ -250,7 +266,7 @@ static bool event_handler(const struct event_header *eh)
 				system_off();
 			}
 		}
-		if (is_off_allowed && !was_off_allowed) {
+		if (!is_off_allowed && was_off_allowed) {
 			/* System off is not allowed. Reboot if needed. */
 			if (power_state == POWER_STATE_OFF) {
 				LOG_INF("Off restricted - rebooting");
@@ -261,7 +277,7 @@ static bool event_handler(const struct event_header *eh)
 		return true;
 	}
 
-	if (is_power_down_event(eh)) {
+	if (is_power_down_event(aeh)) {
 		switch (power_state) {
 		case POWER_STATE_ERROR:
 			k_work_reschedule(&error_trigger,
@@ -286,7 +302,7 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_wake_up_event(eh)) {
+	if (is_wake_up_event(aeh)) {
 		/* Consume event to prevent wakeup after application went into
 		 * error state.
 		 */
@@ -309,9 +325,9 @@ static bool event_handler(const struct event_header *eh)
 		return false;
 	}
 
-	if (is_module_state_event(eh)) {
+	if (is_module_state_event(aeh)) {
 		const struct module_state_event *event =
-			cast_module_state_event(eh);
+			cast_module_state_event(aeh);
 
 		if ((event->state == MODULE_STATE_OFF) ||
 		    (event->state == MODULE_STATE_STANDBY)) {
@@ -325,7 +341,7 @@ static bool event_handler(const struct event_header *eh)
 
 				event->error =
 					(power_state == POWER_STATE_ERROR);
-				EVENT_SUBMIT(event);
+				APP_EVENT_SUBMIT(event);
 				return false;
 			}
 		}
@@ -339,8 +355,6 @@ static bool event_handler(const struct event_header *eh)
 
 			LOG_INF("Activate power manager");
 
-			pm_power_state_force((struct pm_state_info){PM_STATE_ACTIVE, 0, 0});
-
 			k_work_init_delayable(&error_trigger, error);
 			k_work_init_delayable(&power_down_trigger, power_down);
 			power_down_counter_reset();
@@ -350,7 +364,7 @@ static bool event_handler(const struct event_header *eh)
 			struct power_down_event *event = new_power_down_event();
 
 			event->error = true;
-			EVENT_SUBMIT(event);
+			APP_EVENT_SUBMIT(event);
 		}
 
 		return false;
@@ -361,14 +375,14 @@ static bool event_handler(const struct event_header *eh)
 
 	return false;
 }
-EVENT_LISTENER(MODULE, event_handler);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
 #if IS_ENABLED(CONFIG_CAF_FORCE_POWER_DOWN_EVENTS)
-	EVENT_SUBSCRIBE(MODULE, force_power_down_event);
+	APP_EVENT_SUBSCRIBE(MODULE, force_power_down_event);
 #endif
 #if IS_ENABLED(CONFIG_CAF_KEEP_ALIVE_EVENTS)
-	EVENT_SUBSCRIBE(MODULE, keep_alive_event);
+	APP_EVENT_SUBSCRIBE(MODULE, keep_alive_event);
 #endif
-EVENT_SUBSCRIBE(MODULE, power_manager_restrict_event);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
-EVENT_SUBSCRIBE_EARLY(MODULE, wake_up_event);
-EVENT_SUBSCRIBE_FINAL(MODULE, power_down_event);
+APP_EVENT_SUBSCRIBE(MODULE, power_manager_restrict_event);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
+APP_EVENT_SUBSCRIBE_EARLY(MODULE, wake_up_event);
+APP_EVENT_SUBSCRIBE_FINAL(MODULE, power_down_event);

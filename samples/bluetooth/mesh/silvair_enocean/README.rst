@@ -7,7 +7,7 @@ Bluetooth: Mesh Silvair EnOcean
    :local:
    :depth: 2
 
-The :ref:`ug_bt_mesh` Silvair EnOcean sample can be used to change the state of light sources on other devices within the same mesh network.
+You can use the :ref:`ug_bt_mesh` Silvair EnOcean sample to change the state of light sources on other devices within the same mesh network.
 It also demonstrates how to use Bluetooth® mesh models by using the Silvair EnOcean Proxy Server model in an application.
 
 Use the Silvair EnOcean sample with the :ref:`bluetooth_mesh_light_lc` sample to demonstrate its function in a Bluetooth mesh network.
@@ -17,9 +17,7 @@ Requirements
 
 The sample supports the following development kits:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp_and_cpuapp_ns, nrf52840dk_nrf52840, nrf52dk_nrf52832, nrf52833dk_nrf52833
+.. table-from-sample-yaml::
 
 You need at least two development kits:
 
@@ -30,6 +28,8 @@ For provisioning and configuring of the mesh model instances, the sample require
 
 * `nRF Mesh mobile app for Android`_
 * `nRF Mesh mobile app for iOS`_
+
+.. include:: /includes/tfm.txt
 
 Overview
 ********
@@ -69,6 +69,7 @@ The following table shows the mesh Silvair EnOcean composition data for this sam
    =============================  ===================
    Config Server                  Gen. Level Client
    Health Server                  Gen. OnOff Client
+   Gen. DTT Server
    Gen. Level Client
    Gen. OnOff Client
    Silvair EnOcean Proxy Server
@@ -77,6 +78,7 @@ The following table shows the mesh Silvair EnOcean composition data for this sam
 The models are used for the following purposes:
 
 * The Silvair EnOcean Proxy Server instantiates :ref:`bt_mesh_onoff_cli_readme` and :ref:`bt_mesh_lvl_cli_readme` on both elements, where each element is controlled by the buttons on the EnOcean switch.
+* :ref:`bt_mesh_dtt_srv_readme` is used to control transition time of the Generic OnOff Server instances.
 * Config Server allows configurator devices to configure the node remotely.
 * Health Server provides ``attention`` callbacks that are used during provisioning to call your attention to the device. These callbacks trigger blinking of the LEDs.
 
@@ -110,6 +112,8 @@ Configuration
 
 |config|
 
+|nrf5340_mesh_sample_note|
+
 Source file setup
 =================
 
@@ -117,6 +121,11 @@ The Silvair EnOcean sample is split into the following source files:
 
 * A :file:`main.c` file to handle initialization.
 * One additional file for handling mesh models, :file:`model_handler.c`.
+
+FEM support
+===========
+
+.. include:: /includes/sample_fem_support.txt
 
 Building and running
 ********************
@@ -126,7 +135,7 @@ See :ref:`Bluetooth mesh user guide <ug_bt_mesh>` for more information.
 
 .. |sample path| replace:: :file:`samples/bluetooth/mesh/silvair_enocean`
 
-.. include:: /includes/build_and_run.txt
+.. include:: /includes/build_and_run_ns.txt
 
 .. _bluetooth_mesh_silvair_enocean_testing:
 
@@ -156,12 +165,15 @@ Configuring models
 
 See :ref:`ug_bt_mesh_model_config_app` for details on how to configure the mesh models with the nRF Mesh mobile app.
 
-Configure the Generic OnOff Client and the Generic Level Client models on each element on the :guilabel:`Mesh Silvair EnOcean` node:
+Configure the :ref:`bt_mesh_onoff_cli_readme` and the :ref:`bt_mesh_lvl_cli_readme` models on each element on the **Mesh Silvair EnOcean** node:
 
-* Bind the model to :guilabel:`Application Key 1`.
+* Bind the model to **Application Key 1**.
 * Set the publication parameters:
 
-  * Destination/publish address: Set the :guilabel:`Publish Address` to the first unicast address of the Mesh Light Fixture node.
+  * Destination/publish address: Set the **Publish Address** to the first unicast address of the Mesh Light Fixture node.
+
+.. note::
+   Configuring the periodic publication and publication retransmission of these models has no effect.
 
 Once the provisioning and the configuration of the client node and at least one of the server nodes are complete, you can use buttons on the EnOcean switch.
 The buttons will control the LED lights on the associated servers, as described in :ref:`bluetooth_mesh_silvair_enocean_user_interface`.
@@ -179,15 +191,19 @@ This sample uses the following |NCS| libraries:
 
 In addition, it uses the following Zephyr libraries:
 
-* ``include/drivers/hwinfo.h``
+* :file:`include/drivers/hwinfo.h`
 * :ref:`zephyr:kernel_api`:
 
-  * ``include/kernel.h``
+  * :file:`include/kernel.h`
 
 * :ref:`zephyr:bluetooth_api`:
 
-  * ``include/bluetooth/bluetooth.h``
+  * :file:`include/bluetooth/bluetooth.h`
 
 * :ref:`zephyr:bluetooth_mesh`:
 
-  * ``include/bluetooth/mesh.h``
+  * :file:`include/bluetooth/mesh.h`
+
+The sample also uses the following secure firmware component:
+
+* :ref:`Trusted Firmware-M <ug_tfm>`

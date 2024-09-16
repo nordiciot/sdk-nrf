@@ -9,14 +9,14 @@ LTE link controller
 
 The LTE link controller library provides functionality to control the LTE link on an nRF9160 SiP.
 
-The LTE link can be controlled through library configurations and API calls to enable a range of features such as specifying the Access Point Name (APN), switching between LTE network modes (NB-IoT or LTE-M), enabling GPS support and power saving features such as Power Saving Mode (PSM) and enhanced Discontinuous Reception (eDRX).
+The LTE link can be controlled through library configurations and API calls to enable a range of features such as specifying the Access Point Name (APN), switching between LTE network modes (NB-IoT or LTE-M), enabling GNSS support and power saving features such as Power Saving Mode (PSM) and enhanced Discontinuous Reception (eDRX).
 
 The library also provides functionality that enables the application to receive notifications regarding LTE link health parameters such as Radio Resource Control (RRC) mode, cell information, and the provided PSM or eDRX timer values.
 
 Configuration
 *************
 
-To enable the link controller library, set the option :kconfig:`CONFIG_LTE_LINK_CONTROL` option to ``y`` in the project configuration file :file:`prj.conf`.
+To enable the link controller library, set the option :kconfig:option:`CONFIG_LTE_LINK_CONTROL` option to ``y`` in the project configuration file :file:`prj.conf`.
 
 Establishing an LTE connection
 ==============================
@@ -25,7 +25,7 @@ The following block of code shows how the link controller API can be used to est
 
 .. code-block:: c
 
-   #include <zephyr.h>
+   #include <zephyr/kernel.h>
    #include <modem/lte_lc.h>
 
    /* Semaphore used to block the main thread until the link controller has
@@ -64,7 +64,7 @@ The following block of code shows how the link controller API can be used to est
    	}
    }
 
-   void main(void)
+   int main(void)
    {
    	int err;
 
@@ -73,7 +73,7 @@ The following block of code shows how the link controller API can be used to est
    	err = lte_lc_init_and_connect_async(lte_handler);
    	if (err) {
    		printk("lte_lc_init_and_connect_async, error: %d\n", err);
-   		return;
+   		return 0;
    	}
 
    	k_sem_take(&lte_connected, K_FOREVER);
@@ -98,10 +98,6 @@ The following list mentions some of the information that can be extracted from t
    Some of the functionalities might not be compatible with certain modem firmware versions.
    To check if a desired feature is compatible with a certain modem firmware version, see nRF9160 `AT Commands Reference Guide`_.
 
-The library supports an auto initialization and connection feature that enables the library to initialize and connect to LTE prior to the start of the application.
-To enable this feature, set the configuration option :kconfig:`CONFIG_LTE_AUTO_INIT_AND_CONNECT` to ``y``.
-If you enable this option, you need not run additional library APIs.
-
 Enabling power-saving features
 ==============================
 
@@ -112,32 +108,32 @@ For an example implementation, see the following code:
 
    /* ... */
 
-   void main(void)
+   int main(void)
    {
 	int err;
 
 	err = lte_lc_init();
 	if (err) {
 		printk("lte_lc_init, error: %d\n", err);
-		return;
+		return 0;
 	}
 
 	err = lte_lc_psm_req(true);
 	if (err) {
 		printk("lte_lc_psm_req, error: %d\n", err);
-		return;
+		return 0;
 	}
 
 	err = lte_lc_edrx_req(true);
 	if (err) {
 		printk("lte_lc_edrx_req, error: %d\n", err);
-		return;
+		return 0;
 	}
 
 	err = lte_lc_connect_async(lte_handler);
 	if (err) {
 		printk("Connecting to LTE network failed, error: %d\n", err);
-		return;
+		return 0;
 	}
 
 	/* ... */
@@ -149,10 +145,10 @@ This saves the overhead related to the additional packet exchange.
 
 The timer values requested by the modem can be configured with the following options and API calls:
 
-* :kconfig:`CONFIG_LTE_PSM_REQ_RPTAU`
-* :kconfig:`CONFIG_LTE_PSM_REQ_RAT`
-* :kconfig:`CONFIG_LTE_EDRX_REQ_VALUE_LTE_M`
-* :kconfig:`CONFIG_LTE_EDRX_REQ_VALUE_NBIOT`
+* :kconfig:option:`CONFIG_LTE_PSM_REQ_RPTAU`
+* :kconfig:option:`CONFIG_LTE_PSM_REQ_RAT`
+* :kconfig:option:`CONFIG_LTE_EDRX_REQ_VALUE_LTE_M`
+* :kconfig:option:`CONFIG_LTE_EDRX_REQ_VALUE_NBIOT`
 * :c:func:`lte_lc_psm_param_set`
 * :c:func:`lte_lc_edrx_param_set`
 
@@ -177,7 +173,7 @@ The following code block shows a basic implementation of :c:func:`lte_lc_conn_ev
 
    ...
 
-   void main(void)
+   int main(void)
    {
    	int err;
 
@@ -186,7 +182,7 @@ The following code block shows a basic implementation of :c:func:`lte_lc_conn_ev
    	err = lte_lc_init_and_connect_async(lte_handler);
    	if (err) {
    		printk("lte_lc_init_and_connect_async, error: %d\n", err);
-   		return;
+   		return 0;
    	}
 
    	k_sem_take(&lte_connected, K_FOREVER);
@@ -196,7 +192,7 @@ The following code block shows a basic implementation of :c:func:`lte_lc_conn_ev
 	err = lte_lc_conn_eval_params_get(&params);
 	if (err) {
 		printk("lte_lc_conn_eval_params_get, error: %d\n", err);
-		return;
+		return 0;
 	}
 
 	/* Handle connection evaluation parameters... */
@@ -214,10 +210,49 @@ For instance, TAU pre-warning notifications can be used to schedule data transfe
 Modem sleep notifications can be used to schedule processing in the same operational window as the modem to limit the overall computation time of the nRF9160 SiP.
 To enable modem sleep and TAU pre-warning notifications, enable the following options:
 
-* :kconfig:`CONFIG_LTE_LC_MODEM_SLEEP_NOTIFICATIONS`
-* :kconfig:`CONFIG_LTE_LC_TAU_PRE_WARNING_NOTIFICATIONS`
+* :kconfig:option:`CONFIG_LTE_LC_MODEM_SLEEP_NOTIFICATIONS`
+* :kconfig:option:`CONFIG_LTE_LC_TAU_PRE_WARNING_NOTIFICATIONS`
 
 Additional configurations related to these features can be found in the API documentation for the link controller.
+
+Connection fallback mode
+========================
+It is possible to try to switch between LTE-M and NB-IoT after a certain time period if a connection has not been established.
+This is useful when the connection to either of these networks becomes unavailable.
+You can also configure the switching period between the network modes.
+If a connection cannot be established by using the fallback mode, the library reports an error.
+You can use the following configuration options to configure the connection fallback mode:
+
+* :kconfig:option:`CONFIG_LTE_NETWORK_USE_FALLBACK`
+* :kconfig:option:`CONFIG_LTE_NETWORK_TIMEOUT`
+
+Functional mode changes callback
+================================
+
+The library allows the application to define compile-time callbacks to receive the modem's functional mode changes.
+These callbacks allow any part of the application to perform certain operations when the modem enters or re-enters a certain functional mode using the library :c:func:`lte_lc_func_mode_set` API.
+For example, one kind of operation that the application or a library may need to perform and repeat, whenever the modem enters a certain functional mode is the subscription to AT notifications.
+The application can set up a callback for modem`s functional mode changes using :c:macro:`LTE_LC_ON_CFUN` macro.
+
+The following code snippet shows how to use :c:macro:`LTE_LC_ON_CFUN` macro:
+
+.. code-block:: C
+
+  /* define callback */
+  LTE_LC_ON_CFUN(cfun_hook, on_cfun, NULL);
+
+  /* callback implementation */
+  static void on_cfun(enum lte_lc_func_mode mode, void *context)
+  {
+      printk("Functional mode changed to %d\n", mode);
+  }
+
+  int main(void)
+  {
+      /* change functional mode using the Link Controller API */
+      lte_lc_func_mode_set(LTE_LC_FUNC_MODE_NORMAL);
+      return 0;
+  }
 
 API documentation
 *****************

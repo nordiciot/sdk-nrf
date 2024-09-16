@@ -4,12 +4,13 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <ztest.h>
+#include <zephyr/ztest.h>
 
 #include <fw_info.h>
 #include <pm_config.h>
-#include <drivers/flash.h>
-#include <sys/reboot.h>
+#include <zephyr/drivers/flash.h>
+#include <zephyr/sys/reboot.h>
+#include <zephyr/devicetree.h>
 
 #define S1_ADDRESS PM_S1_ADDRESS
 #define S1_SIZE 0x8000
@@ -27,13 +28,13 @@ const struct fw_info dummy_s1 = {
 static uint8_t fw_info_find_buf[0x1000 + sizeof(dummy_s1)];
 
 
-void test_fw_info_invalidate(void)
+ZTEST(test_fw_info, test_fw_info_invalidate)
 {
 	const struct fw_info *target = (const struct fw_info *)(S1_ADDRESS);
 	const uint32_t zero = 0;
 	int ret;
 
-	const struct device *flash_dev = device_get_binding(PM_S0_DEV_NAME);
+	const struct device *flash_dev = DEVICE_DT_GET(DT_NODELABEL(PM_S0_DEV));
 
 	/* Write a dummy upgrade to S1 */
 	if (!fw_info_check(S1_ADDRESS)) {
@@ -59,7 +60,7 @@ void test_fw_info_invalidate(void)
 }
 
 
-void test_fw_info_find(void)
+ZTEST(test_fw_info, test_fw_info_find)
 {
 	for (uint32_t i = 0; i < FW_INFO_OFFSET_COUNT; i++) {
 		const struct fw_info *fwinfo_res;
@@ -74,11 +75,4 @@ void test_fw_info_find(void)
 	}
 }
 
-void test_main(void)
-{
-	ztest_test_suite(test_fw_info,
-			 ztest_unit_test(test_fw_info_invalidate),
-			 ztest_unit_test(test_fw_info_find)
-	);
-	ztest_run_test_suite(test_fw_info);
-}
+ZTEST_SUITE(test_fw_info, NULL, NULL, NULL, NULL, NULL);

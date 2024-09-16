@@ -10,29 +10,30 @@
 #include "cpu_load_event.h"
 
 
-static int log_cpu_load_event(const struct event_header *eh, char *buf,
-			      size_t buf_len)
+static void log_cpu_load_event(const struct app_event_header *aeh)
 {
-	const struct cpu_load_event *event = cast_cpu_load_event(eh);
+	const struct cpu_load_event *event = cast_cpu_load_event(aeh);
 
-	return snprintf(buf, buf_len, "CPU load: %03u,%03u%%",
+	APP_EVENT_MANAGER_LOG(aeh, "CPU load: %03u,%03u%%",
 			event->load / 1000, event->load % 1000);
 }
 
 static void profile_cpu_load_event(struct log_event_buf *buf,
-				   const struct event_header *eh)
+				   const struct app_event_header *aeh)
 {
-	const struct cpu_load_event *event = cast_cpu_load_event(eh);
+	const struct cpu_load_event *event = cast_cpu_load_event(aeh);
 
-	profiler_log_encode_uint32(buf, event->load);
+	nrf_profiler_log_encode_uint32(buf, event->load);
 }
 
-EVENT_INFO_DEFINE(cpu_load_event,
-		  ENCODE(PROFILER_ARG_U32),
+APP_EVENT_INFO_DEFINE(cpu_load_event,
+		  ENCODE(NRF_PROFILER_ARG_U32),
 		  ENCODE("load"),
 		  profile_cpu_load_event);
 
-EVENT_TYPE_DEFINE(cpu_load_event,
-		  IS_ENABLED(CONFIG_DESKTOP_INIT_LOG_CPU_LOAD_EVENT),
+APP_EVENT_TYPE_DEFINE(cpu_load_event,
 		  log_cpu_load_event,
-		  &cpu_load_event_info);
+		  &cpu_load_event_info,
+		  APP_EVENT_FLAGS_CREATE(
+			IF_ENABLED(CONFIG_DESKTOP_INIT_LOG_CPU_LOAD_EVENT,
+				(APP_EVENT_TYPE_FLAGS_INIT_LOG_ENABLE))));

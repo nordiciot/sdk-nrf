@@ -9,15 +9,13 @@ menuconfig AT_MONITOR
 
 if AT_MONITOR
 
-config AT_MONITOR_SYS_INIT
-	bool "Initialize during SYS_INIT"
-	depends on NRF_MODEM_LIB_SYS_INIT
-	default y
-
 config AT_MONITOR_HEAP_SIZE
 	int "Heap size for notifications"
-	range 64 768
+	range 64 4096
 	default 256
+
+config SYSTEM_WORKQUEUE_STACK_SIZE
+	default 1152 if (LTE_LINK_CONTROL && LOG)
 
 module=AT_MONITOR
 module-dep=LOG

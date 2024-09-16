@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 
 #ifndef NRF_CLOUD_AGPS_SCHEMA_V1_H_
 #define NRF_CLOUD_AGPS_SCHEMA_V1_H_
@@ -27,6 +27,7 @@ extern "C" {
 #define NRF_CLOUD_AGPS_MAX_SV_TOW			(32U)
 
 enum nrf_cloud_agps_type {
+	NRF_CLOUD_AGPS__TYPE_INVALID			= 0,
 	NRF_CLOUD_AGPS_UTC_PARAMETERS			= 1,
 	NRF_CLOUD_AGPS_EPHEMERIDES			= 2,
 	NRF_CLOUD_AGPS_ALMANAC				= 3,

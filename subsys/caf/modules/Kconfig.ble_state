@@ -12,10 +12,30 @@ menuconfig CAF_BLE_STATE
 	select CAF_BLE_COMMON_EVENTS
 	help
 	  Module that enables Bluetooth, handles Zephyr's connection callbacks, propagates
-	  information about the connection state and parameters by using Event Manager events
+	  information about the connection state and parameters by using Application Event Manager events
 	  and exchanges GATT MTU on GATT Client.
 
 if CAF_BLE_STATE
+
+config CAF_BLE_STATE_SECURITY_REQ
+	bool "Request connection encryption (security level 2)"
+	help
+	  Automatically request connection encryption right after the connection is established.
+
+config CAF_BLE_STATE_MAX_LOCAL_ID_BONDS
+	int "Number of allowed bonds per Bluetooth local identity"
+	depends on BT_PERIPHERAL
+	range 1 BT_MAX_PAIRED
+	default 1
+	help
+	  The available Bluetooth bonds are shared among Bluetooth local
+	  identities. Limiting number of bonds allowed per local identity
+	  prevents from situation where one local identity uses too many bonds.
+	  In that case, other local identities may be unable to bond.
+
+config CAF_BLE_STATE_MAX_LOCAL_ID_BONDS
+	depends on !BT_PERIPHERAL
+	default 0
 
 config CAF_BLE_STATE_PM
 	bool "Enable bluetooth LE power manager integration"
@@ -39,7 +59,7 @@ config CAF_BLE_STATE_EXCHANGE_MTU
 config CAF_BLE_USE_LLPM
 	bool "Enable Low Latency Packet Mode (LLPM)"
 	depends on BT_LL_SOFTDEVICE
-	depends on BT_CTLR_LLPM
+	depends on BT_CTLR_SDC_LLPM
 	default y
 	help
 	  LLPM is a proprietary Bluetooth extension from Nordic Semiconductor. It is designed for

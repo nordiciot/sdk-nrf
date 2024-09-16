@@ -4,10 +4,17 @@
 # SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
 #
 
-menu "Nordic MPSL"
+config MPSL_FEM_ONLY
+	bool "Support only radio front-end module (FEM)"
+	help
+	  Support only radio front-end module (FEM) feature. The MPSL library is linked
+	  into a build without the initialization. Using other MPSL features is not possible.
+
+rsource "fem/Kconfig"
+
+if !MPSL_FEM_ONLY
 
 rsource "cx/Kconfig"
-rsource "fem/Kconfig"
 rsource "init/Kconfig"
 
-endmenu
+endif # !MPSL_FEM_ONLY

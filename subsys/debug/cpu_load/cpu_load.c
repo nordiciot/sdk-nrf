@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 #include <debug/cpu_load.h>
-#include <shell/shell.h>
+#include <zephyr/shell/shell.h>
 #ifdef DPPI_PRESENT
 #include <nrfx_dppi.h>
 #else
@@ -15,7 +15,7 @@
 #include <hal/nrf_rtc.h>
 #include <hal/nrf_power.h>
 #include <debug/ppi_trace.h>
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(cpu_load, CONFIG_CPU_LOAD_LOG_LEVEL);
 
@@ -132,7 +132,8 @@ int cpu_load_init(void)
 	uint8_t ch_wakeup;
 	uint8_t ch_tick = 0;
 	nrfx_err_t err;
-	nrfx_timer_config_t config = NRFX_TIMER_DEFAULT_CONFIG;
+	uint32_t base_frequency = NRF_TIMER_BASE_FREQUENCY_GET(timer.p_reg);
+	nrfx_timer_config_t config = NRFX_TIMER_DEFAULT_CONFIG(base_frequency);
 	int ret = 0;
 
 	if (ready) {
@@ -200,6 +201,9 @@ int cpu_load_init(void)
 
 	if (IS_ENABLED(CONFIG_CPU_LOAD_LOG_PERIODIC)) {
 		ret = cpu_load_log_init();
+		if (ret >= 0) {
+			ret = 0;
+		}
 	}
 
 	ready = true;
@@ -273,7 +277,7 @@ static int cmd_cpu_load_reset(const struct shell *shell,
 
 	err = cpu_load_init();
 	if (err != 0) {
-		shell_error(shell, "Init failed (err:%d)");
+		shell_error(shell, "Init failed (err:%d)", err);
 		return 0;
 	}
 

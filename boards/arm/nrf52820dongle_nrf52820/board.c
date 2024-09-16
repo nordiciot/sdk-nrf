@@ -4,13 +4,12 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <init.h>
+#include <zephyr/init.h>
 #include <hal/nrf_power.h>
 #include <hal/nrf_nvmc.h>
 
-static int board_nrf52820dongle_init(const struct device *dev)
+static int board_nrf52820dongle_init(void)
 {
-	ARG_UNUSED(dev);
 
 	/* If the nrf52820dongle board is powered from USB
 	 * (high voltage mode), GPIO output voltage is set to 1.8 volts by

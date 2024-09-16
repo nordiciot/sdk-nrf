@@ -17,6 +17,9 @@
 #include <bluetooth/mesh/light_hsl.h>
 #include <bluetooth/mesh/model_types.h>
 #include <bluetooth/mesh/gen_lvl_srv.h>
+#if IS_ENABLED(CONFIG_EMDS) && IS_ENABLED(CONFIG_BT_SETTINGS)
+#include "emds/emds.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,6 +59,12 @@ struct bt_mesh_light_sat_srv;
 /** HSL Saturation Server state access handlers. */
 struct bt_mesh_light_sat_srv_handlers {
 	/** @brief Set the Saturation state.
+	 *
+	 * When a set message is received, the model publishes a status message, with the response
+	 * set to @c rsp. When an acknowledged set message is received, the model also sends a
+	 * response back to a client. If a state change is non-instantaneous, for example when
+	 * @ref bt_mesh_model_transition_time returns a nonzero value, the application is
+	 * responsible for publishing a value of the Saturation state at the end of the transition.
 	 *
 	 *  @note This handler is mandatory.
 	 *
@@ -138,16 +147,19 @@ struct bt_mesh_light_sat_srv {
 	/** Transaction ID tracker for the set messages. */
 	struct bt_mesh_tid_ctx prev_transaction;
 
-#if CONFIG_BT_SETTINGS
-	/** Storage timer */
-	struct k_work_delayable store_timer;
-#endif
 	/** Saturation range */
 	struct bt_mesh_light_hsl_range range;
-	/** Last known Saturation level */
-	uint16_t last;
 	/** Default Saturation level */
 	uint16_t dflt;
+	struct __packed {
+		/** Last known Saturation level */
+		uint16_t last;
+	} transient;
+
+#if IS_ENABLED(CONFIG_EMDS) && IS_ENABLED(CONFIG_BT_SETTINGS)
+	/** Dynamic entry to be stored with EMDS */
+	struct emds_dynamic_entry emds_entry;
+#endif
 };
 
 /** @brief Publish the current HSL Saturation status.

@@ -8,12 +8,12 @@
  *  @brief Nordic Central NFC pairing sample
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
 #include <bluetooth/scan.h>
 
 #include <nfc/tnep/ch.h>
@@ -21,7 +21,7 @@
 
 #include <st25r3911b_nfca.h>
 
-#include <settings/settings.h>
+#include <zephyr/settings/settings.h>
 
 #include <dk_buttons_and_leds.h>
 
@@ -206,7 +206,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 	}
 }
 
-static struct bt_conn_cb conn_callbacks = {
+BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected = connected,
 	.disconnected = disconnected,
 	.security_changed = security_changed
@@ -304,18 +304,6 @@ static void auth_cancel(struct bt_conn *conn)
 }
 
 
-static void pairing_confirm(struct bt_conn *conn)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-	bt_conn_auth_pairing_confirm(conn);
-
-	printk("Pairing confirmed: %s\n", addr);
-}
-
-
 static void pairing_complete(struct bt_conn *conn, bool bonded)
 {
 	char addr[BT_ADDR_LE_STR_LEN];
@@ -325,7 +313,8 @@ static void pairing_complete(struct bt_conn *conn, bool bonded)
 	printk("Pairing completed: %s, bonded: %d\n", addr, bonded);
 
 	k_poll_signal_raise(&pair_signal, 0);
-	bt_set_oob_data_flag(false);
+	bt_le_oob_set_sc_flag(false);
+	bt_le_oob_set_legacy_flag(false);
 }
 
 
@@ -338,13 +327,16 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 	printk("Pairing failed conn: %s, reason %d\n", addr, reason);
 
 	k_poll_signal_raise(&pair_signal, 0);
-	bt_set_oob_data_flag(false);
+	bt_le_oob_set_sc_flag(false);
+	bt_le_oob_set_legacy_flag(false);
 }
 
 static struct bt_conn_auth_cb conn_auth_callbacks = {
 	.cancel = auth_cancel,
 	.oob_data_request = auth_oob_data_request,
-	.pairing_confirm = pairing_confirm,
+};
+
+static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {
 	.pairing_complete = pairing_complete,
 	.pairing_failed = pairing_failed
 };
@@ -419,16 +411,14 @@ static int oob_le_data_handle(const struct nfc_ndef_record_desc *rec,
 		return -EINVAL;
 	}
 
-	if (oob->le_sc_data || oob->tk_value) {
-		bt_set_oob_data_flag(true);
-	}
-
 	if (oob->le_sc_data) {
+		bt_le_oob_set_sc_flag(true);
 		oob_remote.le_sc_data = *oob->le_sc_data;
 		bt_addr_le_copy(&oob_remote.addr, oob->addr);
 	}
 
 	if (oob->tk_value) {
+		bt_le_oob_set_legacy_flag(true);
 		memcpy(remote_tk_value, oob->tk_value, sizeof(remote_tk_value));
 		use_remote_tk = request;
 	}
@@ -592,7 +582,7 @@ void button_changed(uint32_t button_state, uint32_t has_changed)
 	}
 }
 
-void main(void)
+int main(void)
 {
 	int err;
 
@@ -604,11 +594,10 @@ void main(void)
 		printk("Cannot init buttons (err %d\n", err);
 	}
 
-
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Bluetooth initialized\n");
@@ -618,17 +607,22 @@ void main(void)
 	}
 
 	scan_init();
-	bt_conn_cb_register(&conn_callbacks);
 
 	err = bt_conn_auth_cb_register(&conn_auth_callbacks);
 	if (err) {
 		printk("Failed to register authorization callbacks.\n");
-		return;
+		return 0;
+	}
+
+	err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
+	if (err) {
+		printk("Failed to register authorization info callbacks.\n");
+		return 0;
 	}
 
 	err = paring_key_generate();
 	if (err) {
-		return;
+		return 0;
 	}
 
 	err = nfc_tnep_ch_service_init(&ch_cb);
@@ -648,7 +642,7 @@ void main(void)
 		k_poll(events, ARRAY_SIZE(events), K_FOREVER);
 		err = nfc_poller_process();
 		if (err) {
-			return;
+			return 0;
 		}
 		paring_key_process();
 	}

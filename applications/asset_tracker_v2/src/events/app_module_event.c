@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 #include "app_module_event.h"
+#include "common_module_event.h"
 
 static char *type2str(enum app_module_data_type type)
 {
@@ -21,10 +22,8 @@ static char *type2str(enum app_module_data_type type)
 		return "MOD_DYN";
 	case APP_DATA_BATTERY:
 		return "BAT";
-	case APP_DATA_GNSS:
-		return "GNSS";
-	case APP_DATA_NEIGHBOR_CELLS:
-		return "NEIGHBOR_CELLS";
+	case APP_DATA_LOCATION:
+		return "LOCATION";
 	default:
 		return "Unknown type";
 	}
@@ -37,10 +36,6 @@ static char *get_evt_type_str(enum app_module_event_type type)
 		return "APP_EVT_DATA_GET";
 	case APP_EVT_CONFIG_GET:
 		return "APP_EVT_CONFIG_GET";
-	case APP_EVT_ACTIVITY_DETECTION_ENABLE:
-		return "APP_EVT_ACTIVITY_DETECTION_ENABLE";
-	case APP_EVT_ACTIVITY_DETECTION_DISABLE:
-		return "APP_EVT_ACTIVITY_DETECTION_DISABLE";
 	case APP_EVT_DATA_GET_ALL:
 		return "APP_EVT_DATA_GET_ALL";
 	case APP_EVT_START:
@@ -58,20 +53,32 @@ static char *get_evt_type_str(enum app_module_event_type type)
 	}
 }
 
-static int log_event(const struct event_header *eh, char *buf,
-		     size_t buf_len)
+static void log_event(const struct app_event_header *aeh)
 {
-	const struct app_module_event *event = cast_app_module_event(eh);
-	char event_name[50] = "\0";
-	char data_types[50] = "\0";
-
-	strcpy(event_name, get_evt_type_str(event->type));
+	const struct app_module_event *event = cast_app_module_event(aeh);
+	char data_types[60] = "\0";
 
 	if (event->type == APP_EVT_ERROR) {
-		return snprintf(buf, buf_len, "%s - Error code %d",
+		APP_EVENT_MANAGER_LOG(aeh, "%s - Error code %d",
 				get_evt_type_str(event->type), event->data.err);
 	} else if (event->type == APP_EVT_DATA_GET) {
 		for (int i = 0; i < event->count; i++) {
+			/* data_types should contain space for the stringified type and a null
+			 * character.
+			 */
+			size_t max_append_len = sizeof(data_types) - strlen(data_types) - 1;
+
+			if (i < event->count - 1) {
+				/* For every type except the last one, we also need space
+				 * for a comma and a space character.
+				 */
+				max_append_len -= 2;
+			}
+
+			if (strlen(type2str(event->data_list[i])) > max_append_len) {
+				return;
+			}
+
 			strcat(data_types, type2str(event->data_list[i]));
 
 			if (i == event->count - 1) {
@@ -81,39 +88,35 @@ static int log_event(const struct event_header *eh, char *buf,
 			strcat(data_types, ", ");
 		}
 
-		return snprintf(buf, buf_len, "%s - Requested data types (%s)",
-				event_name, data_types);
+		APP_EVENT_MANAGER_LOG(aeh, "%s - Requested data types (%s)",
+				get_evt_type_str(event->type), data_types);
+	} else {
+		APP_EVENT_MANAGER_LOG(aeh, "%s", get_evt_type_str(event->type));
 	}
-
-	return snprintf(buf, buf_len, "%s", event_name);
 }
+
+#if defined(CONFIG_NRF_PROFILER)
 
 static void profile_event(struct log_event_buf *buf,
-			  const struct event_header *eh)
+			  const struct app_event_header *aeh)
 {
-	const struct app_module_event *event = cast_app_module_event(eh);
+	const struct app_module_event *event = cast_app_module_event(aeh);
 
-#if defined(CONFIG_PROFILER_EVENT_TYPE_STRING)
-	profiler_log_encode_string(buf, get_evt_type_str(event->type));
+#if defined(CONFIG_NRF_PROFILER_EVENT_TYPE_STRING)
+	nrf_profiler_log_encode_string(buf, get_evt_type_str(event->type));
 #else
-	profiler_log_encode_uint8(buf, event->type);
+	nrf_profiler_log_encode_uint8(buf, event->type);
 #endif
 }
 
-EVENT_INFO_DEFINE(app_module_event,
-#if defined(CONFIG_PROFILER_EVENT_TYPE_STRING)
-		  ENCODE(PROFILER_ARG_STRING),
-#else
-		  ENCODE(PROFILER_ARG_U8),
-#endif
-		  ENCODE("type"),
-		  profile_event);
+COMMON_APP_EVENT_INFO_DEFINE(app_module_event,
+			 profile_event);
 
-EVENT_TYPE_DEFINE(app_module_event,
-		  CONFIG_APP_EVENTS_LOG,
-		  log_event,
-#if defined(CONFIG_PROFILER)
-		  &app_module_event_info);
-#else
-		  NULL);
-#endif
+#endif /* CONFIG_NRF_PROFILER */
+
+COMMON_APP_EVENT_TYPE_DEFINE(app_module_event,
+			 log_event,
+			 &app_module_event_info,
+			 APP_EVENT_FLAGS_CREATE(
+				IF_ENABLED(CONFIG_APP_EVENTS_LOG,
+					(APP_EVENT_TYPE_FLAGS_INIT_LOG_ENABLE))));

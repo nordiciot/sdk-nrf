@@ -4,16 +4,16 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(psa_tls_server);
 
 #include <nrf.h>
 #include <errno.h>
-#include <zephyr.h>
-#include <net/socket.h>
-#include <net/net_core.h>
-#include <net/tls_credentials.h>
-#include <linker/sections.h>
+#include <zephyr/kernel.h>
+#include <zephyr/net/socket.h>
+#include <zephyr/net/net_core.h>
+#include <zephyr/net/tls_credentials.h>
+#include <zephyr/linker/sections.h>
 
 #include "certificate.h"
 #include "psa_tls_functions.h"
@@ -47,18 +47,21 @@ static int setup_tls_server_socket(void)
 			 sizeof(sec_tag_list));
 	if (err < 0) {
 		LOG_ERR("Failed to set TLS security TAG list. Err: %d", errno);
+		(void)close(sock);
 		return -errno;
 	}
 
 	err = bind(sock, (struct sockaddr *)&my_addr, sizeof(my_addr));
 	if (err < 0) {
 		LOG_ERR("Failed to bind TLS socket. Err: %d", errno);
+		(void)close(sock);
 		return -errno;
 	}
 
 	err = listen(sock, MAX_CLIENT_QUEUE);
 	if (err < 0) {
 		LOG_ERR("Failed to listen on TLS socket. Err: %d", errno);
+		(void)close(sock);
 		return -errno;
 	}
 

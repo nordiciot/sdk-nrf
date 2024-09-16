@@ -4,23 +4,24 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
-#include <pm_config.h>
+#include <zephyr/kernel.h>
 #include <stdlib.h>
 
 #include <net/nrf_cloud_pgps.h>
-#include <settings/settings.h>
-#include <net/download_client.h>
+#include <zephyr/settings/settings.h>
 #include <date_time.h>
 
 #include "nrf_cloud_transport.h"
 #include "nrf_cloud_pgps_schema_v1.h"
 #include "nrf_cloud_pgps_utils.h"
+#include "nrf_cloud_codec_internal.h"
+#include "nrf_cloud_download.h"
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_DECLARE(nrf_cloud_pgps, CONFIG_NRF_CLOUD_GPS_LOG_LEVEL);
 
+#define SOCKET_RETRIES				CONFIG_NRF_CLOUD_PGPS_SOCKET_RETRIES
 #define SETTINGS_NAME				"nrf_cloud_pgps"
 #define SETTINGS_KEY_PGPS_HEADER		"pgps_header"
 #define SETTINGS_FULL_PGPS_HEADER		SETTINGS_NAME "/" SETTINGS_KEY_PGPS_HEADER
@@ -44,11 +45,13 @@ static int gps_leap_seconds = GPS_TO_UTC_LEAP_SECONDS;
 static struct gps_location saved_location;
 static struct nrf_cloud_pgps_header saved_header;
 
-static K_SEM_DEFINE(pgps_active, 1, 1);
+static K_SEM_DEFINE(dl_active, 1, 1);
+
 static struct download_client dlc;
+static int sec_tag_list[1];
 static int socket_retries_left;
 static npgps_buffer_handler_t buffer_handler;
-
+static npgps_eot_handler_t eot_handler;
 
 static int download_client_callback(const struct download_client_evt *event);
 static int settings_set(const char *key, size_t len_rd,
@@ -64,7 +67,7 @@ static int settings_set(const char *key, size_t len_rd,
 		return -EINVAL;
 	}
 
-	LOG_DBG("Settings key:%s, size:%d", log_strdup(key), len_rd);
+	LOG_DBG("Settings key:%s, size:%d", key, len_rd);
 
 	if (!strncmp(key, SETTINGS_KEY_PGPS_HEADER,
 		     strlen(SETTINGS_KEY_PGPS_HEADER)) &&
@@ -96,6 +99,24 @@ static int settings_set(const char *key, size_t len_rd,
 		}
 	}
 	return -ENOTSUP;
+}
+
+int npgps_download_lock(void)
+{
+	int err = k_sem_take(&dl_active, K_NO_WAIT);
+
+	if (!err) {
+		LOG_DBG("dl_active locked");
+	} else {
+		LOG_ERR("Unable to lock dl_active: %d", err);
+	}
+	return err;
+}
+
+void npgps_download_unlock(void)
+{
+	k_sem_give(&dl_active);
+	LOG_DBG("dl_active unlocked");
 }
 
 int npgps_save_header(struct nrf_cloud_pgps_header *header)
@@ -257,7 +278,7 @@ int npgps_get_shifted_time(int64_t *gps_sec,
 
 	err = date_time_now(&now);
 	if (!err) {
-		now += shift * MSEC_PER_SEC;
+		now += (int64_t)shift * MSEC_PER_SEC;
 		now = utc_to_gps_sec(now, NULL);
 		npgps_gps_sec_to_day_time(now, gps_day, gps_time_of_day);
 		if (gps_sec != NULL) {
@@ -345,13 +366,13 @@ void npgps_print_blocks(void)
 	char map[num_blocks + 1];
 	int i;
 
-	LOG_INF("num blocks:%u, size:%u, first_free:%d", num_blocks,
+	LOG_DBG("num_blocks:%u, size:%u, first_free:%d", num_blocks,
 		BLOCK_SIZE, pool.first_free);
 	for (i = 0; i < num_blocks; i++) {
 		map[i] = pool.block_used[i] ? '1' : '0';
 	}
 	map[i] = '\0';
-	LOG_INF("map:%s", log_strdup(map));
+	LOG_DBG("map:%s", map);
 }
 
 
@@ -408,7 +429,7 @@ int npgps_pointer_to_block(uint8_t *p)
 {
 	int ret = (uint32_t)(p - block_pool_base) / BLOCK_SIZE;
 
-	LOG_DBG("ptr:%p to block idx:%d", p, ret);
+	LOG_DBG("ptr:%p to block idx:%d", (void *)p, ret);
 	if ((ret < 0) || (ret >= num_blocks)) {
 		return NO_BLOCK;
 	}
@@ -429,55 +450,52 @@ void *npgps_block_to_pointer(int block)
 	return ret;
 }
 
-int npgps_download_init(npgps_buffer_handler_t handler)
+int npgps_download_init(npgps_buffer_handler_t buf_handler, npgps_eot_handler_t end_handler)
 {
-	__ASSERT(handler != NULL, "must specify handler");
-	buffer_handler = handler;
+	__ASSERT(buf_handler != NULL, "Must specify buffer handler");
+	__ASSERT(end_handler != NULL, "Must specify end of transfer handler");
+	buffer_handler = buf_handler;
+	eot_handler = end_handler;
 
 	return download_client_init(&dlc, download_client_callback);
 }
 
 int npgps_download_start(const char *host, const char *file, int sec_tag,
-			 const char *apn, size_t fragment_size)
+			 uint8_t pdn_id, size_t fragment_size)
 {
 	if (host == NULL || file == NULL) {
 		return -EINVAL;
 	}
 
 	int err;
-
-	err = k_sem_take(&pgps_active, K_NO_WAIT);
-	if (err) {
-		LOG_ERR("PGPS download already active.");
-		return err;
-	}
-	LOG_DBG("pgps_active LOCKED");
-
-	socket_retries_left = CONFIG_FOTA_SOCKET_RETRIES;
-
-	struct download_client_cfg config = {
-		.sec_tag = sec_tag,
-		.apn = apn,
-		.frag_size_override = fragment_size,
-		.set_tls_hostname = (sec_tag != -1),
+	struct nrf_cloud_download_data dl = {
+		.type = NRF_CLOUD_DL_TYPE_DL_CLIENT,
+		.host = host,
+		.path = file,
+		.dl_cfg = {
+			.sec_tag_count = 0,
+			.sec_tag_list = NULL,
+			.pdn_id = pdn_id,
+			.frag_size_override = fragment_size,
+			.set_tls_hostname = false
+		},
+		.dlc = &dlc
 	};
 
-	err = download_client_connect(&dlc, host, &config);
-	if (err != 0) {
-		goto cleanup;
+	if (sec_tag != -1) {
+		sec_tag_list[0] = sec_tag;
+		dl.dl_cfg.sec_tag_list = sec_tag_list;
+		dl.dl_cfg.sec_tag_count = 1;
+		dl.dl_cfg.set_tls_hostname = true;
 	}
 
-	err = download_client_start(&dlc, file, 0);
-	if (err != 0) {
-		download_client_disconnect(&dlc);
-		goto cleanup;
+	socket_retries_left = SOCKET_RETRIES;
+
+	err = nrf_cloud_download_start(&dl);
+	if (err) {
+		LOG_ERR("Failed to start P-GPS download, error: %d", err);
 	}
 
-	return 0;
-
-cleanup:
-	k_sem_give(&pgps_active);
-	LOG_DBG("pgps_active UNLOCKED");
 	return err;
 }
 
@@ -499,6 +517,7 @@ static int download_client_callback(const struct download_client_evt *event)
 		break;
 	case DOWNLOAD_CLIENT_EVT_DONE:
 		LOG_INF("Download client done");
+		nrf_cloud_download_end();
 		break;
 	case DOWNLOAD_CLIENT_EVT_ERROR: {
 		/* In case of socket errors we can return 0 to retry/continue,
@@ -518,12 +537,16 @@ static int download_client_callback(const struct download_client_evt *event)
 		return 0;
 	}
 
-	err = download_client_disconnect(&dlc);
-	if (err) {
+	int ret = download_client_disconnect(&dlc);
+
+	if (ret) {
 		LOG_ERR("Error disconnecting from "
-			"download client:%d", err);
+			"download client:%d", ret);
+		err = ret;
 	}
-	k_sem_give(&pgps_active);
-	LOG_DBG("pgps_active UNLOCKED");
+
+	nrf_cloud_download_end();
+
+	eot_handler(err);
 	return err;
 }

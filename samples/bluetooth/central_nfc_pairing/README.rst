@@ -21,6 +21,18 @@ The sample supports pairing in one of the following modes:
 * Legacy Just Works pairing
 * Negotiated Handover (TNEP protocol) - two-way OOB pairing
 
+Requirements
+************
+
+The sample supports the following development kits:
+
+.. table-from-sample-yaml::
+
+The sample has the following additional requirements:
+
+* NFC Reader ST25R3911B Nucleo expansion board (X-NUCLEO-NFC05A1)
+* NFC Tag 2 Tag device or NFC Tag 4 Tag device
+
 Overview
 ********
 
@@ -52,20 +64,6 @@ The NFC Poler Device can be the Handover Requester or Handover Selector Device, 
 .. figure:: images/nfc_negotiated_connection_handover.svg
    :alt: Negotiated Handover
 
-Requirements
-************
-
-The sample supports the following development kits:
-
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp, nrf52840dk_nrf52840, nrf52dk_nrf52832, nrf52833dk_nrf52833
-
-The sample has the following additional requirements:
-
-* NFC Reader ST25R3911B Nucleo expansion board (X-NUCLEO-NFC05A1)
-* NFC Tag 2 Tag device or NFC Tag 4 Tag device
-
 User interface
 **************
 
@@ -86,7 +84,7 @@ Building and running
 Testing
 =======
 
-After programming the sample to your development kit, test it by performing the following steps:
+|test_sample|
 
 1. Touch the :ref:`st25r3911b_nfc_readme` with a Type 2 Tag or Tag 4 Tag.
    The Tag Device can support the TNEP protocol.
@@ -96,8 +94,8 @@ After programming the sample to your development kit, test it by performing the 
    The content of the exchanged NDEF messages is printed there.
 #. Check the security level of the paring on the terminal.
 #. Move the NFC antenna away from the :ref:`st25r3911b_nfc_readme`.
-#. Press Button 3 when connected to turn on the :ref:`st25r3911b_nfc_readme` field and initialize new pairing.
-#. Press Button 4 for disconnect and erase bonding data.
+#. Press **Button 3** when connected to turn on the :ref:`st25r3911b_nfc_readme` field and initialize new pairing.
+#. Press **Button 4** to disconnect and erase bonding data.
 
 Dependencies
 ************
@@ -121,6 +119,6 @@ This sample uses the following |NCS| libraries:
 
 The sample uses the following Zephyr libraries:
 
-* ``include/zephyr.h``
-* ``include/device.h``
+* :file:`include/zephyr.h`
+* :file:`include/device.h`
 * :ref:`GPIO Interface <zephyr:api_peripherals>`

@@ -226,7 +226,7 @@ ALIASES                = "rst=\verbatim embed:rst" \
                          "endrststar=\endverbatim" \
                          "r=\verbatim embed:rst:leading-asterisk" \
                          "er=\endverbatim"
-ALIASES += kconfig{1}="\verbatim embed:rst:inline :kconfig:`\1` \endverbatim"
+ALIASES += kconfig{1}="\verbatim embed:rst:inline :kconfig:option:`\1` \endverbatim"
 ALIASES += "req=\xrefitem req \"Requirement\" \"Requirements\" "
 
 # This tag can be used to specify a number of word-keyword mappings (TCL only).
@@ -810,7 +810,8 @@ EXCLUDE_PATTERNS       = */zboss/* \
                          */nrf_cc312_platform/* \
                          */nrf_cc312_mbedcrypto/* \
                          */nrf_cc310_mbedcrypto/include/mbedtls_extra/* \
-                         */nrf_cc310_mbedcrypto/include/nrf-config-cc310.h
+                         */nrf_cc310_mbedcrypto/include/nrf-config-cc310.h \
+                         */nrf_security/src/drivers/*
 
 # The EXCLUDE_SYMBOLS tag can be used to specify one or more symbol names
 # (namespaces, classes, functions, etc.) that should be excluded from the
@@ -1962,7 +1963,7 @@ PREDEFINED             = "MBEDTLS_CONFIG_FILE=\"@OUTPUT_DIRECTORY@/mbedtls_doxyg
                          "CONFIG_THREAD_STACK_INFO=y" \
                          "CONFIG_UART_INTERRUPT_DRIVEN=y" \
                          "CONFIG_UART_DRV_CMD=y" \
-                         "CONFIG_SYS_POWER_MANAGEMENT=y" \
+                         "CONFIG_PM=y" \
                          "CONFIG_PM_DEVICE=y" \
                          "CONFIG_BT_SMP=y" \
                          "CONFIG_USERSPACE=y" \
@@ -1995,7 +1996,8 @@ PREDEFINED             = "MBEDTLS_CONFIG_FILE=\"@OUTPUT_DIRECTORY@/mbedtls_doxyg
 			 "MBEDTLS_AES_C=" \
 			 "MBEDTLS_CCM_C=" \
 			 "MBEDTLS_GCM_C=" \
-			 "MBEDTLS_CONFIG_FILE="
+			 "MBEDTLS_CONFIG_FILE=" \
+                         "OSALCALL="
 
 # If the MACRO_EXPANSION and EXPAND_ONLY_PREDEF tags are set to YES then this
 # tag can be used to specify a list of macro names that should be expanded. The

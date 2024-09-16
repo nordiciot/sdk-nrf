@@ -10,26 +10,25 @@ Bluetooth: Central Heart Rate Monitor with Coded PHY
 The Central Heart Rate Monitor with Coded PHY offers similar functionality to the :ref:`zephyr:bluetooth_central_hr` sample from Zephyr.
 However, this sample specifically looks for heart rate monitors using LE Coded PHY.
 
-Overview
-********
-
-The sample demonstrates a Bluetooth® LE Central role functionality by scanning for other Bluetooth LE devices that run a Heart Rate Server with LE Coded PHY support, which is not available in Zephyr Bluetooth LE Controller (See :ref:`ug_ble_controller` for more information).
-It then establishes a connection to the first Peripheral device in range.
-It can be used together with the :ref:`peripheral_hr_coded` sample.
-
 Requirements
 ************
 
 The sample supports the following development kits:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp_and_cpuapp_ns, nrf52840dongle_nrf52840, nrf52840dk_nrf52840
+.. table-from-sample-yaml::
 
 .. include:: /includes/hci_rpmsg_overlay.txt
 
 The sample also requires a device running a Heart Rate Server with LE Coded PHY support to connect to.
 For example, another development kit running the :ref:`peripheral_hr_coded` sample.
+
+Overview
+********
+
+The sample demonstrates a Bluetooth® LE Central role functionality by scanning for other Bluetooth LE devices that run a Heart Rate Server with LE Coded PHY support, which is not available in Zephyr Bluetooth LE Controller.
+See :ref:`ug_ble_controller` for more information.
+It then establishes a connection to the first Peripheral device in range.
+You can use it together with the :ref:`peripheral_hr_coded` sample.
 
 Building and running
 ********************
@@ -56,9 +55,15 @@ After programming the sample to your development kit, you can test it by connect
 #. Observe that the received notifications are output in the terminal window::
 
       [SUBSCRIBED]
-      [NOTIFICATION] Heart Rate 113 bpm
-      [NOTIFICATION] Heart Rate 114 bpm
-      [NOTIFICATION] Heart Rate 115 bpm
+      Heart Rate Measurement notification received:
+
+        Heart Rate Measurement Value Format: 8 - bit
+        Sensor Contact detected: 1
+        Sensor Contact supported: 1
+        Energy Expended present: 0
+        RR-Intervals present: 0
+
+        Heart Rate Measurement Value: 113 bpm
 
 Dependencies
 ************
@@ -67,21 +72,22 @@ This sample uses the following |NCS| libraries:
 
 * :ref:`gatt_dm_readme`
 * :ref:`nrf_bt_scan_readme`
+* :ref:`lib_hrs_client_readme`
 
 In addition, it uses the following Zephyr libraries:
 
-* ``include/zephyr/types.h``
-* ``include/errno.h``
-* ``include/zephyr.h``
-* ``include/sys/printk.h``
-* ``include/sys/byteorder.h``
+* :file:`include/zephyr/types.h`
+* :file:`include/errno.h`
+* :file:`include/zephyr.h`
+* :file:`include/sys/printk.h`
+* :file:`include/sys/byteorder.h`
 * :ref:`zephyr:kernel_api`:
 
-  * ``include/kernel.h``
+  * :file:`include/kernel.h`
 
 * :ref:`zephyr:bluetooth_api`:
 
-* ``include/bluetooth/bluetooth.h``
-* ``include/bluetooth/conn.h``
-* ``include/bluetooth/gatt.h``
-* ``include/bluetooth/uuid.h``
+* :file:`include/bluetooth/bluetooth.h`
+* :file:`include/bluetooth/conn.h`
+* :file:`include/bluetooth/gatt.h`
+* :file:`include/bluetooth/uuid.h`

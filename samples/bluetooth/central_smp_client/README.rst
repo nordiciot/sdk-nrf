@@ -10,27 +10,34 @@ Bluetooth: Central SMP Client
 The Central Simple Management Protocol (SMP) Client sample demonstrates how to use the :ref:`dfu_smp_readme` to connect to an SMP Server and send a simple echo command.
 The response, which is received as CBOR-encoded data, is decoded and printed.
 
-Overview
-********
-
-After connecting, the sample starts MTU size negotiation, discovers the GATT database of the server, and configures the DFU SMP Client.
-When configuration is complete, the sample is ready to send SMP commands.
-
-To send an echo command, press Button 1 on the development kit.
-The string that is sent contains a number that is automatically incremented.
-This way, you can easily verify if the correct response is received.
-The response is decoded and displayed using the `TinyCBOR`_ library (which is part of Zephyr).
+.. note::
+   This sample does not provide the means to program a device using DFU.
+   It demonstrates the communication between SMP Client and SMP Server.
 
 Requirements
 ************
 
 The sample supports the following development kits:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp_and_cpuapp_ns, nrf52840dk_nrf52840, nrf52833dk_nrf52833, nrf52833dk_nrf52820, nrf52dk_nrf52832
+.. table-from-sample-yaml::
+
+.. include:: /includes/tfm.txt
 
 The sample also requires a device running `mcumgr`_ with transport protocol over Bluetooth® Low Energy, for example, another development kit running the :ref:`smp_svr_sample`.
+
+.. note::
+   This sample does not program the device using DFU.
+
+Overview
+********
+
+After connecting, the sample starts MTU size negotiation, discovers the GATT database of the server, and configures the DFU SMP Client.
+When the configuration is complete, the sample is ready to send SMP commands.
+
+To send an echo command, press **Button 1** on the development kit.
+The sent string contains a number that is automatically incremented.
+This way, you can verify if the correct response is received.
+The response is decoded using the `zcbor`_ library and displayed after that.
 
 User interface
 **************
@@ -44,26 +51,29 @@ Building and running
 
 .. |sample path| replace:: :file:`samples/bluetooth/central_smp_client`
 
-.. include:: /includes/build_and_run.txt
+.. include:: /includes/build_and_run_ns.txt
 
 .. _bluetooth_central_dfu_smp_testing:
 
 Testing
 =======
 
-After programming the sample to your development kit, test it by performing the following steps:
+|test_sample|
 
-1. Connect the kit to the computer using a USB cable.
-   The kit is assigned a COM port (Windows) or ttyACM device (Linux), which is visible in the Device Manager.
+1. |connect_kit|
 #. |connect_terminal|
 #. Reset the kit.
 #. Observe that the text "Starting Bluetooth Central SMP Client example" is printed on the COM listener running on the computer and the device starts scanning for Peripherals with SMP.
 #. Program the :ref:`smp_svr_sample` to another development kit.
-   See the documentation for that sample for more information.
+   See the documentation for that sample only in the section "Building the sample application".
+   When you have built the :ref:`smp_svr_sample`, call the following command to program it to the development kit::
+
+      west flash
+
 #. Observe that the kits connect.
    When service discovery is completed, the event logs are printed on the Central's terminal.
    If you connect to the Server with a terminal emulator, you can observe that it prints "connected".
-#. Press Button 1 on the Client.
+#. Press **Button 1** on the Client.
    Observe messages similar to the following::
 
       Echo test: 1
@@ -85,19 +95,23 @@ This sample uses the following |NCS| libraries:
 
 It uses the following Zephyr libraries:
 
-* ``include/zephyr/types.h``
-* ``boards/arm/nrf*/board.h``
+* :file:`include/zephyr/types.h`
+* :file:`boards/arm/nrf*/board.h`
 * :ref:`zephyr:kernel_api`:
 
   * ``include/kernel.h``
 
 * :ref:`zephyr:bluetooth_api`:
 
-  * ``include/bluetooth/bluetooth.h``
-  * ``include/bluetooth/gatt.h``
-  * ``include/bluetooth/hci.h``
-  * ``include/bluetooth/uuid.h``
+  * :file:`include/bluetooth/bluetooth.h`
+  * :file:`include/bluetooth/gatt.h`
+  * :file:`include/bluetooth/hci.h`
+  * :file:`include/bluetooth/uuid.h`
 
 In addition, it uses the following external library that is distributed with Zephyr:
 
-* `TinyCBOR`_
+* `zcbor`_
+
+The sample also uses the following secure firmware component:
+
+* :ref:`Trusted Firmware-M <ug_tfm>`

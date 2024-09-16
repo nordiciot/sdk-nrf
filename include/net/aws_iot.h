@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Nordic Semiconductor ASA
+ * Copyright (c) 2022 Nordic Semiconductor ASA
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
@@ -12,7 +12,8 @@
 #define AWS_IOT_H__
 
 #include <stdio.h>
-#include <net/mqtt.h>
+#include <zephyr/net/mqtt.h>
+#include <dfu/dfu_target.h>
 
 /**
  * @defgroup aws_iot AWS IoT library
@@ -27,9 +28,9 @@ extern "C" {
 /** @brief AWS IoT shadow topics, used in messages to specify which shadow
  *         topic that will be published to.
  */
-enum aws_iot_topic_type {
-	/** Unknown device shadow topic. */
-	AWS_IOT_SHADOW_TOPIC_UNKNOWN = 0x0,
+enum aws_iot_shadow_topic_type {
+	/** Unused default value. */
+	AWS_IOT_SHADOW_TOPIC_NONE,
 	/** This topic type corresponds to
 	 *  $aws/things/<thing-name>/shadow/get, publishing an empty message
 	 *  to this topic requests the device shadow document.
@@ -88,9 +89,20 @@ enum aws_iot_evt_type {
 	AWS_IOT_EVT_DISCONNECTED,
 	/** Data received from AWS message broker. */
 	AWS_IOT_EVT_DATA_RECEIVED,
+	/** Acknowledgment for data sent to AWS IoT. */
+	AWS_IOT_EVT_PUBACK,
+	/** Acknowledgment for pings sent to AWS IoT. */
+	AWS_IOT_EVT_PINGRESP,
 	/** FOTA update start. */
 	AWS_IOT_EVT_FOTA_START,
-	/** FOTA update done, request to reboot. */
+	/** FOTA done. Payload of type @ref dfu_target_image_type (image).
+	 *
+	 *  If the image parameter type is of type DFU_TARGET_IMAGE_TYPE_MCUBOOT the device needs to
+	 *  reboot to apply the new application image.
+	 *
+	 *  If the image parameter type is of type DFU_TARGET_IMAGE_TYPE_MODEM_DELTA the modem
+	 *  needs to be reinitialized to apply the new modem image.
+	 */
 	AWS_IOT_EVT_FOTA_DONE,
 	/** FOTA erase pending. */
 	AWS_IOT_EVT_FOTA_ERASE_PENDING,
@@ -109,8 +121,11 @@ enum aws_iot_evt_type {
 
 /** @brief AWS IoT topic data. */
 struct aws_iot_topic_data {
-	/** Type of shadow topic that will be published to. */
-	enum aws_iot_topic_type type;
+	/** Optional: type of shadow topic that will be published to.
+	 *  When publishing to a shadow topic this can be set instead of the
+	 *  application specific topic below.
+	 */
+	enum aws_iot_shadow_topic_type type;
 	/** Pointer to string of application specific topic. */
 	const char *str;
 	/** Length of application specific topic. */
@@ -137,6 +152,16 @@ struct aws_iot_data {
 	size_t len;
 	/** Quality of Service of the message. */
 	enum mqtt_qos qos;
+	/** Message id, used to match acknowledgments. */
+	uint16_t message_id;
+	/** Duplicate flag. 1 indicates the message is a retransmission,
+	 *  Usually triggered by missing publication acknowledgment.
+	 */
+	uint8_t dup_flag;
+	/** Retain flag. 1 indicates to AWS IoT that the message should be
+	 *  stored persistently.
+	 */
+	uint8_t retain_flag;
 };
 
 /** @brief Struct with data received from AWS IoT broker. */
@@ -149,6 +174,8 @@ struct aws_iot_evt {
 		/** FOTA progress in percentage. */
 		int fota_progress;
 		bool persistent_session;
+		uint16_t message_id;
+		enum dfu_target_image_type image;
 	} data;
 };
 
@@ -169,12 +196,19 @@ struct aws_iot_config {
 	char *client_id;
 	/** Length of client_id string. */
 	size_t client_id_len;
+	/** AWS IoT endpoint host name for broker connection, used when
+	 *  @kconfig{CONFIG_AWS_IOT_BROKER_HOST_NAME_APP} is set. If not the
+	 *  static @kconfig{AWS_IOT_BROKER_HOST_NAME} is used.
+	 */
+	char *host_name;
+	/** Length of host_name string. */
+	size_t host_name_len;
 };
 
 /** @brief Initialize the module.
  *
- *  @warning This API must be called exactly once, and it must return
- *           successfully.
+ *  @note This API must be called exactly once, and it must return
+ *        successfully.
  *
  *  @param[in] config Pointer to struct containing connection parameters.
  *  @param[in] event_handler Pointer to event handler to receive AWS IoT module

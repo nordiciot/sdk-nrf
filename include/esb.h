@@ -6,10 +6,13 @@
 #ifndef __ESB_H
 #define __ESB_H
 
-#include <errno.h>
-#include <sys/util.h>
-#include <nrf.h>
 #include <stdbool.h>
+#include <errno.h>
+
+#include <nrf.h>
+#include <hal/nrf_radio.h>
+
+#include <zephyr/sys/util.h>
 #include <zephyr/types.h>
 
 #ifdef __cplusplus
@@ -25,19 +28,6 @@ extern "C" {
  *        acknowledgment, and automatic retransmission of lost packets.
  */
 
-#if defined(CONFIG_SOC_NRF5340_CPUNET)
-/** nRF5340 Errata 29 workaround (SWI interrupts missing in network core) */
-/** The ESB event IRQ number when running on an nRF5 device. */
-#define ESB_EVT_IRQ EGU0_IRQn
-/** The handler for @ref ESB_EVT_IRQ when running on an nRF5 device. */
-#define ESB_EVT_IRQHandler EGU0_IRQHandler
-#else
-/** The ESB event IRQ number when running on an nRF5 device. */
-#define ESB_EVT_IRQ SWI0_IRQn
-/** The handler for @ref ESB_EVT_IRQ when running on an nRF5 device. */
-#define ESB_EVT_IRQHandler SWI0_IRQHandler
-#endif
-
 /** @brief Default radio parameters.
  *
  *  Roughly equal to the nRF24Lxx default parameters except for CRC,
@@ -50,14 +40,13 @@ extern "C" {
 		.event_handler = 0,					       \
 		.bitrate = ESB_BITRATE_2MBPS,				       \
 		.crc = ESB_CRC_16BIT,					       \
-		.tx_output_power = ESB_TX_POWER_0DBM,			       \
+		.tx_output_power = 0,			                       \
 		.retransmit_delay = 600,				       \
 		.retransmit_count = 3,					       \
 		.tx_mode = ESB_TXMODE_AUTO,				       \
-		.radio_irq_priority = 1,				       \
-		.event_irq_priority = 2,				       \
 		.payload_length = 32,					       \
-		.selective_auto_ack = false                                    \
+		.selective_auto_ack = false,                                   \
+		.use_fast_ramp_up = false                                      \
 	}
 
 /** @brief Default legacy radio parameters.
@@ -71,14 +60,13 @@ extern "C" {
 		.event_handler = 0,					       \
 		.bitrate = ESB_BITRATE_2MBPS,				       \
 		.crc = ESB_CRC_8BIT,					       \
-		.tx_output_power = ESB_TX_POWER_0DBM,			       \
+		.tx_output_power = 0,			                       \
 		.retransmit_delay = 600,				       \
 		.retransmit_count = 3,					       \
 		.tx_mode = ESB_TXMODE_AUTO,				       \
-		.radio_irq_priority = 1,				       \
-		.event_irq_priority = 2,				       \
 		.payload_length = 32,					       \
-		.selective_auto_ack = false                                    \
+		.selective_auto_ack = false,                                   \
+		.use_fast_ramp_up = false                                      \
 	}
 
 /** @brief Macro to create an initializer for a TX data packet.
@@ -117,20 +105,22 @@ enum esb_mode {
 /** @brief Enhanced ShockBurst bitrate modes. */
 enum esb_bitrate {
 	/** 1 Mb radio mode. */
-	ESB_BITRATE_1MBPS = RADIO_MODE_MODE_Nrf_1Mbit,
+	ESB_BITRATE_1MBPS = NRF_RADIO_MODE_NRF_1MBIT,
 	/** 2 Mb radio mode. */
-	ESB_BITRATE_2MBPS = RADIO_MODE_MODE_Nrf_2Mbit,
-#if !(defined(CONFIG_SOC_NRF52840) || defined(CONFIG_SOC_NRF52810) ||          \
-      defined(CONFIG_SOC_NRF52811) || defined(CONFIG_SOC_NRF5340_CPUNET))
+	ESB_BITRATE_2MBPS = NRF_RADIO_MODE_NRF_2MBIT,
+
+#if defined(RADIO_MODE_MODE_Nrf_250Kbit)
 	/** 250 Kb radio mode. */
-	ESB_BITRATE_250KBPS = RADIO_MODE_MODE_Nrf_250Kbit,
-#endif
+	ESB_BITRATE_250KBPS = NRF_RADIO_MODE_NRF_250KBIT,
+#endif /* defined(RADIO_MODE_MODE_Nrf_250Kbit) */
+
 	/** 1 Mb radio mode using @e Bluetooth low energy radio parameters. */
-	ESB_BITRATE_1MBPS_BLE = RADIO_MODE_MODE_Ble_1Mbit,
-#if defined(CONFIG_SOC_SERIES_NRF52X) || defined(CONFIG_SOC_NRF5340_CPUNET)
+	ESB_BITRATE_1MBPS_BLE = NRF_RADIO_MODE_BLE_1MBIT,
+
+#if defined(RADIO_MODE_MODE_Ble_2Mbit)
 	/** 2 Mb radio mode using @e Bluetooth low energy radio parameters. */
-	ESB_BITRATE_2MBPS_BLE = 4,
-#endif
+	ESB_BITRATE_2MBPS_BLE = NRF_RADIO_MODE_BLE_2MBIT,
+#endif /* defined(RADIO_MODE_MODE_Ble_2Mbit) */
 };
 
 /** @brief Enhanced ShockBurst CRC modes. */
@@ -142,30 +132,34 @@ enum esb_crc {
 
 /** @brief Enhanced ShockBurst radio transmission power modes. */
 enum esb_tx_power {
+#if defined(RADIO_TXPOWER_TXPOWER_Pos4dBm)
 	/** 4 dBm radio transmit power. */
-#if !defined(CONFIG_SOC_NRF5340_CPUNET)
-	ESB_TX_POWER_4DBM = RADIO_TXPOWER_TXPOWER_Pos4dBm,
-#endif
-#if defined(CONFIG_SOC_SERIES_NRF52X)
+	ESB_TX_POWER_4DBM = NRF_RADIO_TXPOWER_POS4DBM,
+#endif /* defined(RADIO_TXPOWER_TXPOWER_Pos4dBm) */
+
+#if defined(RADIO_TXPOWER_TXPOWER_Pos3dBm)
 	/** 3 dBm radio transmit power. */
-	ESB_TX_POWER_3DBM = RADIO_TXPOWER_TXPOWER_Pos3dBm,
-#endif
+	ESB_TX_POWER_3DBM = NRF_RADIO_TXPOWER_POS3DBM,
+#endif /* defined(RADIO_TXPOWER_TXPOWER_Pos3dBm) */
+
 	/** 0 dBm radio transmit power. */
-	ESB_TX_POWER_0DBM = RADIO_TXPOWER_TXPOWER_0dBm,
+	ESB_TX_POWER_0DBM = NRF_RADIO_TXPOWER_0DBM,
 	/** -4 dBm radio transmit power. */
-	ESB_TX_POWER_NEG4DBM = RADIO_TXPOWER_TXPOWER_Neg4dBm,
+	ESB_TX_POWER_NEG4DBM = NRF_RADIO_TXPOWER_NEG4DBM,
 	/** -8 dBm radio transmit power. */
-	ESB_TX_POWER_NEG8DBM = RADIO_TXPOWER_TXPOWER_Neg8dBm,
+	ESB_TX_POWER_NEG8DBM = NRF_RADIO_TXPOWER_NEG8DBM,
 	/** -12 dBm radio transmit power. */
-	ESB_TX_POWER_NEG12DBM = RADIO_TXPOWER_TXPOWER_Neg12dBm,
+	ESB_TX_POWER_NEG12DBM = NRF_RADIO_TXPOWER_NEG12DBM,
 	/** -16 dBm radio transmit power. */
-	ESB_TX_POWER_NEG16DBM = RADIO_TXPOWER_TXPOWER_Neg16dBm,
+	ESB_TX_POWER_NEG16DBM = NRF_RADIO_TXPOWER_NEG16DBM,
 	/** -20 dBm radio transmit power. */
-	ESB_TX_POWER_NEG20DBM = RADIO_TXPOWER_TXPOWER_Neg20dBm,
+	ESB_TX_POWER_NEG20DBM = NRF_RADIO_TXPOWER_NEG20DBM,
 	/** -30 dBm radio transmit power. */
-	ESB_TX_POWER_NEG30DBM = RADIO_TXPOWER_TXPOWER_Neg30dBm,
+	ESB_TX_POWER_NEG30DBM = NRF_RADIO_TXPOWER_NEG30DBM,
 	/** -40 dBm radio transmit power. */
-	ESB_TX_POWER_NEG40DBM = RADIO_TXPOWER_TXPOWER_Neg40dBm
+#if defined(RADIO_TXPOWER_TXPOWER_Neg40dBm)
+	ESB_TX_POWER_NEG40DBM = NRF_RADIO_TXPOWER_NEG40DBM
+#endif /* defined(RADIO_TXPOWER_TXPOWER_Neg40dBm) */
 };
 
 /** @brief Enhanced ShockBurst transmission modes. */
@@ -226,10 +220,15 @@ struct esb_config {
 	/* General RF parameters */
 	enum esb_bitrate bitrate;		/**< Bitrate mode. */
 	enum esb_crc crc;			/**< CRC mode. */
-	enum esb_tx_power tx_output_power;	/**< Radio TX power. */
+	int8_t tx_output_power;	                /**< Radio TX power. */
 
 	uint16_t retransmit_delay; /**< The delay between each retransmission of
 				  *  unacknowledged packets.
+				  *  If the CONFIG_ESB_NEVER_DISABLE_TX Kconfig option is enabled,
+				  *  this is the delay between two consecutive transmissions.
+				  *  Depending on the reception processing time, a minimal
+				  *  value might be required (for example, a typical value
+				  *  for 32-bit payload is 20 µs).
 				  */
 	uint16_t retransmit_count; /**< The number of retransmission attempts
 				  *  before transmission fail.
@@ -237,9 +236,6 @@ struct esb_config {
 
 	/* Control settings */
 	enum esb_tx_mode tx_mode;	/**< Transmission mode. */
-
-	uint8_t radio_irq_priority;	/**< nRF radio interrupt priority. */
-	uint8_t event_irq_priority;	/**< ESB event interrupt priority. */
 
 	uint8_t payload_length; /**< Length of the payload (maximum length depends
 			       *  on the platforms that are used on each side).
@@ -249,6 +245,15 @@ struct esb_config {
 				   *  will be acknowledged ignoring the noack
 				   *  field.
 				   */
+	bool use_fast_ramp_up; /**<  When this feature is enabled, radio TXEN and
+				 *  RXEN delays are reduced from 130 µs to 40 µs.
+				 *  The radio peripheral needs some time to start up
+				 *  analog components of the radio. On the nRF51 and
+				 *  nRF24L Series devices, a hard-coded 130 µs delay is
+				 *  implemented. If ESB connection is achieved only
+				 *  between nRF52 and/or nRF53 Series devices, this delay can
+				 *  be reduced to 40 µs.
+				 */
 };
 
 /** @brief Initialize the Enhanced ShockBurst module.
@@ -344,6 +349,12 @@ int esb_flush_tx(void);
  *           Otherwise, a (negative) error code is returned.
  */
 int esb_pop_tx(void);
+
+/** @brief Check if there is some free space left in TX FIFO.
+ *
+ * @retval true when the TX FIFO is full, otherwise false.
+ */
+bool esb_tx_full(void);
 
 /** @brief Flush the RX buffer.
  *
@@ -443,12 +454,13 @@ int esb_get_rf_channel(uint32_t *channel);
 
 /** @brief Set the radio output power.
  *
- *  @param[in] tx_output_power	Output power.
+ *  @param[in] tx_output_power	Output power in dBm. The @ref esb_tx_power values can be used
+ *                              to provide backward compatibility.
  *
  * @retval 0 If successful.
  *           Otherwise, a (negative) error code is returned.
  */
-int esb_set_tx_power(enum esb_tx_power tx_output_power);
+int esb_set_tx_power(int8_t tx_output_power);
 
 /** @brief Set the packet retransmit delay.
  *
@@ -460,7 +472,11 @@ int esb_set_tx_power(enum esb_tx_power tx_output_power);
 int esb_set_retransmit_delay(uint16_t delay);
 
 /** @brief Set the number of retransmission attempts.
- *
+ *  @details If the CONFIG_ESB_NEVER_DISABLE_TX Kconfig option is enabled,
+ *           this is the delay between two consecutive transmissions.
+ *           Depending on the reception processing time, a minimal
+ *           value might be required (for example, a typical value
+ *           for 32-bit payload is 20 µs).
  *  @param[in] count	Number of retransmissions.
  *
  * @retval 0 If successful.

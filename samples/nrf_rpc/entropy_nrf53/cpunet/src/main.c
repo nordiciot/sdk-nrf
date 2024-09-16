@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 
-void main(void)
+int main(void)
 {
 	/* The only activity of this application is interaction with the APP
 	 * core using serialized communication through the nRF RPC library.
@@ -14,4 +14,5 @@ void main(void)
 	 * and start at system boot.
 	 */
 	printk("Entropy sample started[NET Core].\n");
+	return 0;
 }

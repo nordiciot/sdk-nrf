@@ -3,14 +3,12 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <logging/log.h>
-#include <zephyr.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/kernel.h>
 #include <stdio.h>
 #include <string.h>
-#include <net/socket.h>
-#include "nrf_socket.h"
-#include <modem/modem_key_mgmt.h>
-#include <net/tls_credentials.h>
+#include <zephyr/net/socket.h>
+#include <zephyr/net/tls_credentials.h>
 #include "slm_util.h"
 #include "slm_at_host.h"
 #include "slm_at_socket.h"
@@ -47,32 +45,85 @@ enum slm_socket_role {
 static char udp_url[SLM_MAX_URL];
 static uint16_t udp_port;
 
-static struct {
+static struct slm_socket {
 	uint16_t type;     /* SOCK_STREAM or SOCK_DGRAM */
 	uint16_t role;     /* Client or Server */
 	sec_tag_t sec_tag; /* Security tag of the credential */
 	int family;        /* Socket address family */
 	int fd;            /* Socket descriptor. */
 	int fd_peer;       /* Socket descriptor for peer. */
-} sock;
+	int ranking;       /* Ranking of socket */
+	uint16_t cid;      /* PDP Context ID, 0: primary; 1~10: secondary */
+} socks[SLM_MAX_SOCKET_COUNT];
+
+static struct pollfd fds[SLM_MAX_SOCKET_COUNT];
+static struct slm_socket sock;
 
 /* global variable defined in different files */
 extern struct at_param_list at_param_list;
-extern char rsp_buf[SLM_AT_CMD_RESPONSE_MAX_LEN];
+extern uint8_t data_buf[SLM_MAX_MESSAGE_SIZE];
 
 /* forward declarations */
 #define SOCKET_SEND_TMO_SEC      30
 static int socket_poll(int sock_fd, int event, int timeout);
 
+static int socket_ranking;
+
+#define INIT_SOCKET(socket)			\
+	socket.family  = AF_UNSPEC;		\
+	socket.sec_tag = INVALID_SEC_TAG;	\
+	socket.role    = AT_SOCKET_ROLE_CLIENT;	\
+	socket.fd      = INVALID_SOCKET;	\
+	socket.fd_peer = INVALID_SOCKET;	\
+	socket.ranking = 0;			\
+	socket.cid     = 0;
+
+static bool is_opened_socket(int fd)
+{
+	if (fd == INVALID_SOCKET) {
+		return false;
+	}
+
+	for (int i = 0; i < SLM_MAX_SOCKET_COUNT; i++) {
+		if (socks[i].fd == fd) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static int find_avail_socket(void)
+{
+	for (int i = 0; i < SLM_MAX_SOCKET_COUNT; i++) {
+		if (socks[i].fd == INVALID_SOCKET) {
+			return i;
+		}
+	}
+
+	return -ENOENT;
+}
+
+static int bind_to_device(uint16_t cid)
+{
+	int ret = 0;
+
+	if (cid > 0) {
+		int cid_int = cid;
+
+		ret = setsockopt(sock.fd, SOL_SOCKET, SO_BINDTODEVICE, &cid_int, sizeof(int));
+		if (ret < 0) {
+			LOG_ERR("SO_BINDTODEVICE error: %d", -errno);
+		}
+	}
+
+	return ret;
+}
+
 static int do_socket_open(void)
 {
 	int ret = 0;
 	int proto = IPPROTO_TCP;
-
-	if (sock.fd != INVALID_SOCKET) {
-		LOG_WRN("Socket is already opened");
-		return -EINVAL;
-	}
 
 	if (sock.type == SOCK_STREAM) {
 		ret = socket(sock.family, SOCK_STREAM, IPPROTO_TCP);
@@ -94,8 +145,20 @@ static int do_socket_open(void)
 	}
 
 	sock.fd = ret;
-	sprintf(rsp_buf, "\r\n#XSOCKET: %d,%d,%d\r\n", sock.fd, sock.type, proto);
-	rsp_send(rsp_buf, strlen(rsp_buf));
+	/* Explicitly bind to secondary PDP context if required */
+	ret = bind_to_device(sock.cid);
+	if (ret) {
+		close(sock.fd);
+		return ret;
+	}
+
+	sock.ranking = socket_ranking++;
+	ret = find_avail_socket();
+	if (ret < 0) {
+		return ret;
+	}
+	socks[ret] = sock;
+	rsp_send("\r\n#XSOCKET: %d,%d,%d\r\n", sock.fd, sock.type, proto);
 
 	return 0;
 }
@@ -104,11 +167,6 @@ static int do_secure_socket_open(int peer_verify)
 {
 	int ret = 0;
 	int proto = IPPROTO_TLS_1_2;
-
-	if (sock.fd != INVALID_SOCKET) {
-		LOG_WRN("Secure socket is already opened");
-		return -EINVAL;
-	}
 
 	if (sock.type == SOCK_STREAM) {
 		ret = socket(sock.family, SOCK_STREAM, IPPROTO_TLS_1_2);
@@ -124,15 +182,19 @@ static int do_secure_socket_open(int peer_verify)
 		return -errno;
 	}
 	sock.fd = ret;
+	/* Explicitly bind to secondary PDP context if required */
+	ret = bind_to_device(sock.cid);
+	if (ret) {
+		close(sock.fd);
+		return ret;
+	}
 
 	sec_tag_t sec_tag_list[1] = { sock.sec_tag };
 #if defined(CONFIG_SLM_NATIVE_TLS)
 	ret = slm_tls_loadcrdl(sock.sec_tag);
 	if (ret < 0) {
 		LOG_ERR("Fail to load credential: %d", ret);
-		close(sock.fd);
-		slm_at_socket_init();
-		return -EAGAIN;
+		goto error_exit;
 	}
 #endif
 	ret = setsockopt(sock.fd, SOL_TLS, TLS_SEC_TAG_LIST, sec_tag_list, sizeof(sec_tag_t));
@@ -161,21 +223,25 @@ static int do_secure_socket_open(int peer_verify)
 		}
 	}
 
-	sprintf(rsp_buf, "\r\n#XSSOCKET: %d,%d,%d\r\n", sock.fd, sock.type, proto);
-	rsp_send(rsp_buf, strlen(rsp_buf));
+	sock.ranking = socket_ranking++;
+	ret = find_avail_socket();
+	if (ret < 0) {
+		return ret;
+	}
+	socks[ret] = sock;
+	rsp_send("\r\n#XSSOCKET: %d,%d,%d\r\n", sock.fd, sock.type, proto);
 
 	return 0;
 
 error_exit:
-	close(sock.fd);
-	slm_at_socket_init();
 #if defined(CONFIG_SLM_NATIVE_TLS)
 	if (sock.sec_tag != INVALID_SEC_TAG) {
 		(void)slm_tls_unloadcrdl(sock.sec_tag);
+		sock.sec_tag = INVALID_SEC_TAG;
 	}
 #endif
 	close(sock.fd);
-	slm_at_socket_init();
+	INIT_SOCKET(sock);
 	return ret;
 }
 
@@ -191,9 +257,9 @@ static int do_socket_close(void)
 	if (sock.sec_tag != INVALID_SEC_TAG) {
 		ret = slm_tls_unloadcrdl(sock.sec_tag);
 		if (ret < 0) {
-			LOG_ERR("Fail to load credential: %d", ret);
-			return ret;
+			LOG_WRN("Fail to unload credential: %d", ret);
 		}
+		sock.sec_tag = INVALID_SEC_TAG;
 	}
 #endif
 	if (sock.fd_peer != INVALID_SOCKET) {
@@ -201,44 +267,49 @@ static int do_socket_close(void)
 		if (ret) {
 			LOG_WRN("peer close() error: %d", -errno);
 		}
+		sock.fd_peer = INVALID_SOCKET;
 	}
 	ret = close(sock.fd);
 	if (ret) {
 		LOG_WRN("close() error: %d", -errno);
 		ret = -errno;
 	}
-	slm_at_socket_init();
-	sprintf(rsp_buf, "\r\n#XSOCKET: %d,\"closed\"\r\n", ret);
-	rsp_send(rsp_buf, strlen(rsp_buf));
 
-	return ret;
-}
+	rsp_send("\r\n#XSOCKET: %d,\"closed\"\r\n", ret);
 
-static int do_socketopt_set_str(int option, const char *value)
-{
-	int ret = -ENOTSUP;
+	/* Select most recent socket as current active */
+	int ranking = 0, index = -1;
 
-	switch (option) {
-	case SO_BINDTODEVICE:
-		ret = setsockopt(sock.fd, SOL_SOCKET, option, value, strlen(value));
-		if (ret < 0) {
-			LOG_ERR("setsockopt(%d) error: %d", option, -errno);
+	for (int i = 0; i < SLM_MAX_SOCKET_COUNT; i++) {
+		if (socks[i].fd == INVALID_SOCKET) {
+			continue;
 		}
-		break;
-
-	default:
-		LOG_WRN("Unknown option %d", option);
-		break;
+		if (socks[i].fd == sock.fd) {
+			LOG_DBG("Set socket %d null", sock.fd);
+			INIT_SOCKET(socks[i]);
+		} else {
+			if (ranking < socks[i].ranking) {
+				ranking = socks[i].ranking;
+				index = i;
+			}
+		}
+	}
+	if (index >= 0) {
+		LOG_INF("Swap to socket %d", socks[index].fd);
+		sock = socks[index];
+	} else {
+		INIT_SOCKET(sock);
 	}
 
 	return ret;
 }
 
-static int do_socketopt_set_int(int option, int value)
+static int do_socketopt_set(int option, int value)
 {
 	int ret = -ENOTSUP;
 
 	switch (option) {
+	case SO_BINDTODEVICE:
 	case SO_REUSEADDR:
 		ret = setsockopt(sock.fd, SOL_SOCKET, option, &value, sizeof(int));
 		if (ret < 0) {
@@ -280,11 +351,9 @@ static int do_socketopt_set_int(int option, int value)
 		}
 		break;
 
-
 	case SO_PRIORITY:
 	case SO_TIMESTAMPING:
-		sprintf(rsp_buf, "\r\n#XSOCKETOPT: \"not supported\"\r\n");
-		rsp_send(rsp_buf, strlen(rsp_buf));
+		rsp_send("\r\n#XSOCKETOPT: \"not supported\"\r\n");
 		break;
 
 	default:
@@ -312,8 +381,7 @@ static int do_socketopt_get(int option)
 		if (ret) {
 			LOG_ERR("getsockopt(%d) error: %d", option, -errno);
 		} else {
-			sprintf(rsp_buf, "\r\n#XSOCKETOPT: %d\r\n", value);
-			rsp_send(rsp_buf, strlen(rsp_buf));
+			rsp_send("\r\n#XSOCKETOPT: %d\r\n", value);
 		}
 	} break;
 
@@ -326,16 +394,14 @@ static int do_socketopt_get(int option)
 		if (ret) {
 			LOG_ERR("getsockopt(%d) error: %d", option, -errno);
 		} else {
-			sprintf(rsp_buf, "\r\n#XSOCKETOPT: \"%d sec\"\r\n", (int)tmo.tv_sec);
-			rsp_send(rsp_buf, strlen(rsp_buf));
+			rsp_send("\r\n#XSOCKETOPT: \"%ld sec\"\r\n", (long)tmo.tv_sec);
 		}
 	} break;
 
 	case SO_TYPE:
 	case SO_PRIORITY:
 	case SO_PROTOCOL:
-		sprintf(rsp_buf, "\r\n#XSOCKETOPT: \"not supported\"\r\n");
-		rsp_send(rsp_buf, strlen(rsp_buf));
+		rsp_send("\r\n#XSOCKETOPT: \"not supported\"\r\n");
 		break;
 
 	default:
@@ -354,10 +420,10 @@ static int do_secure_socketopt_set_str(int option, const char *value)
 		/** Write-only socket option to set hostname. It accepts a string containing
 		 *  the hostname (may be NULL to disable hostname verification).
 		 */
-		if (value) {
-			ret = setsockopt(sock.fd, SOL_TLS, option, value, strlen(value));
-		} else {
+		if (slm_util_cmd_casecmp(value, "NULL")) {
 			ret = setsockopt(sock.fd, SOL_TLS, option, NULL, 0);
+		} else {
+			ret = setsockopt(sock.fd, SOL_TLS, option, value, strlen(value));
 		}
 		if (ret < 0) {
 			LOG_ERR("setsockopt(%d) error: %d", option, -errno);
@@ -391,8 +457,7 @@ static int do_secure_socketopt_set_int(int option, int value)
 	case TLS_DTLS_HANDSHAKE_TIMEOUT_MAX:
 	case TLS_CIPHERSUITE_LIST:
 	case TLS_ALPN_LIST:
-		sprintf(rsp_buf, "\r\n#XSSOCKETOPT: \"not supported\"\r\n");
-		rsp_send(rsp_buf, strlen(rsp_buf));
+		rsp_send("\r\n#XSSOCKETOPT: \"not supported\"\r\n");
 		break;
 
 	default:
@@ -416,8 +481,7 @@ static int do_secure_socketopt_get(int option)
 		if (ret) {
 			LOG_ERR("getsockopt(%d) error: %d", option, -errno);
 		} else {
-			sprintf(rsp_buf, "\r\n#XSSOCKETOPT: %d\r\n", value);
-			rsp_send(rsp_buf, strlen(rsp_buf));
+			rsp_send("\r\n#XSSOCKETOPT: %d\r\n", value);
 		}
 	} break;
 
@@ -456,7 +520,7 @@ static int do_bind(uint16_t port)
 			LOG_ERR("bind() failed: %d", -errno);
 			return -errno;
 		}
-		LOG_DBG("bind to %s", log_strdup(ipv4_addr));
+		LOG_DBG("bind to %s", ipv4_addr);
 	} else if (sock.family == AF_INET6) {
 		char ipv6_addr[INET6_ADDRSTRLEN] = {0};
 
@@ -480,7 +544,7 @@ static int do_bind(uint16_t port)
 			LOG_ERR("bind() failed: %d", -errno);
 			return -errno;
 		}
-		LOG_DBG("bind to %s", log_strdup(ipv6_addr));
+		LOG_DBG("bind to %s", ipv6_addr);
 	} else {
 		return -EINVAL;
 	}
@@ -495,10 +559,10 @@ static int do_connect(const char *url, uint16_t port)
 		.sa_family = AF_UNSPEC
 	};
 
-	LOG_DBG("connect %s:%d", log_strdup(url), port);
-	ret = util_resolve_host(0, url, port, sock.family, &sa);
+	LOG_DBG("connect %s:%d", url, port);
+	ret = util_resolve_host(sock.cid, url, port, sock.family, &sa);
 	if (ret) {
-		LOG_ERR("getaddrinfo() error: %s", log_strdup(gai_strerror(ret)));
+		LOG_ERR("getaddrinfo() error: %s", gai_strerror(ret));
 		return -EAGAIN;
 	}
 	if (sa.sa_family == AF_INET) {
@@ -511,8 +575,7 @@ static int do_connect(const char *url, uint16_t port)
 		return -errno;
 	}
 
-	sprintf(rsp_buf, "\r\n#XCONNECT: 1\r\n");
-	rsp_send(rsp_buf, strlen(rsp_buf));
+	rsp_send("\r\n#XCONNECT: 1\r\n");
 
 	return ret;
 }
@@ -568,8 +631,7 @@ static int do_accept(int timeout)
 	} else {
 		return -EINVAL;
 	}
-	sprintf(rsp_buf, "\r\n#XACCEPT: %d,\"%s\"\r\n", sock.fd_peer, peer_addr);
-	rsp_send(rsp_buf, strlen(rsp_buf));
+	rsp_send("\r\n#XACCEPT: %d,\"%s\"\r\n", sock.fd_peer, peer_addr);
 
 	return 0;
 }
@@ -605,8 +667,7 @@ static int do_send(const uint8_t *data, int datalen)
 		offset += ret;
 	}
 
-	sprintf(rsp_buf, "\r\n#XSEND: %d\r\n", offset);
-	rsp_send(rsp_buf, strlen(rsp_buf));
+	rsp_send("\r\n#XSEND: %d\r\n", offset);
 
 	if (ret >= 0) {
 		return 0;
@@ -648,12 +709,10 @@ static int do_send_datamode(const uint8_t *data, int datalen)
 	return (offset > 0) ? offset : -1;
 }
 
-static int do_recv(int timeout)
+static int do_recv(int timeout, int flags)
 {
 	int ret;
 	int sockfd = sock.fd;
-	char rx_data[SLM_MAX_PAYLOAD];
-	uint16_t length;
 
 	/* For TCP/TLS Server, receive from incoming socket */
 	if (sock.type == SOCK_STREAM && sock.role == AT_SOCKET_ROLE_SERVER) {
@@ -665,27 +724,11 @@ static int do_recv(int timeout)
 		}
 	}
 
-	if (sock.family == AF_INET) {
-		if (sock.type == SOCK_STREAM) {
-			length = TCP_MAX_PAYLOAD_IPV4;
-		} else {
-			length = UDP_MAX_PAYLOAD_IPV4;
-		}
-	} else if (sock.family == AF_INET6) {
-		if (sock.type == SOCK_STREAM) {
-			length = TCP_MAX_PAYLOAD_IPV6;
-		} else {
-			length = UDP_MAX_PAYLOAD_IPV6;
-		}
-	} else {
-		length = SLM_MAX_PAYLOAD;
-	}
-
 	ret = socket_poll(sockfd, POLLIN, timeout);
 	if (ret) {
 		return ret;
 	}
-	ret = recv(sockfd, (void *)rx_data, length, 0);
+	ret = recv(sockfd, (void *)data_buf, sizeof(data_buf), flags);
 	if (ret < 0) {
 		LOG_WRN("recv() error: %d", -errno);
 		return -errno;
@@ -700,9 +743,8 @@ static int do_recv(int timeout)
 	if (ret == 0) {
 		LOG_WRN("recv() return 0");
 	} else {
-		rsp_send(rx_data, ret);
-		sprintf(rsp_buf, "\r\n#XRECV: %d\r\n", ret);
-		rsp_send(rsp_buf, strlen(rsp_buf));
+		rsp_send("\r\n#XRECV: %d\r\n", ret);
+		data_send(data_buf, ret);
 		ret = 0;
 	}
 
@@ -717,10 +759,10 @@ static int do_sendto(const char *url, uint16_t port, const uint8_t *data, int da
 		.sa_family = AF_UNSPEC
 	};
 
-	LOG_DBG("sendto %s:%d", log_strdup(url), port);
-	ret = util_resolve_host(0, url, port, sock.family, &sa);
+	LOG_DBG("sendto %s:%d", url, port);
+	ret = util_resolve_host(sock.cid, url, port, sock.family, &sa);
 	if (ret) {
-		LOG_ERR("getaddrinfo() error: %s", log_strdup(gai_strerror(ret)));
+		LOG_ERR("getaddrinfo() error: %s", gai_strerror(ret));
 		return -EAGAIN;
 	}
 
@@ -744,8 +786,7 @@ static int do_sendto(const char *url, uint16_t port, const uint8_t *data, int da
 		offset += ret;
 	}
 
-	sprintf(rsp_buf, "\r\n#XSENDTO: %d\r\n", offset);
-	rsp_send(rsp_buf, strlen(rsp_buf));
+	rsp_send("\r\n#XSENDTO: %d\r\n", offset);
 
 	if (ret >= 0) {
 		return 0;
@@ -761,10 +802,10 @@ static int do_sendto_datamode(const uint8_t *data, int datalen)
 		.sa_family = AF_UNSPEC
 	};
 
-	LOG_DBG("sendto %s:%d", log_strdup(udp_url), udp_port);
-	ret = util_resolve_host(0, udp_url, udp_port, sock.family, &sa);
+	LOG_DBG("sendto %s:%d", udp_url, udp_port);
+	ret = util_resolve_host(sock.cid, udp_url, udp_port, sock.family, &sa);
 	if (ret) {
-		LOG_ERR("getaddrinfo() error: %s", log_strdup(gai_strerror(ret)));
+		LOG_ERR("getaddrinfo() error: %s", gai_strerror(ret));
 		return -EAGAIN;
 	}
 
@@ -792,24 +833,17 @@ static int do_sendto_datamode(const uint8_t *data, int datalen)
 	return (offset > 0) ? offset : -1;
 }
 
-static int do_recvfrom(int timeout)
+static int do_recvfrom(int timeout, int flags)
 {
 	int ret;
 	struct sockaddr remote;
 	socklen_t addrlen = sizeof(struct sockaddr);
-	char rx_data[SLM_MAX_PAYLOAD];
-	int length;
 
-	if (sock.family == AF_INET) {
-		length = UDP_MAX_PAYLOAD_IPV4;
-	} else {
-		length = UDP_MAX_PAYLOAD_IPV6;
-	}
 	ret = socket_poll(sock.fd, POLLIN, timeout);
 	if (ret) {
 		return ret;
 	}
-	ret = recvfrom(sock.fd, (void *)rx_data, length, 0, &remote, &addrlen);
+	ret = recvfrom(sock.fd, (void *)data_buf, sizeof(data_buf), flags, &remote, &addrlen);
 	if (ret < 0) {
 		LOG_ERR("recvfrom() error: %d", -errno);
 		return -errno;
@@ -831,9 +865,30 @@ static int do_recvfrom(int timeout)
 			(void)inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&remote)->sin6_addr,
 			    peer_addr, sizeof(peer_addr));
 		}
-		rsp_send(rx_data, ret);
-		sprintf(rsp_buf, "\r\n#XRECVFROM: %d,\"%s\"\r\n", ret, peer_addr);
-		rsp_send(rsp_buf, strlen(rsp_buf));
+		rsp_send("\r\n#XRECVFROM: %d,\"%s\"\r\n", ret, peer_addr);
+		data_send(data_buf, ret);
+	}
+
+	return 0;
+}
+
+static int do_poll(int timeout)
+{
+	int ret = poll(fds, SLM_MAX_SOCKET_COUNT, timeout);
+
+	if (ret < 0) {
+		rsp_send("\r\n#XPOLL: %d\r\n", ret);
+		return ret;
+	}
+	/* ret == 0 means timeout */
+	if (ret > 0) {
+		for (int i = 0; i < SLM_MAX_SOCKET_COUNT; i++) {
+			/* If fd is equal to -1	then revents is cleared (set to zero) */
+			if (fds[i].revents != 0) {
+				rsp_send("\r\n#XPOLL: %d,\"0x%04x\"\r\n",
+					fds[i].fd, fds[i].revents);
+			}
+		}
 	}
 
 	return 0;
@@ -868,17 +923,23 @@ static int socket_poll(int sock_fd, int event, int timeout)
 	return 0;
 }
 
-static int socket_datamode_callback(uint8_t op, const uint8_t *data, int len)
+static int socket_datamode_callback(uint8_t op, const uint8_t *data, int len, uint8_t flags)
 {
 	int ret = 0;
 
 	if (op == DATAMODE_SEND) {
-		if (strlen(udp_url) > 0) {
-			ret = do_sendto_datamode(data, len);
+		if (sock.type == SOCK_DGRAM && (flags & SLM_DATAMODE_FLAGS_MORE_DATA) != 0) {
+			LOG_ERR("Datamode buffer overflow");
+			(void)exit_datamode_handler(-EOVERFLOW);
+			return -EOVERFLOW;
 		} else {
-			ret = do_send_datamode(data, len);
+			if (strlen(udp_url) > 0) {
+				ret = do_sendto_datamode(data, len);
+			} else {
+				ret = do_send_datamode(data, len);
+			}
+			LOG_INF("datamode send: %d", ret);
 		}
-		LOG_INF("datamode send: %d", ret);
 	} else if (op == DATAMODE_EXIT) {
 		LOG_DBG("datamode exit");
 		memset(udp_url, 0x00, sizeof(udp_url));
@@ -888,7 +949,7 @@ static int socket_datamode_callback(uint8_t op, const uint8_t *data, int len)
 }
 
 /**@brief handle AT#XSOCKET commands
- *  AT#XSOCKET=<op>[,<type>,<role>]
+ *  AT#XSOCKET=<op>[,<type>,<role>[,<cid>]]
  *  AT#XSOCKET?
  *  AT#XSOCKET=?
  */
@@ -904,10 +965,11 @@ int handle_at_socket(enum at_cmd_type cmd_type)
 			return err;
 		}
 		if (op == AT_SOCKET_OPEN || op == AT_SOCKET_OPEN6) {
-			if (sock.fd >= 0) {
-				LOG_WRN("Socket is already opened");
+			if (find_avail_socket() < 0) {
+				LOG_ERR("Max socket count reached");
 				return -EINVAL;
 			}
+			INIT_SOCKET(sock);
 			err = at_params_unsigned_short_get(&at_param_list, 2, &sock.type);
 			if (err) {
 				return err;
@@ -917,28 +979,35 @@ int handle_at_socket(enum at_cmd_type cmd_type)
 				return err;
 			}
 			sock.family = (op == AT_SOCKET_OPEN) ? AF_INET : AF_INET6;
+			if (at_params_valid_count_get(&at_param_list) > 4) {
+				err = at_params_unsigned_short_get(&at_param_list, 4, &sock.cid);
+				if (err) {
+					return err;
+				}
+				if (sock.cid > 10) {
+					return -EINVAL;
+				}
+			}
 			err = do_socket_open();
 		} else if (op == AT_SOCKET_CLOSE) {
 			err = do_socket_close();
+		} else {
+			err = -EINVAL;
 		} break;
 
 	case AT_CMD_TYPE_READ_COMMAND:
 		if (sock.fd != INVALID_SOCKET) {
-			sprintf(rsp_buf, "\r\n#XSOCKET: %d,%d,%d\r\n", sock.fd,
-				sock.family, sock.role);
-		} else {
-			sprintf(rsp_buf, "\r\n#XSOCKET: 0\r\n");
+			rsp_send("\r\n#XSOCKET: %d,%d,%d,%d,%d\r\n", sock.fd,
+				sock.family, sock.role, sock.type, sock.cid);
 		}
-		rsp_send(rsp_buf, strlen(rsp_buf));
 		err = 0;
 		break;
 
 	case AT_CMD_TYPE_TEST_COMMAND:
-		sprintf(rsp_buf, "\r\n#XSOCKET: (%d,%d,%d),(%d,%d,%d),(%d,%d)",
+		rsp_send("\r\n#XSOCKET: (%d,%d,%d),(%d,%d,%d),(%d,%d),<cid>",
 			AT_SOCKET_CLOSE, AT_SOCKET_OPEN, AT_SOCKET_OPEN6,
 			SOCK_STREAM, SOCK_DGRAM, SOCK_RAW,
 			AT_SOCKET_ROLE_CLIENT, AT_SOCKET_ROLE_SERVER);
-		rsp_send(rsp_buf, strlen(rsp_buf));
 		err = 0;
 		break;
 
@@ -950,7 +1019,7 @@ int handle_at_socket(enum at_cmd_type cmd_type)
 }
 
 /**@brief handle AT#XSOCKET commands
- *  AT#XSSOCKET=<op>[,<type>,<role>,sec_tag>[,<peer_verify>]
+ *  AT#XSSOCKET=<op>[,<type>,<role>,<sec_tag>[,<peer_verify>[,<cid>]]]
  *  AT#XSSOCKET?
  *  AT#XSSOCKET=?
  */
@@ -975,10 +1044,11 @@ int handle_at_secure_socket(enum at_cmd_type cmd_type)
 			 */
 			uint16_t peer_verify;
 
-			if (sock.fd >= 0) {
-				LOG_WRN("Socket is already opened");
+			if (find_avail_socket() < 0) {
+				LOG_ERR("Max socket count reached");
 				return -EINVAL;
 			}
+			INIT_SOCKET(sock);
 			err = at_params_unsigned_short_get(&at_param_list, 2, &sock.type);
 			if (err) {
 				return err;
@@ -1006,29 +1076,36 @@ int handle_at_secure_socket(enum at_cmd_type cmd_type)
 				}
 			}
 			sock.family = (op == AT_SOCKET_OPEN) ? AF_INET : AF_INET6;
+			if (at_params_valid_count_get(&at_param_list) > 6) {
+				err = at_params_unsigned_short_get(&at_param_list, 6, &sock.cid);
+				if (err) {
+					return err;
+				}
+				if (sock.cid > 10) {
+					return -EINVAL;
+				}
+			}
 			err = do_secure_socket_open(peer_verify);
 		} else if (op == AT_SOCKET_CLOSE) {
 			err = do_socket_close();
+		} else {
+			err = -EINVAL;
 		} break;
 
 	case AT_CMD_TYPE_READ_COMMAND:
 		if (sock.fd != INVALID_SOCKET) {
-			sprintf(rsp_buf, "\r\n#XSSOCKET: %d,%d,%d\r\n", sock.fd,
-				sock.family, sock.role);
-		} else {
-			sprintf(rsp_buf, "\r\n#XSSOCKET: 0\r\n");
+			rsp_send("\r\n#XSSOCKET: %d,%d,%d,%d,%d,%d\r\n", sock.fd,
+				sock.family, sock.role, sock.type, sock.sec_tag, sock.cid);
 		}
-		rsp_send(rsp_buf, strlen(rsp_buf));
 		err = 0;
 		break;
 
 	case AT_CMD_TYPE_TEST_COMMAND:
-		sprintf(rsp_buf, "\r\n#XSSOCKET: (%d,%d,%d),(%d,%d),(%d,%d)",
+		rsp_send("\r\n#XSSOCKET: (%d,%d,%d),(%d,%d),(%d,%d),"
+			 "<sec-tag>,<peer_verify>,<cid>\r\n",
 			AT_SOCKET_CLOSE, AT_SOCKET_OPEN, AT_SOCKET_OPEN6,
 			SOCK_STREAM, SOCK_DGRAM,
 			AT_SOCKET_ROLE_CLIENT, AT_SOCKET_ROLE_SERVER);
-		strcat(rsp_buf, "<sec-tag>,<peer_verify>\r\n");
-		rsp_send(rsp_buf, strlen(rsp_buf));
 		err = 0;
 		break;
 
@@ -1037,6 +1114,57 @@ int handle_at_secure_socket(enum at_cmd_type cmd_type)
 	}
 
 	return err;
+}
+
+/**@brief handle AT#XSOCKETSELECT commands
+ *  AT#XSOCKETSELECT=<fd>
+ *  AT#XSOCKETSELECT?
+ *  AT#XSOCKETSELECT=?
+ */
+int handle_at_socket_select(enum at_cmd_type cmd_type)
+{
+	int err = 0;
+	int fd;
+
+	switch (cmd_type) {
+	case AT_CMD_TYPE_SET_COMMAND:
+		err = at_params_int_get(&at_param_list, 1, &fd);
+		if (err) {
+			return err;
+		}
+		if (fd < 0) {
+			return -EINVAL;
+		}
+		for (int i = 0; i < SLM_MAX_SOCKET_COUNT; i++) {
+			if (socks[i].fd == fd) {
+				sock = socks[i];
+				rsp_send("\r\n#XSOCKETSELECT: %d\r\n", sock.fd);
+				return 0;
+			}
+		}
+		err = -EBADF;
+		break;
+
+	case AT_CMD_TYPE_READ_COMMAND:
+		for (int i = 0; i < SLM_MAX_SOCKET_COUNT; i++) {
+			if (socks[i].fd != INVALID_SOCKET) {
+				rsp_send("\r\n#XSOCKETSELECT: %d,%d,%d,%d,%d,%d,%d\r\n",
+					socks[i].fd, socks[i].family, socks[i].role,
+					socks[i].type, socks[i].sec_tag, socks[i].ranking,
+					socks[i].cid);
+			}
+		}
+		if (sock.fd != INVALID_SOCKET) {
+			rsp_send("\r\n#XSOCKETSELECT: %d\r\n", sock.fd);
+		}
+		break;
+
+	default:
+		break;
+	}
+
+	return err;
+
 }
 
 /**@brief handle AT#XSOCKETOPT commands
@@ -1049,7 +1177,7 @@ int handle_at_socketopt(enum at_cmd_type cmd_type)
 	int err = -EINVAL;
 	uint16_t op;
 	uint16_t name;
-	enum at_param_type type = AT_PARAM_TYPE_NUM_INT;
+	int value = 0;
 
 	switch (cmd_type) {
 	case AT_CMD_TYPE_SET_COMMAND:
@@ -1062,39 +1190,21 @@ int handle_at_socketopt(enum at_cmd_type cmd_type)
 			return err;
 		}
 		if (op == AT_SOCKETOPT_SET) {
-			int value_int = 0;
-			char value_str[IFNAMSIZ] = {0};
-			int size = IFNAMSIZ;
-
+			/* some options don't require a value */
 			if (at_params_valid_count_get(&at_param_list) > 3) {
-				type = at_params_type_get(&at_param_list, 3);
-				if (type == AT_PARAM_TYPE_NUM_INT) {
-					err = at_params_int_get(&at_param_list, 3, &value_int);
-					if (err) {
-						return err;
-					}
-				} else if (type == AT_PARAM_TYPE_STRING) {
-					err = util_string_get(&at_param_list, 3, value_str, &size);
-					if (err) {
-						return err;
-					}
-				} else {
-					return -EINVAL;
+				err = at_params_int_get(&at_param_list, 3, &value);
+				if (err) {
+					return err;
 				}
 			}
-			if (type == AT_PARAM_TYPE_NUM_INT) {
-				err = do_socketopt_set_int(name, value_int);
-			} else if (type == AT_PARAM_TYPE_STRING) {
-				err = do_socketopt_set_str(name, value_str);
-			}
+			err = do_socketopt_set(name, value);
 		} else if (op == AT_SOCKETOPT_GET) {
 			err = do_socketopt_get(name);
 		} break;
 
 	case AT_CMD_TYPE_TEST_COMMAND:
-		sprintf(rsp_buf, "\r\n#XSOCKETOPT: (%d,%d),<name>,<value>\r\n",
+		rsp_send("\r\n#XSOCKETOPT: (%d,%d),<name>,<value>\r\n",
 			AT_SOCKETOPT_GET, AT_SOCKETOPT_SET);
-		rsp_send(rsp_buf, strlen(rsp_buf));
 		err = 0;
 		break;
 
@@ -1142,30 +1252,22 @@ int handle_at_secure_socketopt(enum at_cmd_type cmd_type)
 				if (err) {
 					return err;
 				}
+				err = do_secure_socketopt_set_int(name, value_int);
 			} else if (type == AT_PARAM_TYPE_STRING) {
 				err = util_string_get(&at_param_list, 3, value_str, &size);
 				if (err) {
 					return err;
 				}
+				err = do_secure_socketopt_set_str(name, value_str);
 			} else {
 				return -EINVAL;
-			}
-			if (type == AT_PARAM_TYPE_NUM_INT) {
-				err = do_secure_socketopt_set_int(name, value_int);
-			} else if (type == AT_PARAM_TYPE_STRING) {
-				if (size != 0) {
-					err = do_secure_socketopt_set_str(name, value_str);
-				} else {
-					err = do_secure_socketopt_set_str(name, NULL);
-				}
 			}
 		}  else if (op == AT_SOCKETOPT_GET) {
 			err = do_secure_socketopt_get(name);
 		} break;
 
 	case AT_CMD_TYPE_TEST_COMMAND:
-		sprintf(rsp_buf, "\r\n#XSSOCKETOPT: (%d),<name>,<value>\r\n", AT_SOCKETOPT_SET);
-		rsp_send(rsp_buf, strlen(rsp_buf));
+		rsp_send("\r\n#XSSOCKETOPT: (%d),<name>,<value>\r\n", AT_SOCKETOPT_SET);
 		err = 0;
 		break;
 
@@ -1175,7 +1277,6 @@ int handle_at_secure_socketopt(enum at_cmd_type cmd_type)
 
 	return err;
 }
-
 
 /**@brief handle AT#XBIND commands
  *  AT#XBIND=<port>
@@ -1292,11 +1393,10 @@ int handle_at_accept(enum at_cmd_type cmd_type)
 
 	case AT_CMD_TYPE_READ_COMMAND:
 		if (sock.fd_peer != INVALID_SOCKET) {
-			sprintf(rsp_buf, "\r\n#XTCPACCEPT: %d\r\n", sock.fd_peer);
+			rsp_send("\r\n#XTCPACCEPT: %d\r\n", sock.fd_peer);
 		} else {
-			sprintf(rsp_buf, "\r\n#XTCPACCEPT: 0\r\n");
+			rsp_send("\r\n#XTCPACCEPT: 0\r\n");
 		}
-		rsp_send(rsp_buf, strlen(rsp_buf));
 		err = 0;
 		break;
 
@@ -1315,7 +1415,7 @@ int handle_at_accept(enum at_cmd_type cmd_type)
 int handle_at_send(enum at_cmd_type cmd_type)
 {
 	int err = -EINVAL;
-	char data[SLM_MAX_PAYLOAD + 1] = {0};
+	char data[SLM_MAX_PAYLOAD_SIZE + 1] = {0};
 	int size;
 
 	switch (cmd_type) {
@@ -1348,6 +1448,7 @@ int handle_at_recv(enum at_cmd_type cmd_type)
 {
 	int err = -EINVAL;
 	int timeout;
+	int flags = 0;
 
 	switch (cmd_type) {
 	case AT_CMD_TYPE_SET_COMMAND:
@@ -1355,7 +1456,13 @@ int handle_at_recv(enum at_cmd_type cmd_type)
 		if (err) {
 			return err;
 		}
-		err = do_recv(timeout);
+		if (at_params_valid_count_get(&at_param_list) > 2) {
+			err = at_params_int_get(&at_param_list, 2, &flags);
+			if (err) {
+				return err;
+			}
+		}
+		err = do_recv(timeout, flags);
 		break;
 
 	default:
@@ -1387,7 +1494,7 @@ int handle_at_sendto(enum at_cmd_type cmd_type)
 			return err;
 		}
 		if (at_params_valid_count_get(&at_param_list) > 3) {
-			char data[SLM_MAX_PAYLOAD + 1] = {0};
+			char data[SLM_MAX_PAYLOAD_SIZE + 1] = {0};
 
 			size = sizeof(data);
 			err = util_string_get(&at_param_list, 3, data, &size);
@@ -1408,7 +1515,7 @@ int handle_at_sendto(enum at_cmd_type cmd_type)
 }
 
 /**@brief handle AT#XRECVFROM commands
- *  AT#XRECVFROM=<timeout>
+ *  AT#XRECVFROM=<timeout>[,<flags>]
  *  AT#XRECVFROM? READ command not supported
  *  AT#XRECVFROM=? TEST command not supported
  */
@@ -1416,6 +1523,7 @@ int handle_at_recvfrom(enum at_cmd_type cmd_type)
 {
 	int err = -EINVAL;
 	int timeout;
+	int flags = 0;
 
 	switch (cmd_type) {
 	case AT_CMD_TYPE_SET_COMMAND:
@@ -1423,7 +1531,13 @@ int handle_at_recvfrom(enum at_cmd_type cmd_type)
 		if (err) {
 			return err;
 		}
-		err = do_recvfrom(timeout);
+		if (at_params_valid_count_get(&at_param_list) > 2) {
+			err = at_params_int_get(&at_param_list, 2, &flags);
+			if (err) {
+				return err;
+			}
+		}
+		err = do_recvfrom(timeout, flags);
 		break;
 
 	default:
@@ -1446,6 +1560,7 @@ int handle_at_getaddrinfo(enum at_cmd_type cmd_type)
 	int size = SLM_MAX_URL;
 	struct addrinfo *result;
 	struct addrinfo *res;
+	char rsp_buf[256];
 
 	switch (cmd_type) {
 	case AT_CMD_TYPE_SET_COMMAND:
@@ -1455,12 +1570,10 @@ int handle_at_getaddrinfo(enum at_cmd_type cmd_type)
 		}
 		err = getaddrinfo(host, NULL, NULL, &result);
 		if (err) {
-			sprintf(rsp_buf, "\r\n#XGETADDRINFO: \"%s\"\r\n", gai_strerror(err));
-			rsp_send(rsp_buf, strlen(rsp_buf));
+			rsp_send("\r\n#XGETADDRINFO: \"%s\"\r\n", gai_strerror(err));
 			return err;
 		} else if (result == NULL) {
-			sprintf(rsp_buf, "\r\n#XGETADDRINFO: \"not found\"\r\n");
-			rsp_send(rsp_buf, strlen(rsp_buf));
+			rsp_send("\r\n#XGETADDRINFO: \"not found\"\r\n");
 			return -ENOENT;
 		}
 
@@ -1485,8 +1598,60 @@ int handle_at_getaddrinfo(enum at_cmd_type cmd_type)
 			}
 		}
 		strcat(rsp_buf, "\"\r\n");
-		rsp_send(rsp_buf, strlen(rsp_buf));
+		rsp_send("%s", rsp_buf);
 		freeaddrinfo(result);
+		break;
+
+	default:
+		break;
+	}
+
+	return err;
+}
+
+/**@brief handle AT#XPOLL commands
+ *  AT#XPOLL=<timeout>[,<handle1>[,<handle2> ...<handle8>]
+ *  AT#XPOLL? READ command not support
+ *  AT#XPOLL=? TEST command not support
+ */
+int handle_at_poll(enum at_cmd_type cmd_type)
+{
+	int err = -EINVAL;
+	int timeout, handle;
+	int count = at_params_valid_count_get(&at_param_list);
+
+	switch (cmd_type) {
+	case AT_CMD_TYPE_SET_COMMAND:
+		err = at_params_int_get(&at_param_list, 1, &timeout);
+		if (err) {
+			return err;
+		}
+		if (count == 2) {
+			/* poll all opened socket */
+			for (int i = 0; i < SLM_MAX_SOCKET_COUNT; i++) {
+				fds[i].fd = socks[i].fd;
+				if (fds[i].fd != INVALID_SOCKET) {
+					fds[i].events = POLLIN;
+				}
+			}
+		} else {
+			/* poll selected sockets */
+			for (int i = 0; i < SLM_MAX_SOCKET_COUNT; i++) {
+				fds[i].fd = INVALID_SOCKET;
+				if (count > 2 + i) {
+					err = at_params_int_get(&at_param_list, 2 + i, &handle);
+					if (err) {
+						return err;
+					}
+					if (!is_opened_socket(handle)) {
+						return -EINVAL;
+					}
+					fds[i].fd = handle;
+					fds[i].events = POLLIN;
+				}
+			}
+		}
+		err = do_poll(timeout);
 		break;
 
 	default:
@@ -1500,11 +1665,11 @@ int handle_at_getaddrinfo(enum at_cmd_type cmd_type)
  */
 int slm_at_socket_init(void)
 {
-	sock.family  = AF_UNSPEC;
-	sock.sec_tag = INVALID_SEC_TAG;
-	sock.role    = AT_SOCKET_ROLE_CLIENT;
-	sock.fd      = INVALID_SOCKET;
-	sock.fd_peer = INVALID_SOCKET;
+	INIT_SOCKET(sock);
+	for (int i = 0; i < SLM_MAX_SOCKET_COUNT; i++) {
+		INIT_SOCKET(socks[i]);
+	}
+	socket_ranking = 1;
 
 	return 0;
 }
@@ -1513,5 +1678,15 @@ int slm_at_socket_init(void)
  */
 int slm_at_socket_uninit(void)
 {
-	return do_socket_close();
+	(void)do_socket_close();
+	for (int i = 0; i < SLM_MAX_SOCKET_COUNT; i++) {
+		if (socks[i].fd_peer != INVALID_SOCKET) {
+			close(socks[i].fd_peer);
+		}
+		if (socks[i].fd != INVALID_SOCKET) {
+			close(socks[i].fd);
+		}
+	}
+
+	return 0;
 }

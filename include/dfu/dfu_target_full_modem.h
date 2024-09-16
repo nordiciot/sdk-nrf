@@ -16,7 +16,7 @@
 
 #include <stddef.h>
 #include <sys/types.h>
-#include <device.h>
+#include <zephyr/device.h>
 #include <dfu/dfu_target.h>
 
 #ifdef __cplusplus
@@ -44,7 +44,9 @@ struct dfu_target_full_modem_params {
 	/* Length of `buf` */
 	size_t len;
 
-	/* Flash device for storing the modem firmware */
+	/* Flash device for storing the modem firmware.
+	 * Ignored if CONFIG_DFU_TARGET_FULL_MODEM_USE_EXT_PARTITION is enabled.
+	 */
 	struct dfu_target_fmfu_fdev *dev;
 };
 
@@ -56,6 +58,15 @@ struct dfu_target_full_modem_params {
  * @retval non-negative integer if successful, otherwise negative errno.
  */
 int dfu_target_full_modem_cfg(const struct dfu_target_full_modem_params *params);
+
+/**
+ * @brief Get the configured flash device information.
+ *
+ * @param[out] fdev Returns the flash device information.
+ *
+ * @retval 0 If successful, negative errno otherwise.
+ */
+int dfu_target_full_modem_fdev_get(struct dfu_target_fmfu_fdev * const fdev);
 
 /**
  * @brief See if data in buf indicates a full modem update.
@@ -70,12 +81,13 @@ bool dfu_target_full_modem_identify(const void *const buf);
  * @brief Initialize dfu target, perform steps necessary to receive firmware.
  *
  * @param[in] file_size Size of the current file being downloaded.
+ * @param[in] img_num Image pair index. The value is not used currently.
  * @param[in] callback  Not in use. In place to be compatible with DFU target
  *                      API.
  *
  * @retval 0 If successful, negative errno otherwise.
  */
-int dfu_target_full_modem_init(size_t file_size,
+int dfu_target_full_modem_init(size_t file_size, int img_num,
 			       dfu_target_callback_t callback);
 
 /**
@@ -98,7 +110,7 @@ int dfu_target_full_modem_offset_get(size_t *offset);
 int dfu_target_full_modem_write(const void *const buf, size_t len);
 
 /**
- * @brief De-initialize resources and finalize firmware upgrade if successful.
+ * @brief Release resources and finalize firmware upgrade if successful.
 
  * @param[in] successful Indicate whether the firmware was successfully
  *            received.
@@ -106,6 +118,26 @@ int dfu_target_full_modem_write(const void *const buf, size_t len);
  * @return 0 on success, negative errno otherwise.
  */
 int dfu_target_full_modem_done(bool successful);
+
+/**
+ * @brief Schedule update of the image.
+ *
+ * This call does nothing fot this target type.
+ *
+ * @param[in] img_num This parameter is unused by this target type.
+ *
+ * @return 0, it is always successful.
+ **/
+int dfu_target_full_modem_schedule_update(int img_num);
+
+/**
+ * @brief Release resources and erase the download area.
+ *
+ * Cancel any ongoing updates.
+ *
+ * @return 0 on success, negative errno otherwise.
+ */
+int dfu_target_full_modem_reset(void);
 
 #endif /* DFU_TARGET_FULL_MODEM_H__ */
 

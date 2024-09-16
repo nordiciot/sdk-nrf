@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <coap_server_client_interface.h>
 #include <net/coap_utils.h>
-#include <logging/log.h>
-#include <net/openthread.h>
-#include <net/socket.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/net/openthread.h>
+#include <zephyr/net/socket.h>
 #include <openthread/thread.h>
 
 #include "coap_client_utils.h"
@@ -126,7 +126,7 @@ static int on_provisioning_reply(const struct coap_packet *response,
 		goto exit;
 	}
 
-	LOG_INF("Received peer address: %s", log_strdup(unique_local_addr_str));
+	LOG_INF("Received peer address: %s", unique_local_addr_str);
 
 exit:
 	if (IS_ENABLED(CONFIG_OPENTHREAD_MTD_SED)) {
@@ -148,8 +148,7 @@ static void toggle_one_light(struct k_work *item)
 		return;
 	}
 
-	LOG_INF("Send 'light' request to: %s",
-		log_strdup(unique_local_addr_str));
+	LOG_INF("Send 'light' request to: %s", unique_local_addr_str);
 	coap_send_request(COAP_METHOD_PUT,
 			  (const struct sockaddr *)&unique_local_addr,
 			  light_option, &payload, sizeof(payload), NULL);
@@ -214,10 +213,9 @@ static void update_device_state(void)
 	on_mtd_mode_toggle(mode.mRxOnWhenIdle);
 }
 
-static void on_thread_state_changed(uint32_t flags, void *context)
+static void on_thread_state_changed(otChangedFlags flags, struct openthread_context *ot_context,
+				    void *user_data)
 {
-	struct openthread_context *ot_context = context;
-
 	if (flags & OT_CHANGED_THREAD_ROLE) {
 		switch (otThreadGetDeviceRole(ot_context->instance)) {
 		case OT_DEVICE_ROLE_CHILD:
@@ -236,6 +234,9 @@ static void on_thread_state_changed(uint32_t flags, void *context)
 		}
 	}
 }
+static struct openthread_state_changed_cb ot_state_chaged_cb = {
+	.state_changed_cb = on_thread_state_changed
+};
 
 static void submit_work_if_connected(struct k_work *work)
 {
@@ -260,7 +261,7 @@ void coap_client_utils_init(ot_connection_cb_t on_connect,
 	k_work_init(&multicast_light_work, toggle_mesh_lights);
 	k_work_init(&provisioning_work, send_provisioning_request);
 
-	openthread_set_state_changed_cb(on_thread_state_changed);
+	openthread_state_changed_cb_register(openthread_get_default_context(), &ot_state_chaged_cb);
 	openthread_start(openthread_get_default_context());
 
 	if (IS_ENABLED(CONFIG_OPENTHREAD_MTD_SED)) {

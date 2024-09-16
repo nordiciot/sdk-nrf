@@ -11,7 +11,7 @@ The Silvair EnOcean Proxy Server model integrates an EnOcean switch together wit
 It implements the `Silvair EnOcean Switch Mesh Proxy Server`_ specification.
 
 The model initializes the :ref:`bt_enocean_readme` library.
-The EnOcean switch can be automatically commissioned if option :kconfig:`CONFIG_BT_MESH_SILVAIR_ENOCEAN_AUTO_COMMISSION` is set.
+The EnOcean switch can be automatically commissioned/decommissioned if option :kconfig:option:`CONFIG_BT_MESH_SILVAIR_ENOCEAN_AUTO_COMMISSION` is set.
 
 The Silvair EnOcean Proxy Server uses either one or two elements on a node.
 Each element handles its own button pair and has its own corresponding :ref:`bt_mesh_onoff_srv_readme` and :ref:`bt_mesh_lvl_srv_readme` models.
@@ -37,11 +37,6 @@ However, the :ref:`bt_mesh_onoff_srv_readme` and :ref:`bt_mesh_lvl_srv_readme` m
 
 The Silvair EnOcean Proxy Server does not require any message handler callbacks.
 
-.. note::
-   The state machine behavior in this implementation of the `Silvair EnOcean Switch Mesh Proxy Server`_ specification differs slightly from the published specification document.
-   As in accordance with the specification, no new Generic Delta Set messages are sent when a button is held down for longer than the delta timeout.
-   The deviation from the specification is that the state machine stays in the Delta ON or Delta OFF state, meaning that a Generic OnOff message is not sent when the button is released, even after the delta times out.
-
 States
 ======
 
@@ -55,7 +50,7 @@ None
 Persistent storage
 ==================
 
-If :kconfig:`CONFIG_BT_ENOCEAN_STORE` is enabled, the Silvair EnOcean Proxy Server stores the commissioned EnOcean device address.
+If :kconfig:option:`CONFIG_BT_ENOCEAN_STORE` is enabled, the Silvair EnOcean Proxy Server stores the commissioned EnOcean device address.
 
 API documentation
 =================

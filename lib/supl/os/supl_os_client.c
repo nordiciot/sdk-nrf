@@ -4,18 +4,19 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <logging/log.h>
-#include <zephyr.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/kernel.h>
+
+#include <nrf_errno.h>
+#include <nrf_modem_at.h>
 
 #include <supl_session.h>
 #include <supl_os_client.h>
 #include <lte_params.h>
 #include <utils.h>
 
-#include <modem/at_cmd.h>
-
 #define AT_CDGCONT       "AT+CGDCONT?"
-#define AT_XMONITOR      "AT\%XMONITOR"
+#define AT_XMONITOR      "AT%%XMONITOR"
 
 LOG_MODULE_REGISTER(supl_client, LOG_LEVEL_DBG);
 
@@ -85,8 +86,8 @@ static int set_device_id(void)
 
 	device_id_init(&supl_client_ctx);
 
-	err = at_cmd_write(AT_CDGCONT, response, sizeof(response), NULL);
-	if (err != 0 && err != -EMSGSIZE) {
+	err = nrf_modem_at_cmd(response, sizeof(response), AT_CDGCONT);
+	if (err != 0 && err != -NRF_E2BIG) {
 		LOG_ERR("Reading IP address failed");
 		return -1;
 	}
@@ -104,11 +105,11 @@ static int set_device_id(void)
 
 static int set_lte_params(void)
 {
-	char response[128] = { 0 };
+	char response[192] = { 0 };
 
 	lte_params_init(&supl_client_ctx.lte_params);
 
-	if (at_cmd_write(AT_XMONITOR, response, sizeof(response), NULL) != 0) {
+	if (nrf_modem_at_cmd(response, sizeof(response), AT_XMONITOR) != 0) {
 		LOG_ERR("Fetching LTE info failed");
 		return -1;
 	}

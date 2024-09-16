@@ -4,13 +4,6 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-/**
- * @file pdn.h
- * @brief Public APIs for the PDN library.
- * @defgroup pdn PDN library
- * @{
- */
-
 #ifndef PDN_H_
 #define PDN_H_
 
@@ -22,12 +15,19 @@
 extern "C" {
 #endif
 
+/**
+ * @file pdn.h
+ * @brief Public APIs for the PDN library.
+ * @defgroup pdn PDN library
+ * @{
+ */
+
 /** @brief PDN family */
 enum pdn_fam {
-	PDN_FAM_IPV4   = 0,
-	PDN_FAM_IPV6   = 1,
-	PDN_FAM_IPV4V6 = 2,
-	PDN_FAM_NONIP  = 3,
+	PDN_FAM_IPV4   = 0, /**< IPv4 family */
+	PDN_FAM_IPV6   = 1, /**< IPv6 family */
+	PDN_FAM_IPV4V6 = 2, /**< IPv4 and IPv6 family */
+	PDN_FAM_NONIP  = 3, /**< Non-IP family */
 };
 
 /** @brief Additional PDP Context configuration options */
@@ -55,18 +55,19 @@ struct pdn_pdp_opt {
 
 /** @brief PDN library event */
 enum pdn_event {
-	PDN_EVENT_CNEC_ESM,	/** +CNEC ESM error code */
-	PDN_EVENT_ACTIVATED,	/** PDN connection activated */
-	PDN_EVENT_DEACTIVATED,	/** PDN connection deactivated */
-	PDN_EVENT_IPV6_UP,	/** PDN has IPv6 connectivity */
-	PDN_EVENT_IPV6_DOWN,	/** PDN has lost IPv6 connectivity */
+	PDN_EVENT_CNEC_ESM,		/**< +CNEC ESM error code */
+	PDN_EVENT_ACTIVATED,		/**< PDN connection activated */
+	PDN_EVENT_DEACTIVATED,		/**< PDN connection deactivated */
+	PDN_EVENT_IPV6_UP,		/**< PDN has IPv6 connectivity */
+	PDN_EVENT_IPV6_DOWN,		/**< PDN has lost IPv6 connectivity */
+	PDN_EVENT_NETWORK_DETACH,	/**< Network detached */
 };
 
 /** @brief PDN authentication method */
 enum pdn_auth {
-	PDN_AUTH_NONE = 0,	/** No authentication */
-	PDN_AUTH_PAP  = 1,	/** Password authentication protocol */
-	PDN_AUTH_CHAP = 2,	/** Challenge handshake authentication protocol */
+	PDN_AUTH_NONE = 0,	/**< No authentication */
+	PDN_AUTH_PAP  = 1,	/**< Password authentication protocol */
+	PDN_AUTH_CHAP = 2,	/**< Challenge handshake authentication protocol */
 };
 
 /**
@@ -83,23 +84,12 @@ enum pdn_auth {
  * @param event The event.
  * @param reason The ESM error reason, if available.
  */
-typedef void (*pdn_event_handler_t)(uint8_t cid, enum pdn_event event,
-				    int reason);
-
-/**
- * @brief Initialize the PDN library.
- *
- * This library depends on the @ref at_cmd and @ref at_notif libraries,
- * and they must be both initialized before initializing this library.
- *
- * @return int Zero on success or a negative errno otherwise.
- */
-int pdn_init(void);
+typedef void (*pdn_event_handler_t)(uint8_t cid, enum pdn_event event, int reason);
 
 /**
  * @brief Create a Packet Data Protocol (PDP) context.
  *
- * If a callback is provided via the @c cb parameter, the library will
+ * If a callback is provided via the @p cb parameter, the library will
  * generate events from the +CNEC and +GGEV AT notifications to report
  * state of the Packet Data Network (PDN) connection.
  *
@@ -150,9 +140,9 @@ int pdn_ctx_destroy(uint8_t cid);
  *
  * @param cid The PDP context ID to activate a connection for.
  * @param[out] esm If provided, the function will block to return the ESM error reason.
- * @param[out] family If provided, the function will block to return PDN_FAM_IPV4 if only IPv4 is
- *		      supported, or PDN_FAM_IPV6 if only IPv6 is supported. Otherwise, this value
- *		      will remain unchanged.
+ * @param[out] family If provided, the function will block to return @c PDN_FAM_IPV4 if only IPv4
+ *		      is supported, or @c PDN_FAM_IPV6 if only IPv6 is supported.
+ *		      Otherwise, this value will remain unchanged.
  * @return int Zero on success or a negative errno otherwise.
  */
 int pdn_activate(uint8_t cid, int *esm, enum pdn_fam *family);
@@ -187,11 +177,32 @@ int pdn_id_get(uint8_t cid);
 int pdn_default_apn_get(char *buf, size_t len);
 
 /**
- * @brief Set a callback for events pertaining to the default PDP context (zero).
+ * @brief Register a callback for events pertaining to the default PDP context (zero).
  *
  * @param cb The PDN event handler.
  */
-int pdn_default_callback_set(pdn_event_handler_t cb);
+int pdn_default_ctx_cb_reg(pdn_event_handler_t cb);
+
+/**
+ * @brief Deregister a callback for events pertaining to the default PDP context (zero).
+ *
+ * @param cb The PDN event handler.
+ */
+int pdn_default_ctx_cb_dereg(pdn_event_handler_t cb);
+
+#if CONFIG_PDN_ESM_STRERROR
+
+/**
+ * @brief Retrieve a statically allocated textual description for a given ESM error reason.
+ *
+ * @param reason ESM error reason.
+ * @return const char* ESM error reason description.
+ *		       If no textual description for the given error is found,
+ *		       a placeholder string is returned instead.
+ */
+const char *pdn_esm_strerror(int reason);
+
+#endif
 
 /** @} */
 

@@ -8,18 +8,18 @@
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
-#include <sys/printk.h>
-#include <random/rand32.h>
-#include <zephyr.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/random/rand32.h>
+#include <zephyr/kernel.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
 
 #include <bluetooth/services/rscs.h>
 
-#include <settings/settings.h>
+#include <zephyr/settings/settings.h>
 
 #include <dk_buttons_and_leds.h>
 
@@ -29,6 +29,26 @@
 
 static struct bt_rscs_measurement measurement;
 static struct bt_conn *current_conn;
+
+static const char *const sensor_location[] = {
+	"Other",
+	"Top of shoe",
+	"In shoe",
+	"Hip",
+	"Front Wheel",
+	"Left Crank",
+	"Right Crank",
+	"Left Pedal",
+	"Right Pedal",
+	"Front Hub",
+	"Rear Dropout",
+	"Chainstay",
+	"Rear Wheel",
+	"Rear Hub",
+	"Chest",
+	"Spider",
+	"Chain Ring"
+};
 
 static void rsc_simulation(struct bt_rscs_measurement *measurement)
 {
@@ -64,7 +84,7 @@ int set_cumulative(uint32_t total_distance)
 	return 0;
 }
 
-int calibrarion(void)
+int calibration(void)
 {
 	printk("Start the calibration procedure\n");
 	return 0;
@@ -72,7 +92,9 @@ int calibrarion(void)
 
 void update_loc(uint8_t location)
 {
-	printk("Update sensor location: %d\n", location);
+	__ASSERT_NO_MSG(location < ARRAY_SIZE(sensor_location));
+
+	printk("Update sensor location: %u - %s\n", location, sensor_location[location]);
 }
 
 void evt_handler(enum bt_rscs_evt evt)
@@ -90,7 +112,7 @@ void evt_handler(enum bt_rscs_evt evt)
 
 static const struct bt_rscs_cp_cb control_point_cb = {
 	.set_cumulative = set_cumulative,
-	.calibrarion = calibrarion,
+	.calibration = calibration,
 	.update_loc = update_loc,
 };
 
@@ -119,7 +141,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	dk_set_led_off(CON_STATUS_LED);
 }
 
-#ifdef CONFIG_BT_LBS_SECURITY_ENABLED
+#ifdef CONFIG_BT_RSCS_SECURITY_ENABLED
 static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_security_err err)
 {
 	char addr[BT_ADDR_LE_STR_LEN];
@@ -135,15 +157,15 @@ static void security_changed(struct bt_conn *conn, bt_security_t level, enum bt_
 }
 #endif
 
-static struct bt_conn_cb conn_callbacks = {
-	.connected    = connected,
+BT_CONN_CB_DEFINE(conn_callbacks) = {
+	.connected = connected,
 	.disconnected = disconnected,
-#ifdef CONFIG_BT_LBS_SECURITY_ENABLED
+#ifdef CONFIG_BT_RSCS_SECURITY_ENABLED
 	.security_changed = security_changed,
 #endif
 };
 
-#if defined(CONFIG_BT_LBS_SECURITY_ENABLED)
+#if defined(CONFIG_BT_RSCS_SECURITY_ENABLED)
 static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
 {
 	char addr[BT_ADDR_LE_STR_LEN];
@@ -160,17 +182,6 @@ static void auth_cancel(struct bt_conn *conn)
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
 	printk("Pairing cancelled: %s\n", addr);
-}
-
-static void pairing_confirm(struct bt_conn *conn)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-	bt_conn_auth_pairing_confirm(conn);
-
-	printk("Pairing confirmed: %s\n", addr);
 }
 
 static void pairing_complete(struct bt_conn *conn, bool bonded)
@@ -194,12 +205,15 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 static struct bt_conn_auth_cb conn_auth_callbacks = {
 	.passkey_display = auth_passkey_display,
 	.cancel = auth_cancel,
-	.pairing_confirm = pairing_confirm,
+};
+
+static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {
 	.pairing_complete = pairing_complete,
 	.pairing_failed = pairing_failed
 };
 #else
 static struct bt_conn_auth_cb conn_auth_callbacks;
+static struct bt_conn_auth_info_cb conn_auth_info_callbacks;
 #endif
 
 
@@ -208,28 +222,37 @@ static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_UUID16_ALL, BT_UUID_16_ENCODE(BT_UUID_RSCS_VAL))
 };
 
-void main(void)
+int main(void)
 {
 	int err;
-	int blink_status = 0;
+	uint32_t blink_status = 0;
 
 	printk("Starting Running Speed and Cadence peripheral example\n");
 
 	err = dk_leds_init();
 	if (err) {
 		printk("LEDs init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
-	bt_conn_cb_register(&conn_callbacks);
 	if (IS_ENABLED(CONFIG_BT_RSCS_SECURITY_ENABLED)) {
-		bt_conn_auth_cb_register(&conn_auth_callbacks);
+		err = bt_conn_auth_cb_register(&conn_auth_callbacks);
+		if (err) {
+			printk("Failed to register authorization callbacks.\n");
+			return 0;
+		}
+
+		err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
+		if (err) {
+			printk("Failed to register authorization info callbacks.\n");
+			return 0;
+		}
 	}
 
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Bluetooth initialized\n");
@@ -259,13 +282,13 @@ void main(void)
 	err = bt_rscs_init(&rscs_init);
 	if (err) {
 		printk("Failed to init RSCS (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	err = bt_le_adv_start(BT_LE_ADV_CONN_NAME, ad, ARRAY_SIZE(ad), NULL, 0);
 	if (err) {
 		printk("Advertising failed to start (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Advertising successfully started\n");

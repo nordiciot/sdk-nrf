@@ -14,6 +14,26 @@ The recommended server sample referenced on this page is :ref:`coap_server_sampl
 This sample supports optional :ref:`coap_client_sample_multi_ext` and :ref:`Minimal Thread Device variant <thread_ug_device_type>`, which can be turned on or off.
 See :ref:`coap_client_sample_activating_variants` for details.
 
+Requirements
+************
+
+The sample supports the following development kits:
+
+.. table-from-sample-yaml::
+
+You can use one or more of the development kits listed above as the Thread CoAP Client.
+You also need one or more compatible development kits programmed with the :ref:`coap_server_sample` sample.
+
+.. include:: /includes/tfm.txt
+
+Multiprotocol extension requirements
+====================================
+
+If you enable the :ref:`coap_client_sample_multi_ext`, make sure you have a phone with the `nRF Toolbox`_ application installed or an additional development kit programmed with :ref:`central_uart` sample.
+
+.. note::
+  The :ref:`testing instructions <coap_client_sample_testing_ble>` refer to nRF Toolbox, but similar applications can be used as well, for example `nRF Connect for Mobile`_.
+
 Overview
 ********
 
@@ -34,45 +54,9 @@ For example usage of the native Thread CoAP API, see the :ref:`coap_server_sampl
 Multiprotocol Bluetooth LE extension
 ====================================
 
-This optional extension can demonstrate the OpenThread stack and :ref:`nrfxlib:softdevice_controller` working concurrently.
+This optional extension demonstrates the OpenThread stack and :ref:`nrfxlib:softdevice_controller` working concurrently.
 It uses the :ref:`nus_service_readme` library to control the LED states over Bluetooth® LE in a Thread network.
 For more information about the multiprotocol feature, see :ref:`ug_multiprotocol_support`.
-
-FEM support
-===========
-
-.. include:: /includes/sample_fem_support.txt
-
-Device Firmware Upgrade extension
-=================================
-
-This optional extension can be used to perform an over-the-air Device Firmware Upgrade (DFU).
-In this process, the device that hosts the new firmware image sends it to the CoAP Client device using `SMP over Bluetooth`_.
-The :ref:`MCUboot <mcuboot:mcuboot_wrapper>` bootloader solution is then used to replace the old firmware image with the new one.
-
-.. note::
-   The Device Firmware Upgrade feature is currently supported only on the nRF52840 DK.
-
-Requirements
-************
-
-The sample supports the following development kits:
-
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp, nrf52840dk_nrf52840, nrf52833dk_nrf52833, nrf21540dk_nrf52840
-
-You can use one or more of the development kits listed above as the Thread CoAP Client.
-You also need one or more compatible development kits programmed with the :ref:`coap_server_sample` sample.
-
-
-Multiprotocol extension requirements
-====================================
-
-If you enable the :ref:`coap_client_sample_multi_ext`, make sure you have a phone or a tablet with the `nRF Toolbox`_ application installed.
-
-.. note::
-  The :ref:`testing instructions <coap_client_sample_testing_ble>` refer to nRF Toolbox, but similar applications can be used as well, for example `nRF Connect for Mobile`_.
 
 User interface
 **************
@@ -122,6 +106,36 @@ UART command assignments:
    * ``m`` - Send a multicast CoAP message over Thread (the same operation as **Button 2**).
    * ``p`` - Send a pairing request as CoAP message over Thread (the same operation as **Button 4**).
 
+Configuration
+*************
+
+|config|
+
+.. _coap_client_sample_activating_variants:
+
+Configuration files
+===================
+
+The sample provides predefined configuration files for typical use cases, and to activate sample extensions.
+You can find the configuration files in the root directory of the sample.
+
+Specify the corresponding file names in the :makevar:`OVERLAY_CONFIG` option when building.
+See :ref:`cmake_options` for instructions on how to add this option.
+For more information about using configuration overlay files, see :ref:`zephyr:important-build-vars` in the Zephyr documentation.
+
+The following configuration files are available:
+
+* :file:`overlay-mtd.conf` - Enables the Minimal Thread Device variant.
+* :file:`overlay-logging.conf` - Enables logging using RTT.
+  For additional options, refer to :ref:`RTT logging <ug_logging_backends_rtt>`.
+* :file:`overlay-multiprotocol_ble.conf` - Enables the Multiprotocol Bluetooth LE extension.
+
+FEM support
+===========
+
+.. include:: /includes/sample_fem_support.txt
+
+
 Building and running
 ********************
 
@@ -129,22 +143,7 @@ Building and running
 
 |enable_thread_before_testing|
 
-.. include:: /includes/build_and_run.txt
-
-.. _coap_client_sample_activating_variants:
-
-Activating sample extensions
-============================
-
-To activate the optional extensions supported by this sample, modify :makevar:`OVERLAY_CONFIG` in the following manner:
-
-* For the Minimal Thread Device variant, set :file:`overlay-mtd.conf`.
-* For the Multiprotocol Bluetooth LE extension, set :file:`overlay-multiprotocol_ble.conf`.
-* For the Device Firmware Upgrade extension, set :file:`overlay-dfu_support.conf`.
-  Because the Device Firmware Upgrade is performed over Bluetooth LE, you must also enable the Multiprotocol Bluetooth LE extension.
-
-See :ref:`cmake_options` for instructions on how to add this option.
-For more information about using configuration overlay files, see :ref:`zephyr:important-build-vars` in the Zephyr documentation.
+.. include:: /includes/build_and_run_ns.txt
 
 Testing
 =======
@@ -188,132 +187,61 @@ Switching between SED and MED modes does not affect the standard testing procedu
 Testing multiprotocol Bluetooth LE extension
 --------------------------------------------
 
-To test the multiprotocol Bluetooth LE extension, complete the following steps after the standard `Testing`_ procedure:
+To test the multiprotocol Bluetooth LE extension, you can use nRF Toolbox or the :ref:`central_uart` sample.
+The steps below assume nRF Toolbox as the Bluetooth tester.
 
-#. Set up nRF Toolbox by completing the following steps:
+First, you need to set up nRF Toolbox as follows:
 
-   a. Tap :guilabel:`UART` to open the UART application in nRF Toolbox.
+1. Tap :guilabel:`UART` to open the UART application in nRF Toolbox.
 
-      .. figure:: /images/nrftoolbox_uart_default.png
-         :alt: UART application in nRF Toolbox
+   .. figure:: /images/nrftoolbox_uart_default.png
+      :alt: UART application in nRF Toolbox
 
-         UART application in nRF Toolbox
+      UART application in nRF Toolbox
 
-   #. Tap the :guilabel:`EDIT` button in the top right corner of the application to configure the UART commands.
-      The button configuration window appears.
-   #. Create the active application buttons by completing the following steps:
+#. Tap the :guilabel:`EDIT` button in the top right corner of the application to configure the UART commands.
+   The button configuration window appears.
 
-      i. Bind the top left button to the ``u`` command, with EOL set to LF and an icon of your choice.
-         For this testing procedure, the :guilabel:`>` icon is used.
-      #. Bind the top middle button to the ``m`` command, with EOL set to LF and an icon of your choice.
-         For this testing procedure, the play button icon is used.
-      #. Bind the top right button to the ``p`` command, with EOL set to LF and an icon of your choice.
-         For this testing procedure, the settings gear icon is used.
+#. Create the active application buttons by completing the following steps:
+
+   a. Bind the top left button to the ``u`` command, with EOL set to LF and an icon of your choice.
+      For this testing procedure, the :guilabel:`>` icon is used.
+   #. Bind the top middle button to the ``m`` command, with EOL set to LF and an icon of your choice.
+      For this testing procedure, the play button icon is used.
+   #. Bind the top right button to the ``p`` command, with EOL set to LF and an icon of your choice.
+      For this testing procedure, the settings gear icon is used.
 
       .. figure:: /images/nrftoolbox_uart_settings.png
          :alt: Configuring buttons in nRF Toolbox - UART application
 
          Configuring buttons in the UART application of nRF Toolbox
 
-   #. Tap the :guilabel:`DONE` button in the top right corner of the application.
+#. Tap the :guilabel:`DONE` button in the top right corner of the application.
 
-   #. Tap :guilabel:`CONNECT` and select the ``NUS_CoAP_client`` device from the list to connect to the device
+#. Tap :guilabel:`CONNECT` and select the ``NUS_CoAP_client`` device from the list to connect to the device.
 
-       .. figure:: /images/nrftoolbox_uart_connected.png
-          :alt: nRF Toolbox - UART application view after establishing connection
+   .. figure:: /images/nrftoolbox_uart_connected.png
+      :alt: nRF Toolbox - UART application view after establishing connection
 
-          The UART application of nRF Toolbox after establishing the connection
+      The UART application of nRF Toolbox after establishing the connection
 
-       .. note::
-          Observe that **LED 2** on your CoAP Multiprotocol Client node lights up, which indicates that the Bluetooth connection is established.
+   .. note::
+      Observe that **LED 2** on your CoAP Multiprotocol Client node lights up, which indicates that the Bluetooth connection is established.
 
-#. In nRF Toolbox, press the middle button to control **LED 4** on all CoAP server nodes.
-#. Pair a client with a server by completing the following steps:
+When you have set up nRF Toolbox, complete the following steps after the standard `Testing`_ procedure:
+
+#. In nRF Toolbox, tap the middle button to control **LED 4** on all CoAP server nodes.
+#. To pair a client with a server, complete the following steps:
 
    a. Press **Button 4** on a server node to enable pairing.
-   #. In nRF Toolbox, press the right button to pair the two nodes.
+   #. In nRF Toolbox, tap the right button to pair the two nodes.
 
-#. In nRF Toolbox, press the left button to control **LED 4** on the paired server node.
-
-Testing Device Firmware Upgrade extension
------------------------------------------
-
-There are two ways of performing the DFU:
-
-* Using a smartphone with the `nRF Connect for Mobile`_ application installed.
-* Using a Linux PC with the `mcumgr`_ command line tool.
-
-To test the DFU extension, complete the steps for the chosen method.
-
-Device Firmware Upgrade using nRF Connect for Mobile
-   1. Navigate to the :file:`build/zephyr` directory and copy the :file:`app_update.bin` file to your smartphone.
-   #. Install the `nRF Connect for Mobile`_ application on your smartphone and run it.
-   #. On the Scanner tab, find the device called ``NUS_CoAP_client`` and click the :guilabel:`CONNECT` button.
-   #. Click the DFU icon in the bar on the top.
-   #. Select the location of the :file:`app_update.bin` file on your smartphone.
-   #. Select the desired DFU mode and click :guilabel:`OK`.
-   #. Observe the DFU progress on the mobile application chart or in the device logs.
-
-   After finishing the upgrade, the device will be rebooted.
-   It should start operating with the new firmware version.
-
-Device Firmware Upgrade using mcumgr
-   1. Install the `Go language package`_ (if it is not already installed).
-   #. Download mcumgr by invoking the following command:
-
-      .. code-block:: console
-
-         $ go get github.com/apache/mynewt-mcumgr-cli/mcumgr
-
-   #. Upload the firmware image to the device by running the following command in the sample directory:
-
-      .. code-block:: console
-
-         $ sudo mcumgr --conntype ble --connstring peer_name='NUS_CoAP_client' image upload build/zephyr/app_update.bin
-
-      The operation might take a few minutes.
-      Wait until the progress bar reaches 100%.
-
-   #. Obtain the list of images present in the device memory by running the following command:
-
-      .. code-block:: console
-
-         $ sudo mcumgr --conntype ble --connstring peer_name='NUS_CoAP_client' image list
-         Images:
-         image=0 slot=0
-               version: 0.0.0
-               bootable: true
-               flags: active confirmed
-               hash: 7bb0e909a846e833465cbb44c581cf045413a5446c6953a30a3dcc2c3ad51764
-         image=0 slot=1
-               version: 0.0.0
-               bootable: true
-               flags:
-               hash: cbd58fc3821e749d3abfb00b3069f98c078824735f1b2a333e8a1579971e7de1
-         Split status: N/A (0)
-
-   #. Select the new firmware image by calling the following method, replacing *image-hash* with the hash of the image present in slot 1 (for example, ``cbd58fc3821e749d3abfb00b3069f98c078824735f1b2a333e8a1579971e7de1``):
-
-      .. parsed-literal::
-         :class: highlight
-
-         $ sudo mcumgr --conntype ble --connstring peer_name='NUS_CoAP_client' image test *image-hash*
-
-      The selected image is marked with a ``pending`` flag.
-
-   #. Reset the device with the following command to let the bootloader swap the images:
-
-      .. code-block:: console
-
-         $ sudo mcumgr --conntype ble --connstring peer_name='NUS_CoAP_client' reset
-
-      The device will be rebooted and the firmware images swapped.
-      The swapping operation might take some time.
+#. In nRF Toolbox, tap the left button to control **LED 4** on the paired server node.
 
 Sample output
 =============
 
-The sample logging output can be observed through a serial port.
+You can observe the sample logging output with a terminal emulator |ANSI|.
 For more details, see :ref:`putty`.
 
 Dependencies
@@ -348,3 +276,7 @@ The following dependencies are added by the optional multiprotocol Bluetooth LE 
   * ``include/bluetooth/gatt.h``
   * ``include/bluetooth/hci.h``
   * ``include/bluetooth/uuid.h``
+
+In addition, it uses the following secure firmware component:
+
+* :ref:`Trusted Firmware-M <ug_tfm>`

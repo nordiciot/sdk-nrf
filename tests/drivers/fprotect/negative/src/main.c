@@ -11,12 +11,12 @@
  * have been set up to be protected by SPU/ACL etc. depending on the chip used
  */
 
-#include <ztest.h>
-#include <device.h>
+#include <zephyr/ztest.h>
+#include <zephyr/device.h>
 #include <nrfx_nvmc.h>
-#include <sys/util.h>
+#include <zephyr/sys/util.h>
 #include <fprotect.h>
-#include <linker/linker-defs.h>
+#include <zephyr/linker/linker-defs.h>
 
 #define BUF_SIZE 256
 
@@ -26,11 +26,11 @@
 #endif
 
 #define TEST_FPROTECT_WRITE_ADDR ROUND_UP( \
-		(uint32_t)_image_rom_start + (uint32_t)_flash_used, \
+		(uint32_t)__rom_region_start + (uint32_t)_flash_used, \
 		CONFIG_FPROTECT_BLOCK_SIZE)
 
 #define TEST_FPROTECT_READ_ADDR \
-		(ROUND_UP((uint32_t)_image_rom_start + (uint32_t)_flash_used, \
+		(ROUND_UP((uint32_t)__rom_region_start + (uint32_t)_flash_used, \
 		CONFIG_FPROTECT_BLOCK_SIZE) \
 	+ CONFIG_FPROTECT_BLOCK_SIZE)
 
@@ -73,7 +73,7 @@ static void flash_write_protected_unmodified(uint32_t addr)
 	zassert_mem_equal(buf, read_buf, sizeof(buf), "write protected flash has been modified.\n");
 }
 
-static void test_flash_write_protected_fails(void)
+ZTEST(test_fprotect_negative, test_flash_write_protected_fails)
 {
 	uint8_t buf[BUF_SIZE];
 
@@ -88,20 +88,22 @@ static void test_flash_write_protected_fails(void)
 	flash_write_protected_fails(TEST_FPROTECT_WRITE_ADDR, true);
 }
 
-static void test_flash_write_protected_unmodified(void)
+ZTEST(test_fprotect_negative, test_flash_write_protected_unmodified)
 {
 	flash_write_protected_unmodified(TEST_FPROTECT_WRITE_ADDR);
 }
 
-static void test_bootloader_protection(void)
+ZTEST(test_fprotect_negative, test_bootloader_protection)
 {
+	Z_TEST_SKIP_IFNDEF(CONFIG_SECURE_BOOT);
 #ifdef CONFIG_SECURE_BOOT
 	flash_write_protected_fails(TEST_FPROTECT_BOOTLOADER_PROTECTED, true);
 #endif
 }
 
-static void test_flash_read_protected_fails_r(void)
+ZTEST(test_fprotect_negative, test_flash_read_protected_fails_r)
 {
+	Z_TEST_SKIP_IFNDEF(CONFIG_HAS_HW_NRF_ACL);
 #ifdef CONFIG_HAS_HW_NRF_ACL
 	uint8_t buf[BUF_SIZE];
 
@@ -120,21 +122,11 @@ static void test_flash_read_protected_fails_r(void)
 #endif
 }
 
-static void test_fatal(void)
+void check_fatal(void *f)
 {
 	zassert_equal(expected_fatal, actual_fatal,
 			"The wrong number of fatal error has occurred (e:%d != a:%d).\n",
 			expected_fatal, actual_fatal);
 }
 
-void test_main(void)
-{
-	ztest_test_suite(test_fprotect_negative,
-			ztest_unit_test(test_flash_write_protected_fails),
-			ztest_unit_test(test_flash_write_protected_unmodified),
-			ztest_unit_test(test_bootloader_protection),
-			ztest_unit_test(test_flash_read_protected_fails_r),
-			ztest_unit_test(test_fatal)
-			);
-	ztest_run_test_suite(test_fprotect_negative);
-}
+ZTEST_SUITE(test_fprotect_negative, NULL, NULL, NULL, check_fatal, NULL);

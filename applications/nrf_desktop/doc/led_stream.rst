@@ -24,12 +24,12 @@ Configuration
 *************
 
 The module receives LED effects through the :ref:`nrf_desktop_config_channel` and displays them using the :ref:`caf_leds`.
-For this reason, make sure that :kconfig:`CONFIG_CAF_LEDS` and :kconfig:`CONFIG_DESKTOP_CONFIG_CHANNEL_ENABLE` are both set.
+For this reason, make sure that both :kconfig:option:`CONFIG_CAF_LEDS` and :ref:`CONFIG_DESKTOP_CONFIG_CHANNEL_ENABLE <config_desktop_app_options>` options are set.
 
-To enable the module, use the :kconfig:`CONFIG_DESKTOP_LED_STREAM_ENABLE` Kconfig option.
+To enable the module, use the :ref:`CONFIG_DESKTOP_LED_STREAM_ENABLE <config_desktop_app_options>` Kconfig option.
 
-You can also define the stream LED event queue size (:kconfig:`CONFIG_DESKTOP_LED_STREAM_QUEUE_SIZE`).
-The queue is used by the module as data buffer for the data received from the host computer.
+You can also define the stream LED event queue size using :ref:`CONFIG_DESKTOP_LED_STREAM_QUEUE_SIZE <config_desktop_app_options>` option.
+The queue is used by the module as a data buffer for the data received from the host computer.
 
 Configuration channel
 *********************
@@ -73,5 +73,3 @@ LED state interaction
 The :ref:`nrf_desktop_led_state` uses LEDs to display both the state of the system and the state of the connected Bluetooth® peer.
 The |led_stream| takes control over the selected LED only when the sequence is displayed.
 After the sequence ends, the LED effect selected by the LED state module is restored.
-
-.. |led_stream| replace:: LED stream module

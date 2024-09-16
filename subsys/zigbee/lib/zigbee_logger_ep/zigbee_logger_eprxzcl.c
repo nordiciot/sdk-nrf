@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <inttypes.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 #include <zigbee/zigbee_app_utils.h>
 #include <zigbee/zigbee_logger_eprxzcl.h>
@@ -248,7 +248,7 @@ zb_uint8_t zigbee_logger_eprxzcl_ep_handler(zb_bufid_t bufid)
 
 		*log_message_curr = '\0';
 
-		LOG_INST_INF(logger.inst, "%s", log_strdup(log_message));
+		LOG_INST_INF(logger.inst, "%s", log_message);
 	}
 
 	return ZB_FALSE;

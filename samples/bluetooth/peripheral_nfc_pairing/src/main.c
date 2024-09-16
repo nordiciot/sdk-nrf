@@ -3,13 +3,13 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
 
 #include <dk_buttons_and_leds.h>
 
@@ -25,7 +25,7 @@
 #include <nfc/tnep/tag.h>
 #include <nfc/tnep/ch.h>
 
-#include <settings/settings.h>
+#include <zephyr/settings/settings.h>
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
@@ -147,7 +147,7 @@ static void advertising_start(void)
  * @brief Callback function for handling NFC events.
  */
 static void nfc_callback(void *context,
-			 enum nfc_t4t_event event,
+			 nfc_t4t_event_t event,
 			 const uint8_t *data,
 			 size_t data_length,
 			 uint32_t flags)
@@ -244,17 +244,6 @@ static void auth_cancel(struct bt_conn *conn)
 	printk("Pairing cancelled: %s\n", addr);
 }
 
-static void pairing_confirm(struct bt_conn *conn)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-	bt_conn_auth_pairing_confirm(conn);
-
-	printk("Pairing confirmed: %s\n", addr);
-}
-
 static void lesc_oob_data_set(struct bt_conn *conn,
 			      struct bt_conn_oob_info *oob_info)
 {
@@ -334,7 +323,8 @@ static void pairing_complete(struct bt_conn *conn, bool bonded)
 	printk("Pairing completed: %s, bonded: %d\n", addr, bonded);
 
 	k_poll_signal_raise(&pair_signal, 0);
-	bt_set_oob_data_flag(false);
+	bt_le_oob_set_sc_flag(false);
+	bt_le_oob_set_legacy_flag(false);
 }
 
 static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
@@ -346,14 +336,15 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 	printk("Pairing failed conn: %s, reason %d\n", addr, reason);
 
 	k_poll_signal_raise(&pair_signal, 0);
-	bt_set_oob_data_flag(false);
+	bt_le_oob_set_sc_flag(false);
+	bt_le_oob_set_legacy_flag(false);
 }
 
 static enum bt_security_err pairing_accept(struct bt_conn *conn,
 				const struct bt_conn_pairing_feat *const feat)
 {
 	if (feat->oob_data_flag && (!(feat->auth_req & AUTH_SC_FLAG))) {
-		bt_set_oob_data_flag(true);
+		bt_le_oob_set_legacy_flag(true);
 	}
 
 	return BT_SECURITY_ERR_SUCCESS;
@@ -362,11 +353,13 @@ static enum bt_security_err pairing_accept(struct bt_conn *conn,
 
 static struct bt_conn_auth_cb conn_auth_callbacks = {
 	.cancel = auth_cancel,
-	.pairing_confirm = pairing_confirm,
 	.oob_data_request = auth_oob_data_request,
-	.pairing_complete = pairing_complete,
-	.pairing_failed = pairing_failed,
 	.pairing_accept = pairing_accept,
+};
+
+static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {
+	.pairing_complete = pairing_complete,
+	.pairing_failed = pairing_failed
 };
 
 static void connected(struct bt_conn *conn, uint8_t err)
@@ -426,7 +419,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 	}
 }
 
-static struct bt_conn_cb conn_callbacks = {
+BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected = connected,
 	.disconnected = disconnected,
 	.security_changed = security_changed,
@@ -538,17 +531,14 @@ static int oob_le_data_handle(const struct nfc_ndef_record_desc *rec,
 		return -EINVAL;
 	}
 
-	if (oob->le_sc_data || oob->tk_value) {
-		bt_set_oob_data_flag(true);
-	}
-
 	if (oob->le_sc_data) {
-
+		bt_le_oob_set_sc_flag(true);
 		oob_remote.le_sc_data = *oob->le_sc_data;
 		bt_addr_le_copy(&oob_remote.addr, oob->addr);
 	}
 
 	if (oob->tk_value) {
+		bt_le_oob_set_legacy_flag(true);
 		memcpy(remote_tk_value, oob->tk_value, sizeof(remote_tk_value));
 		use_remote_tk = request;
 	}
@@ -716,7 +706,7 @@ void button_changed(uint32_t button_state, uint32_t has_changed)
 	}
 }
 
-void main(void)
+int main(void)
 {
 	int err;
 
@@ -726,7 +716,7 @@ void main(void)
 	err = dk_leds_init();
 	if (err) {
 		printk("Cannot init LEDs!\n");
-		return;
+		return 0;
 	}
 
 	/* Configure buttons */
@@ -735,13 +725,22 @@ void main(void)
 		printk("Cannot init buttons (err %d\n", err);
 	}
 
-	bt_conn_cb_register(&conn_callbacks);
-	bt_conn_auth_cb_register(&conn_auth_callbacks);
+	err = bt_conn_auth_cb_register(&conn_auth_callbacks);
+	if (err) {
+		printk("Failed to register authorization callbacks.\n");
+		return 0;
+	}
+
+	err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
+	if (err) {
+		printk("Failed to register authorization info callbacks.\n");
+		return 0;
+	}
 
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Bluetooth initialized\n");
@@ -752,7 +751,7 @@ void main(void)
 
 	err = paring_key_generate();
 	if (err) {
-		return;
+		return 0;
 	}
 
 	k_work_init(&adv_work, adv_handler);

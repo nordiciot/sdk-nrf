@@ -5,12 +5,12 @@
  */
 
 #include <cloud_codec.h>
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <cJSON.h>
 #include <cJSON_os.h>
 #include <math.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(cloud_codec_ringbuffer, CONFIG_CLOUD_CODEC_LOG_LEVEL);
 
 void cloud_codec_populate_sensor_buffer(
@@ -64,30 +64,25 @@ void cloud_codec_populate_ui_buffer(struct cloud_data_ui *ui_buffer,
 		buffer_count - 1);
 }
 
-void cloud_codec_populate_accel_buffer(
-				struct cloud_data_accelerometer *mov_buf,
-				struct cloud_data_accelerometer *new_accel_data,
-				int *head_mov_buf,
+void cloud_codec_populate_impact_buffer(
+				struct cloud_data_impact *impact_buf,
+				struct cloud_data_impact *new_impact_data,
+				int *head_impact_buf,
 				size_t buffer_count)
 {
-	if (!IS_ENABLED(CONFIG_DATA_ACCELEROMETER_BUFFER_STORE)) {
-		return;
-	}
-
-	if (!new_accel_data->queued) {
+	if (!new_impact_data->queued) {
 		return;
 	}
 
 	/* Go to start of buffer if end is reached. */
-	*head_mov_buf += 1;
-	if (*head_mov_buf == buffer_count) {
-		*head_mov_buf = 0;
+	*head_impact_buf += 1;
+	if (*head_impact_buf == buffer_count) {
+		*head_impact_buf = 0;
 	}
 
-	mov_buf[*head_mov_buf] = *new_accel_data;
+	impact_buf[*head_impact_buf] = *new_impact_data;
 
-	LOG_DBG("Entry: %d of %d in movement buffer filled", *head_mov_buf,
-		buffer_count - 1);
+	LOG_DBG("Entry: %d of %d in impact buffer filled", *head_impact_buf, buffer_count - 1);
 }
 
 void cloud_codec_populate_bat_buffer(struct cloud_data_battery *bat_buffer,
@@ -115,28 +110,28 @@ void cloud_codec_populate_bat_buffer(struct cloud_data_battery *bat_buffer,
 		buffer_count - 1);
 }
 
-void cloud_codec_populate_gps_buffer(struct cloud_data_gps *gps_buffer,
-				    struct cloud_data_gps *new_gps_data,
-				    int *head_gps_buf,
+void cloud_codec_populate_gnss_buffer(struct cloud_data_gnss *gnss_buffer,
+				    struct cloud_data_gnss *new_gnss_data,
+				    int *head_gnss_buf,
 				    size_t buffer_count)
 {
-	if (!IS_ENABLED(CONFIG_DATA_GPS_BUFFER_STORE)) {
+	if (!IS_ENABLED(CONFIG_DATA_GNSS_BUFFER_STORE)) {
 		return;
 	}
 
-	if (!new_gps_data->queued) {
+	if (!new_gnss_data->queued) {
 		return;
 	}
 
 	/* Go to start of buffer if end is reached. */
-	*head_gps_buf += 1;
-	if (*head_gps_buf == buffer_count) {
-		*head_gps_buf = 0;
+	*head_gnss_buf += 1;
+	if (*head_gnss_buf == buffer_count) {
+		*head_gnss_buf = 0;
 	}
 
-	gps_buffer[*head_gps_buf] = *new_gps_data;
+	gnss_buffer[*head_gnss_buf] = *new_gnss_data;
 
-	LOG_DBG("Entry: %d of %d in GPS buffer filled", *head_gps_buf,
+	LOG_DBG("Entry: %d of %d in GNSS buffer filled", *head_gnss_buf,
 		buffer_count - 1);
 }
 

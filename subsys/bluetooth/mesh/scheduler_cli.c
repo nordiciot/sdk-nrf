@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <sys/byteorder.h>
+#include <zephyr/sys/byteorder.h>
 #include <bluetooth/mesh/models.h>
 #include "scheduler_internal.h"
 #include "model_utils.h"
@@ -34,7 +34,8 @@ static int handle_action_status(struct bt_mesh_model *model, struct bt_mesh_msg_
 				struct net_buf_simple *buf)
 {
 	struct bt_mesh_scheduler_cli *cli = model->user_data;
-	struct bt_mesh_schedule_entry action = {0};
+	struct bt_mesh_schedule_entry action_data = {0};
+	struct bt_mesh_schedule_entry *action = NULL;
 	struct bt_mesh_schedule_entry *rsp;
 	uint8_t idx;
 
@@ -44,7 +45,8 @@ static int handle_action_status(struct bt_mesh_model *model, struct bt_mesh_msg_
 	}
 
 	if (buf->len == BT_MESH_SCHEDULER_MSG_LEN_ACTION_STATUS) {
-		scheduler_action_unpack(buf, &idx, &action);
+		scheduler_action_unpack(buf, &idx, &action_data);
+		action = &action_data;
 	} else {
 		idx = net_buf_simple_pull_u8(buf);
 	}
@@ -52,15 +54,13 @@ static int handle_action_status(struct bt_mesh_model *model, struct bt_mesh_msg_
 	if (bt_mesh_msg_ack_ctx_match(&cli->ack_ctx, BT_MESH_SCHEDULER_OP_ACTION_STATUS,
 				      ctx->addr, (void **)&rsp) &&
 	    cli->ack_idx == idx) {
-		*rsp = action;
+		*rsp = action_data;
 		cli->ack_idx = BT_MESH_SCHEDULER_ACTION_ENTRY_COUNT;
 		bt_mesh_msg_ack_ctx_rx(&cli->ack_ctx);
 	}
 
 	if (cli->action_status_handler) {
-		cli->action_status_handler(cli, ctx, idx,
-			buf->len == BT_MESH_SCHEDULER_MSG_LEN_ACTION_STATUS ?
-				&action : NULL);
+		cli->action_status_handler(cli, ctx, idx, action);
 	}
 
 	return 0;
@@ -120,8 +120,14 @@ int bt_mesh_scheduler_cli_get(struct bt_mesh_scheduler_cli *cli,
 			BT_MESH_SCHEDULER_MSG_LEN_GET);
 	bt_mesh_model_msg_init(&buf, BT_MESH_SCHEDULER_OP_GET);
 
-	return model_ackd_send(cli->model, ctx, &buf, rsp ? &cli->ack_ctx : NULL,
-			BT_MESH_SCHEDULER_OP_STATUS, rsp);
+	struct bt_mesh_msg_rsp_ctx rsp_ctx = {
+		.ack = &cli->ack_ctx,
+		.op = BT_MESH_SCHEDULER_OP_STATUS,
+		.user_data = rsp,
+		.timeout = model_ackd_timeout_get(cli->model, ctx),
+	};
+
+	return bt_mesh_msg_ackd_send(cli->model, ctx, &buf, rsp ? &rsp_ctx : NULL);
 }
 
 int bt_mesh_scheduler_cli_action_get(struct bt_mesh_scheduler_cli *cli,
@@ -140,8 +146,14 @@ int bt_mesh_scheduler_cli_action_get(struct bt_mesh_scheduler_cli *cli,
 	net_buf_simple_add_u8(&buf, idx);
 	cli->ack_idx = rsp ? idx : BT_MESH_SCHEDULER_ACTION_ENTRY_COUNT;
 
-	return model_ackd_send(cli->model, ctx, &buf, rsp ? &cli->ack_ctx : NULL,
-			BT_MESH_SCHEDULER_OP_ACTION_STATUS, rsp);
+	struct bt_mesh_msg_rsp_ctx rsp_ctx = {
+		.ack = &cli->ack_ctx,
+		.op = BT_MESH_SCHEDULER_OP_ACTION_STATUS,
+		.user_data = rsp,
+		.timeout = model_ackd_timeout_get(cli->model, ctx),
+	};
+
+	return bt_mesh_msg_ackd_send(cli->model, ctx, &buf, rsp ? &rsp_ctx : NULL);
 }
 
 int bt_mesh_scheduler_cli_action_set(struct bt_mesh_scheduler_cli *cli,
@@ -154,31 +166,36 @@ int bt_mesh_scheduler_cli_action_set(struct bt_mesh_scheduler_cli *cli,
 			BT_MESH_SCHEDULER_MSG_LEN_ACTION_SET);
 	bt_mesh_model_msg_init(&buf, BT_MESH_SCHEDULER_OP_ACTION_SET);
 
-	if (entry == NULL || idx >= BT_MESH_SCHEDULER_ACTION_ENTRY_COUNT) {
+	if (!scheduler_action_valid(entry, idx)) {
 		return -EINVAL;
 	}
 
 	scheduler_action_pack(&buf, idx, entry);
 	cli->ack_idx = rsp ? idx : BT_MESH_SCHEDULER_ACTION_ENTRY_COUNT;
 
-	return model_ackd_send(cli->model, ctx, &buf, rsp ? &cli->ack_ctx : NULL,
-			BT_MESH_SCHEDULER_OP_ACTION_STATUS, rsp);
+	struct bt_mesh_msg_rsp_ctx rsp_ctx = {
+		.ack = &cli->ack_ctx,
+		.op = BT_MESH_SCHEDULER_OP_ACTION_STATUS,
+		.user_data = rsp,
+		.timeout = model_ackd_timeout_get(cli->model, ctx),
+	};
+
+	return bt_mesh_msg_ackd_send(cli->model, ctx, &buf, rsp ? &rsp_ctx : NULL);
 }
 
 int bt_mesh_scheduler_cli_action_set_unack(struct bt_mesh_scheduler_cli *cli,
-				struct bt_mesh_msg_ctx *ctx,
-				uint8_t idx,
-				const struct bt_mesh_schedule_entry *entry)
+					   struct bt_mesh_msg_ctx *ctx, uint8_t idx,
+					   const struct bt_mesh_schedule_entry *entry)
 {
 	BT_MESH_MODEL_BUF_DEFINE(buf, BT_MESH_SCHEDULER_OP_ACTION_SET_UNACK,
-			BT_MESH_SCHEDULER_MSG_LEN_ACTION_SET);
+				 BT_MESH_SCHEDULER_MSG_LEN_ACTION_SET);
 	bt_mesh_model_msg_init(&buf, BT_MESH_SCHEDULER_OP_ACTION_SET_UNACK);
 
-	if (entry == NULL || idx >= BT_MESH_SCHEDULER_ACTION_ENTRY_COUNT) {
+	if (!scheduler_action_valid(entry, idx)) {
 		return -EINVAL;
 	}
 
 	scheduler_action_pack(&buf, idx, entry);
 
-	return model_send(cli->model, ctx, &buf);
+	return bt_mesh_msg_send(cli->model, ctx, &buf);
 }

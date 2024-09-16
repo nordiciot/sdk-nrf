@@ -6,24 +6,24 @@
 
 #include <zephyr/types.h>
 
-#include <kernel.h>
+#include <zephyr/kernel.h>
 #include <soc.h>
-#include <device.h>
-#include <drivers/gpio.h>
-#include <sys/util.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/sys/util.h>
 
 #include <caf/key_id.h>
 #include <caf/gpio_pins.h>
 #include CONFIG_CAF_BUTTONS_DEF_PATH
 
-#include "event_manager.h"
+#include <app_event_manager.h>
 #include <caf/events/button_event.h>
 #include <caf/events/power_event.h>
 
 #define MODULE buttons
 #include <caf/events/module_state_event.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_CAF_BUTTONS_LOG_LEVEL);
 
 #define SCAN_INTERVAL CONFIG_CAF_BUTTONS_SCAN_INTERVAL
@@ -39,8 +39,11 @@ enum state {
 	STATE_SUSPENDING
 };
 
-static const struct device *gpio_devs[ARRAY_SIZE(port_map)];
-static struct gpio_callback gpio_cb[ARRAY_SIZE(port_map)];
+static const struct device * const gpio_devs[] = {
+	DEVICE_DT_GET_OR_NULL(DT_NODELABEL(gpio0)),
+	DEVICE_DT_GET_OR_NULL(DT_NODELABEL(gpio1)),
+};
+static struct gpio_callback gpio_cb[ARRAY_SIZE(gpio_devs)];
 static struct k_work_delayable matrix_scan;
 static struct k_work_delayable button_pressed;
 static enum state state;
@@ -109,8 +112,8 @@ static int set_trig_mode(void)
 	int err = 0;
 
 	for (size_t i = 0; (i < ARRAY_SIZE(row)) && !err; i++) {
-		__ASSERT_NO_MSG(row[i].port < ARRAY_SIZE(port_map));
-		__ASSERT_NO_MSG(port_map[row[i].port] != NULL);
+		__ASSERT_NO_MSG(row[i].port < ARRAY_SIZE(gpio_devs));
+		__ASSERT_NO_MSG(gpio_devs[row[i].port] != NULL);
 
 		err = gpio_pin_configure(gpio_devs[row[i].port], row[i].pin,
 					 flags);
@@ -290,7 +293,7 @@ static void scan_fn(struct k_work *work)
 
 				event->key_id = KEY_ID(i, j);
 				event->pressed = is_pressed;
-				EVENT_SUBMIT(event);
+				APP_EVENT_SUBMIT(event);
 
 				evt_limit++;
 
@@ -405,7 +408,7 @@ static void button_pressed_fn(struct k_work *work)
 	switch (state) {
 	case STATE_IDLE:
 		if (IS_ENABLED(CONFIG_CAF_BUTTONS_PM_EVENTS)) {
-			EVENT_SUBMIT(new_wake_up_event());
+			APP_EVENT_SUBMIT(new_wake_up_event());
 		}
 		break;
 
@@ -426,20 +429,19 @@ static void button_pressed_fn(struct k_work *work)
 static void init_fn(void)
 {
 	/* Setup GPIO configuration */
-	for (size_t i = 0; i < ARRAY_SIZE(port_map); i++) {
-		if (!port_map[i]) {
+	for (size_t i = 0; i < ARRAY_SIZE(gpio_devs); i++) {
+		if (!gpio_devs[i]) {
 			/* Skip non-existing ports */
 			continue;
 		}
-		gpio_devs[i] = device_get_binding(port_map[i]);
-		if (!gpio_devs[i]) {
-			LOG_ERR("Cannot get GPIO device binding");
+		if (!device_is_ready(gpio_devs[i])) {
+			LOG_ERR("GPIO device not ready");
 			goto error;
 		}
 	}
 
 	for (size_t i = 0; i < ARRAY_SIZE(col); i++) {
-		__ASSERT_NO_MSG(col[i].port < ARRAY_SIZE(port_map));
+		__ASSERT_NO_MSG(col[i].port < ARRAY_SIZE(gpio_devs));
 		__ASSERT_NO_MSG(gpio_devs[col[i].port] != NULL);
 
 		int err = gpio_pin_configure(gpio_devs[col[i].port],
@@ -457,7 +459,7 @@ static void init_fn(void)
 		goto error;
 	}
 
-	uint32_t pin_mask[ARRAY_SIZE(port_map)] = {0};
+	uint32_t pin_mask[ARRAY_SIZE(gpio_devs)] = {0};
 	for (size_t i = 0; i < ARRAY_SIZE(row); i++) {
 		/* Module starts in scanning mode and will switch to
 		 * callback mode if no button is pressed.
@@ -473,8 +475,8 @@ static void init_fn(void)
 		pin_mask[row[i].port] |= BIT(row[i].pin);
 	}
 
-	for (size_t i = 0; i < ARRAY_SIZE(port_map); i++) {
-		if (!port_map[i]) {
+	for (size_t i = 0; i < ARRAY_SIZE(gpio_devs); i++) {
+		if (!gpio_devs[i]) {
 			/* Skip non-existing ports */
 			continue;
 		}
@@ -499,10 +501,10 @@ error:
 	module_set_state(MODULE_STATE_ERROR);
 }
 
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
-	if (is_module_state_event(eh)) {
-		struct module_state_event *event = cast_module_state_event(eh);
+	if (is_module_state_event(aeh)) {
+		struct module_state_event *event = cast_module_state_event(aeh);
 
 		if (check_state(event, MODULE_ID(main), MODULE_STATE_READY)) {
 			static bool initialized;
@@ -522,14 +524,14 @@ static bool event_handler(const struct event_header *eh)
 	}
 
 	if (IS_ENABLED(CONFIG_CAF_BUTTONS_PM_EVENTS) &&
-	    is_wake_up_event(eh)) {
+	    is_wake_up_event(aeh)) {
 		resume();
 
 		return false;
 	}
 
 	if (IS_ENABLED(CONFIG_CAF_BUTTONS_PM_EVENTS) &&
-	    is_power_down_event(eh)) {
+	    is_power_down_event(aeh)) {
 		int err = suspend();
 
 		if (!err) {
@@ -553,9 +555,9 @@ static bool event_handler(const struct event_header *eh)
 
 	return false;
 }
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
 #if CONFIG_CAF_BUTTONS_PM_EVENTS
-EVENT_SUBSCRIBE_EARLY(MODULE, power_down_event);
-EVENT_SUBSCRIBE(MODULE, wake_up_event);
+APP_EVENT_SUBSCRIBE_EARLY(MODULE, power_down_event);
+APP_EVENT_SUBSCRIBE(MODULE, wake_up_event);
 #endif

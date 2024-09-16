@@ -3,15 +3,15 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <bluetooth/mesh/sensor.h>
-#include <bluetooth/mesh/properties.h>
+
 #include "sensor.h"
+#include <bluetooth/mesh/properties.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define BT_DBG_ENABLED IS_ENABLED(CONFIG_BT_MESH_DEBUG_MODEL)
-#define LOG_MODULE_NAME bt_mesh_sensor
-#include "common/log.h"
+#define LOG_LEVEL CONFIG_BT_MESH_MODEL_LOG_LEVEL
+#include "zephyr/logging/log.h"
+LOG_MODULE_REGISTER(bt_mesh_sensor);
 
 /** Scale away the sensor_value fraction, to allow integer math */
 #define SENSOR_MILL(_val) ((1000000LL * (_val)->val1) + (_val)->val2)
@@ -61,9 +61,21 @@ bool bt_mesh_sensor_delta_threshold(const struct bt_mesh_sensor *sensor,
 		thrsh_mill = (prev_mill * thrsh_mill) / (100LL * 1000000LL);
 	}
 
-	BT_DBG("Delta: %u (%d - %d) thrsh: %u", (uint32_t)(delta_mill / 1000000L),
-	       (int32_t)curr->val1, (int32_t)sensor->state.prev.val1,
-	       (uint32_t)(thrsh_mill / 1000000L));
+	if (IS_ENABLED(CONFIG_BT_MESH_MODEL_LOG_LEVEL_DBG)) {
+		char delta_str[BT_MESH_SENSOR_CH_STR_LEN];
+		char curr_str[BT_MESH_SENSOR_CH_STR_LEN];
+		char prev_str[BT_MESH_SENSOR_CH_STR_LEN];
+		char thrsh_str[BT_MESH_SENSOR_CH_STR_LEN];
+
+		strcpy(delta_str, bt_mesh_sensor_ch_str(&delta));
+		strcpy(curr_str, bt_mesh_sensor_ch_str(curr));
+		strcpy(prev_str, bt_mesh_sensor_ch_str(&sensor->state.prev));
+		strcpy(thrsh_str,
+		       delta_mill < 0 ? bt_mesh_sensor_ch_str(&sensor->state.threshold.delta.down) :
+					bt_mesh_sensor_ch_str(&sensor->state.threshold.delta.up));
+
+		LOG_DBG("Delta: %s (%s - %s) thrsh: %s", delta_str, curr_str, prev_str, thrsh_str);
+	}
 
 	return (delta_mill > thrsh_mill);
 }
@@ -126,12 +138,12 @@ static void tolerance_decode(uint16_t encoded, struct sensor_value *tolerance)
 }
 static uint16_t tolerance_encode(const struct sensor_value *tol)
 {
-	uint64_t tol_mill = 1000000L * tol->val1 + tol->val2;
+	uint64_t tol_mill = 1000000ULL * tol->val1 + tol->val2;
 
-	if (tol_mill > (1000000L * 100L)) {
+	if (tol_mill > (1000000ULL * 100ULL)) {
 		return 0;
 	}
-	return (tol_mill * 4095L + (1000000L * 50L)) / (1000000L * 100L);
+	return (tol_mill * 4095ULL + (1000000ULL * 50ULL)) / (1000000ULL * 100ULL);
 }
 
 void sensor_descriptor_decode(struct net_buf_simple *buf,
@@ -245,31 +257,48 @@ int sensor_status_encode(struct net_buf_simple *buf,
 const struct bt_mesh_sensor_format *
 bt_mesh_sensor_column_format_get(const struct bt_mesh_sensor_type *type)
 {
-	if (type->flags & BT_MESH_SENSOR_TYPE_FLAG_SERIES &&
-	    type->channel_count >= 2) {
+	if (type->channel_count > 2) {
 		return type->channels[1].format;
 	}
 
-	return &bt_mesh_sensor_format_time_decihour_8;
+	return NULL;
+}
+
+int sensor_column_value_encode(struct net_buf_simple *buf,
+			       struct bt_mesh_sensor_srv *srv,
+			       struct bt_mesh_sensor *sensor,
+			       struct bt_mesh_msg_ctx *ctx,
+			       uint32_t column_index)
+{
+	struct sensor_value values[CONFIG_BT_MESH_SENSOR_CHANNELS_MAX];
+	int err = sensor->series.get(srv, sensor, ctx, column_index, values);
+
+	if (err) {
+		return err;
+	}
+
+	return sensor_value_encode(buf, sensor->type, values);
 }
 
 int sensor_column_encode(struct net_buf_simple *buf,
+			 struct bt_mesh_sensor_srv *srv,
 			 struct bt_mesh_sensor *sensor,
 			 struct bt_mesh_msg_ctx *ctx,
 			 const struct bt_mesh_sensor_column *col)
 {
-	struct sensor_value values[CONFIG_BT_MESH_SENSOR_CHANNELS_MAX];
+	int col_index = col - sensor->series.columns;
+
 	const struct bt_mesh_sensor_format *col_format;
 	const uint64_t width_million =
-		(col->end.val1 - col->start.val1) * 1000000L +
+		(col->end.val1 - col->start.val1) * 1000000ULL +
 		(col->end.val2 - col->start.val2);
 	const struct sensor_value width = {
-		.val1 = width_million / 1000000L,
-		.val2 = width_million % 1000000L,
+		.val1 = width_million / 1000000ULL,
+		.val2 = width_million % 1000000ULL,
 	};
 	int err;
 
-	BT_DBG("Column width: %s", bt_mesh_sensor_ch_str(&width));
+	LOG_DBG("Column width: %s", bt_mesh_sensor_ch_str(&width));
 
 	col_format = bt_mesh_sensor_column_format_get(sensor->type);
 	if (!col_format) {
@@ -287,12 +316,7 @@ int sensor_column_encode(struct net_buf_simple *buf,
 		return err;
 	}
 
-	err = sensor->series.get(sensor, ctx, col, values);
-	if (err) {
-		return err;
-	}
-
-	return sensor_value_encode(buf, sensor->type, values);
+	return sensor_column_value_encode(buf, srv, sensor, ctx, col_index);
 }
 
 int sensor_column_decode(
@@ -304,6 +328,10 @@ int sensor_column_decode(
 	int err;
 
 	col_format = bt_mesh_sensor_column_format_get(type);
+	if (!col_format) {
+		return -ENOTSUP;
+	}
+
 	err = sensor_ch_decode(buf, col_format, &col->start);
 	if (err) {
 		return err;
@@ -554,8 +582,16 @@ void sensor_cadence_update(struct bt_mesh_sensor *sensor,
 
 	new = sensor_cadence(&sensor->state.threshold, value);
 
+	/** Use Fast Cadence Period Divisor when publishing when the change exceeds the delta,
+	 * section 4.3.1.2.4.3, E15551 and E15886.
+	 */
+	if (new == BT_MESH_SENSOR_CADENCE_NORMAL) {
+		new = bt_mesh_sensor_delta_threshold(sensor, value) ?
+			BT_MESH_SENSOR_CADENCE_FAST : BT_MESH_SENSOR_CADENCE_NORMAL;
+	}
+
 	if (sensor->state.fast_pub != new) {
-		BT_DBG("0x%04x new cadence: %s", sensor->type->id,
+		LOG_DBG("0x%04x new cadence: %s", sensor->type->id,
 		       (new == BT_MESH_SENSOR_CADENCE_FAST) ? "fast" :
 							      "normal");
 	}
@@ -563,7 +599,7 @@ void sensor_cadence_update(struct bt_mesh_sensor *sensor,
 	sensor->state.fast_pub = new;
 }
 
-const char *bt_mesh_sensor_ch_str_real(const struct sensor_value *ch)
+const char *bt_mesh_sensor_ch_str(const struct sensor_value *ch)
 {
 	static char str[BT_MESH_SENSOR_CH_STR_LEN];
 

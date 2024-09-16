@@ -8,11 +8,11 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stddef.h>
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 #include "common_test.h"
 #include <mbedtls/md.h>
-#include <sha512.h>
+#include <mbedtls/sha512.h>
 
 /* Setting LOG_LEVEL_DBG might affect time measurements! */
 LOG_MODULE_REGISTER(test_sha_512, LOG_LEVEL_INF);
@@ -113,12 +113,12 @@ static int exec_sha_512(test_vector_hash_t *p_test_vector, int in_len,
 			bool is_long)
 {
 	mbedtls_sha512_init(&sha512_context);
-	int err_code = mbedtls_sha512_starts_ret(&sha512_context, false);
+	int err_code = mbedtls_sha512_starts(&sha512_context, false);
 	TEST_VECTOR_ASSERT_EQUAL(0, err_code);
 
 	/* Update the hash. */
 	if (!is_long) {
-		err_code = mbedtls_sha512_update_ret(&sha512_context,
+		err_code = mbedtls_sha512_update(&sha512_context,
 						     m_sha_input_buf, in_len);
 	} else {
 		/* Update the hash until all input data is processed. */
@@ -129,7 +129,7 @@ static int exec_sha_512(test_vector_hash_t *p_test_vector, int in_len,
 				       4096);
 			}
 
-			err_code = mbedtls_sha512_update_ret(
+			err_code = mbedtls_sha512_update(
 				&sha512_context, m_sha_input_buf, in_len);
 			TEST_VECTOR_ASSERT_EQUAL(
 				p_test_vector->expected_err_code, err_code);
@@ -139,7 +139,7 @@ static int exec_sha_512(test_vector_hash_t *p_test_vector, int in_len,
 	TEST_VECTOR_ASSERT_EQUAL(p_test_vector->expected_err_code, err_code);
 
 	/* Finalize the hash. */
-	return mbedtls_sha512_finish_ret(&sha512_context, m_sha_output_buf);
+	return mbedtls_sha512_finish(&sha512_context, m_sha_output_buf);
 }
 
 /**@brief Function for verifying the SHA digest of messages.
@@ -163,7 +163,7 @@ void exec_test_case_sha_512(void)
 				  "Incorrect hash");
 
 	/* Do the same in a single step */
-	err_code = mbedtls_sha512_ret(m_sha_input_buf, in_len, m_sha_output_buf,
+	err_code = mbedtls_sha512(m_sha_input_buf, in_len, m_sha_output_buf,
 				      false);
 
 	TEST_VECTOR_ASSERT_EQUAL(p_test_vector->expected_err_code, err_code);
@@ -219,3 +219,21 @@ ITEM_REGISTER(test_case_sha_512_data, test_case_t test_sha_512_long) = {
 	.vectors_start = __start_test_vector_hash_512_long_data,
 	.vectors_stop = __stop_test_vector_hash_512_long_data,
 };
+
+#if defined(CONFIG_CRYPTO_TEST_HASH)
+ZTEST_SUITE(test_suite_sha_512, NULL, NULL, NULL, NULL, NULL);
+
+ZTEST(test_suite_sha_512, test_case_sha_256)
+{
+	sha_512_setup();
+	exec_test_case_sha_512();
+	sha_512_teardown();
+}
+
+ZTEST(test_suite_sha_512, test_case_sha_256_long)
+{
+	sha_512_long_setup();
+	exec_test_case_sha_512_long();
+	sha_512_long_teardown();
+}
+#endif

@@ -13,7 +13,7 @@
 #ifndef BT_ENOCEAN_H__
 #define BT_ENOCEAN_H__
 
-#include <bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/bluetooth.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -112,6 +112,15 @@ struct bt_enocean_callbacks {
 	 */
 	void (*commissioned)(struct bt_enocean_device *device);
 
+	/** @brief Callback for EnOcean decommissioning.
+	 *
+	 *  This callback is called for every new EnOcean device being
+	 *  decommissioned.
+	 *
+	 *  @param device Device that got decommissioned.
+	 */
+	void (*decommissioned)(struct bt_enocean_device *device);
+
 	/** @brief Callback for EnOcean devices being loaded from
 	 *         persistent storage.
 	 *
@@ -181,7 +190,7 @@ int bt_enocean_commission(const bt_addr_le_t *addr, const uint8_t key[16],
  */
 void bt_enocean_decommission(struct bt_enocean_device *dev);
 
-/** @brief Call the given callback for each commissioned enocean device.
+/** @brief Call the given callback for each commissioned EnOcean device.
  *
  *  @param cb        Callback to call for each device
  *  @param user_data User data to pass to the callback.

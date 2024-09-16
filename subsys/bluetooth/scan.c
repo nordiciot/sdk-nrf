@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
-#include <sys/byteorder.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/byteorder.h>
 #include <string.h>
 #include <bluetooth/scan.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(nrf_bt_scan, CONFIG_BT_SCAN_LOG_LEVEL);
 
 #define BT_SCAN_UUID_128_SIZE 16
@@ -238,10 +238,12 @@ static struct bt_scan {
 	/* Filter data. */
 	struct bt_scan_filters scan_filters;
 
+#if CONFIG_BT_CENTRAL
 	/* If set to true, the module automatically connects
 	 * after a filter match.
 	 */
 	bool connect_if_match;
+#endif /* CONFIG_BT_CENTRAL */
 
 	/* Scan parameters required to initialize the module.
 	 * Can be initialized as NULL. If NULL, the parameters required to
@@ -303,6 +305,7 @@ static void notify_filter_no_match(struct bt_scan_device_info *device_info,
 	}
 }
 
+#if CONFIG_BT_CENTRAL
 static void notify_connecting(struct bt_scan_device_info *device_info,
 			      struct bt_conn *conn)
 {
@@ -325,6 +328,7 @@ static void notify_connecting_error(struct bt_scan_device_info *device_info)
 		}
 	}
 }
+#endif /* CONFIG_BT_CENTRAL */
 
 #if CONFIG_BT_SCAN_BLOCKLIST
 static bool blocklist_device_check(const bt_addr_le_t *addr)
@@ -379,14 +383,13 @@ static void scan_attempts_filter_device_add(const bt_addr_le_t *addr)
 
 		if (bt_addr_le_cmp(addr, &device->addr) == 0) {
 			LOG_DBG("Device %s is already in the filter array",
-				log_strdup(addr_str));
+				addr_str);
 			goto out;
 		}
 	}
 
 	if (filter->count >= ARRAY_SIZE(filter->device)) {
-		LOG_DBG("Force adding %s device filter",
-			log_strdup(addr_str));
+		LOG_DBG("Force adding %s device filter", addr_str);
 		attempts_filter_force_add(filter, addr);
 	} else {
 		bt_addr_le_copy(&filter->device[filter->count].addr, addr);
@@ -436,7 +439,7 @@ static bool conn_attempts_exceeded(const bt_addr_le_t *addr)
 		if (bt_addr_le_cmp(addr, &device->addr) == 0) {
 			if (device->attempts >= CONFIG_BT_SCAN_CONN_ATTEMPTS_COUNT) {
 				LOG_DBG("Connection attempts count for %s exceeded",
-					log_strdup(addr_str));
+					addr_str);
 				attempts_exceeded = true;
 			}
 
@@ -468,6 +471,7 @@ static bool scan_device_filter_check(const bt_addr_le_t *addr)
 	return true;
 }
 
+#if CONFIG_BT_CENTRAL
 static void scan_connect_with_target(struct bt_scan_control *control,
 				     const bt_addr_le_t *addr)
 {
@@ -500,6 +504,7 @@ static void scan_connect_with_target(struct bt_scan_control *control,
 		bt_conn_unref(conn);
 	}
 }
+#endif /* CONFIG_BT_CENTRAL */
 
 static bool adv_addr_compare(const bt_addr_le_t *target_addr,
 			     struct bt_scan_control *control)
@@ -1294,7 +1299,7 @@ int bt_scan_filter_enable(uint8_t mode, bool match_all)
 	return 0;
 }
 
-int bt_scan_filter_get(struct bt_filter_status *status)
+int bt_scan_filter_status_get(struct bt_filter_status *status)
 {
 	if (!status) {
 		return -EINVAL;
@@ -1313,6 +1318,7 @@ int bt_scan_filter_get(struct bt_filter_status *status)
 			bt_scan.scan_filters.appearance.enabled;
 	status->appearance.cnt =
 			bt_scan.scan_filters.appearance.cnt;
+	status->manufacturer_data.enabled = bt_scan.scan_filters.manufacturer_data.enabled;
 	status->manufacturer_data.cnt =
 			bt_scan.scan_filters.manufacturer_data.cnt;
 
@@ -1336,7 +1342,9 @@ void bt_scan_init(const struct bt_scan_init_param *init)
 	 * use it to scan the configuration.
 	 */
 	if (init) {
+#if CONFIG_BT_CENTRAL
 		bt_scan.connect_if_match = init->connect_if_match;
+#endif /* CONFIG_BT_CENTRAL */
 
 		if (init->scan_param) {
 			bt_scan.scan_param = *init->scan_param;
@@ -1356,7 +1364,9 @@ void bt_scan_init(const struct bt_scan_init_param *init)
 		scan_default_param_set();
 		scan_default_conn_param_set();
 
+#if CONFIG_BT_CENTRAL
 		bt_scan.connect_if_match = false;
+#endif /* CONFIG_BT_CENTRAL */
 	}
 
 #if CONFIG_BT_SCAN_CONN_ATTEMPTS_FILTER
@@ -1460,7 +1470,9 @@ static void filter_state_check(struct bt_scan_control *control,
 		notify_filter_matched(&control->device_info,
 				      &control->filter_status,
 				      control->connectable);
+#if CONFIG_BT_CENTRAL
 		scan_connect_with_target(control, addr);
+#endif /* CONFIG_BT_CENTRAL */
 	}
 
 	/* In the normal filter mode, only one filter match is
@@ -1470,7 +1482,9 @@ static void filter_state_check(struct bt_scan_control *control,
 		notify_filter_matched(&control->device_info,
 				      &control->filter_status,
 				      control->connectable);
+#if CONFIG_BT_CENTRAL
 		scan_connect_with_target(control, addr);
+#endif /* CONFIG_BT_CENTRAL */
 	} else {
 		notify_filter_no_match(&control->device_info,
 				       control->connectable);
@@ -1578,7 +1592,7 @@ int bt_scan_blocklist_device_add(const bt_addr_le_t *addr)
 	for (size_t i = 0; i < ARRAY_SIZE(bt_scan.blocklist.addr); i++) {
 		if (bt_addr_le_cmp(&bt_scan.blocklist.addr[i], addr) == 0) {
 			LOG_DBG("Device %s is already on the blocklist",
-				log_strdup(addr_str));
+				addr_str);
 
 			goto out;
 		}
@@ -1591,8 +1605,7 @@ int bt_scan_blocklist_device_add(const bt_addr_le_t *addr)
 		bt_addr_le_copy(&bt_scan.blocklist.addr[bt_scan.blocklist.count],
 				addr);
 		bt_scan.blocklist.count++;
-		LOG_INF("Device %s added to the scanning blocklist",
-			log_strdup(addr_str));
+		LOG_INF("Device %s added to the scanning blocklist", addr_str);
 	}
 
 out:

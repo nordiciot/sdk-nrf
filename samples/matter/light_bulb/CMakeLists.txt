@@ -6,19 +6,18 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
-option(BUILD_WITH_DFU "Build target with Device Firmware Upgrade support" OFF)
-if(BUILD_WITH_DFU)
-# Use multi-image DFU for the nRF5340dk
-    if(${BOARD} STREQUAL "nrf5340dk_nrf5340_cpuapp")
-        set(CONF_FILE prj_multi_image_dfu.conf)
-    else()
-        set(CONF_FILE prj_single_image_dfu.conf)
-    endif()
-    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/configuration/${BOARD}/pm_static.yml")
-        set(PM_STATIC_YML_FILE ${CMAKE_CURRENT_SOURCE_DIR}/configuration/${BOARD}/pm_static.yml)
-    else()
-        message(FATAL_ERROR "The ${BOARD} target does not support DFU")
-    endif()
+# Set Kconfig root files that will be processed as a first Kconfig for used child images.
+set(mcuboot_KCONFIG_ROOT "\\\${ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR}/config/nrfconnect/chip-module/Kconfig.mcuboot.root")
+set(multiprotocol_rpmsg_KCONFIG_ROOT "\\\${ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR}/config/nrfconnect/chip-module/Kconfig.multiprotocol_rpmsg.root")
+set(hci_rpmsg_KCONFIG_ROOT "\\\${ZEPHYR_CONNECTEDHOMEIP_MODULE_DIR}/config/nrfconnect/chip-module/Kconfig.hci_rpmsg.root")
+
+# For prj.conf the CONF_FILE is empty. In other case extract the exact file name from the path string.
+if(CONF_FILE)
+    get_filename_component(CONFIG_FILE_NAME ${CONF_FILE} NAME)
+endif()
+
+if(NOT CONFIG_FILE_NAME STREQUAL "prj_no_dfu.conf")
+    set(PM_STATIC_YML_FILE ${CMAKE_CURRENT_SOURCE_DIR}/configuration/${BOARD}/pm_static_dfu.yml)
 endif()
 
 find_package(Zephyr HINTS $ENV{ZEPHYR_BASE})
@@ -40,23 +39,26 @@ target_include_directories(app PRIVATE
 
 target_sources(app PRIVATE
     src/app_task.cpp
-    src/lighting_manager.cpp
-    src/light_bulb_publish_service.cpp
     src/main.cpp
     src/zcl_callbacks.cpp
-    src/zap-generated/attribute-size.cpp
     src/zap-generated/IMClusterCommandHandler.cpp
     src/zap-generated/callback-stub.cpp
     ${COMMON_ROOT}/src/led_widget.cpp
-    ${COMMON_ROOT}/src/thread_util.cpp
+    ${COMMON_ROOT}/src/pwm_device.cpp
 )
 
-if(BUILD_WITH_DFU)
+if(CONFIG_CHIP_OTA_REQUESTOR OR CONFIG_MCUMGR_TRANSPORT_BT)
+    target_sources(app PRIVATE ${COMMON_ROOT}/src/ota_util.cpp)
+endif()
+
+if(CONFIG_MCUMGR_TRANSPORT_BT)
     target_sources(app PRIVATE ${COMMON_ROOT}/src/dfu_over_smp.cpp)
 endif()
 
 chip_configure_data_model(app
     INCLUDE_SERVER
+    BYPASS_IDL
+    GEN_DIR src/zap-generated
     ZAP_FILE ${CMAKE_CURRENT_SOURCE_DIR}/src/light_bulb.zap
 )
 # NORDIC SDK APP END

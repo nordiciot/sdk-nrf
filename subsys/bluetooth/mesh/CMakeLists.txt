@@ -36,6 +36,8 @@ zephyr_library_sources_ifdef(CONFIG_BT_MESH_LIGHTNESS_SRV lightness_srv.c)
 zephyr_library_sources_ifdef(CONFIG_BT_MESH_LIGHTNESS_CLI lightness_cli.c)
 
 zephyr_library_sources_ifdef(CONFIG_BT_MESH_LIGHT_CTRL_SRV light_ctrl_srv.c)
+zephyr_library_sources_ifdef(CONFIG_BT_MESH_LIGHT_CTRL_REG light_ctrl_reg.c)
+zephyr_library_sources_ifdef(CONFIG_BT_MESH_LIGHT_CTRL_REG_SPEC light_ctrl_reg_spec.c)
 zephyr_library_sources_ifdef(CONFIG_BT_MESH_LIGHT_CTRL_CLI light_ctrl_cli.c)
 
 zephyr_library_sources_ifdef(CONFIG_BT_MESH_DK_PROV dk_prov.c)
@@ -72,6 +74,9 @@ zephyr_library_sources_ifdef(CONFIG_BT_MESH_SCHEDULER_CLI scheduler_cli.c)
 zephyr_library_sources_ifdef(CONFIG_BT_MESH_SCHEDULER_SRV scheduler_srv.c)
 
 add_subdirectory_ifdef(CONFIG_BT_MESH_VENDOR_MODELS vnd)
+add_subdirectory_ifdef(CONFIG_BT_MESH_SHELL shell)
 
 zephyr_linker_sources(SECTIONS sensor_types.ld)
 zephyr_linker_sources(SECTIONS scene_types.ld)
+
+zephyr_library_sources_ifdef(CONFIG_BT_MESH_RPL_STORAGE_MODE_EMDS rpl.c)

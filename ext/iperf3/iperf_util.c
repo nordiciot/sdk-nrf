@@ -105,30 +105,6 @@ int getrusage(int who, struct rusage *usage)
 #endif
 
 #if defined (CONFIG_NRF_IPERF3_MULTICONTEXT_SUPPORT)
-int iperf_util_socket_apn_set(int fd, const char *apn)
-{
-	int ret;
-	size_t len;
-	struct ifreq ifr = {0};
-
-	__ASSERT_NO_MSG(apn);
-
-	len = strlen(apn);
-	if (len >= sizeof(ifr.ifr_name)) {
-		printk("Access point name is too long\n");
-		return -EINVAL;
-	}
-
-	memcpy(ifr.ifr_name, apn, len);
-	ret = setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, &ifr, len);
-	if (ret < 0) {
-		printk("Failed to bind socket, error: %d, %s\n",  ret, strerror(ret));
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
 int iperf_util_socket_pdn_id_set(int fd, const char *pdn_id_str)
 {
 	int ret;
@@ -216,12 +192,12 @@ void fill_with_repeating_pattern(void *out, size_t outsize)
 void make_cookie(char *cookie)
 {
     int len = strlen(CONFIG_NRF_IPERF3_HOST_NAME);
-    char hostname[len];
+    char hostname[len + 1];
     struct timeval tv = { .tv_sec = 0, .tv_usec = 0 };
     char temp[100];
 
     /* Generate a string based on hostname, time, randomness, and filler. */
-    (void) nrf_iperf3_mock_gethostname(hostname, sizeof(hostname) + 1);    
+    (void) nrf_iperf3_mock_gethostname(hostname, sizeof(hostname));
     (void) gettimeofday(&tv, 0);
     (void) snprintf(temp, sizeof(temp), "%s.%ld.%06ld.%08lx%08lx.%s", hostname, (unsigned long int) tv.tv_sec, (unsigned long int) tv.tv_usec, (unsigned long int) rand(), (unsigned long int) rand(), "1234567890123456789012345678901234567890");
 

@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <logging/log.h>
-#include <zephyr.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/kernel.h>
 #include <stdio.h>
-#include <net/mqtt.h>
-#include <net/socket.h>
-#include <random/rand32.h>
+#include <zephyr/net/mqtt.h>
+#include <zephyr/net/socket.h>
+#include <zephyr/random/rand32.h>
 #include "slm_util.h"
 #include "slm_at_host.h"
 #include "slm_native_tls.h"
@@ -19,9 +19,6 @@ LOG_MODULE_REGISTER(slm_mqtt, CONFIG_SLM_LOG_LEVEL);
 
 #define MQTT_MAX_TOPIC_LEN	128
 #define MQTT_MAX_CID_LEN	64
-#define MQTT_MESSAGE_BUFFER_LEN	NET_IPV4_MTU
-
-#define INVALID_FDS -1
 
 /**@brief MQTT client operations. */
 enum slm_mqttcon_operation {
@@ -57,11 +54,10 @@ static char mqtt_password[SLM_MAX_PASSWORD + 1];
 
 static struct mqtt_publish_param pub_param;
 static uint8_t pub_topic[MQTT_MAX_TOPIC_LEN];
-static uint8_t pub_msg[MQTT_MESSAGE_BUFFER_LEN];
 
 /* global variable defined in different files */
 extern struct at_param_list at_param_list;
-extern char rsp_buf[SLM_AT_CMD_RESPONSE_MAX_LEN];
+extern uint8_t data_buf[SLM_MAX_MESSAGE_SIZE];
 
 #define THREAD_STACK_SIZE	KB(2)
 #define THREAD_PRIORITY		K_LOWEST_APPLICATION_THREAD_PRIO
@@ -70,44 +66,42 @@ static struct k_thread mqtt_thread;
 static K_THREAD_STACK_DEFINE(mqtt_thread_stack, THREAD_STACK_SIZE);
 
 /* Buffers for MQTT client. */
-static uint8_t rx_buffer[MQTT_MESSAGE_BUFFER_LEN];
-static uint8_t tx_buffer[MQTT_MESSAGE_BUFFER_LEN];
-static uint8_t payload_buf[MQTT_MESSAGE_BUFFER_LEN];
+static uint8_t rx_buffer[CONFIG_SLM_MQTTC_MESSAGE_BUFFER_LEN];
+static uint8_t tx_buffer[CONFIG_SLM_MQTTC_MESSAGE_BUFFER_LEN];
 
 /* The mqtt client struct */
 static struct mqtt_client client;
-
-/**@brief Function to read the published payload.
- */
-static int publish_get_payload(struct mqtt_client *c, size_t length)
-{
-	if (length > sizeof(payload_buf)) {
-		return -EMSGSIZE;
-	}
-
-	return mqtt_readall_publish_payload(c, payload_buf, length);
-}
 
 /**@brief Function to handle received publish event.
  */
 static int handle_mqtt_publish_evt(struct mqtt_client *const c, const struct mqtt_evt *evt)
 {
+	int size_read = 0;
 	int ret;
 
-	ret = publish_get_payload(c, evt->param.publish.message.payload.len);
-	if (ret < 0) {
-		return ret;
-	}
-
-	sprintf(rsp_buf, "\r\n#XMQTTMSG: %d,%d\r\n",
+	rsp_send("\r\n#XMQTTMSG: %d,%d\r\n",
 		evt->param.publish.message.topic.topic.size,
 		evt->param.publish.message.payload.len);
-	rsp_send(rsp_buf, strlen(rsp_buf));
-	rsp_send(evt->param.publish.message.topic.topic.utf8,
+	data_send(evt->param.publish.message.topic.topic.utf8,
 		evt->param.publish.message.topic.topic.size);
-	rsp_send("\r\n", 2);
-	rsp_send(payload_buf, evt->param.publish.message.payload.len);
-	rsp_send("\r\n", 2);
+	data_send("\r\n", 2);
+	do {
+		ret = mqtt_read_publish_payload_blocking(c, data_buf, sizeof(data_buf));
+		if (ret > 0) {
+			data_send(data_buf, ret);
+			size_read += ret;
+		}
+	} while (ret >= 0 && size_read < evt->param.publish.message.payload.len);
+	data_send("\r\n", 2);
+
+	/* Send QoS1 acknowledgment */
+	if (evt->param.publish.message.topic.qos == MQTT_QOS_1_AT_LEAST_ONCE) {
+		const struct mqtt_puback_param ack = {
+			.message_id = evt->param.publish.message_id
+		};
+
+		mqtt_publish_qos1_ack(&client, &ack);
+	}
 
 	return 0;
 }
@@ -205,9 +199,7 @@ void mqtt_evt_handler(struct mqtt_client *const c, const struct mqtt_evt *evt)
 		break;
 	}
 
-	sprintf(rsp_buf, "\r\n#XMQTTEVT: %d,%d\r\n",
-		evt->type, ret);
-	rsp_send(rsp_buf, strlen(rsp_buf));
+	rsp_send("\r\n#XMQTTEVT: %d,%d\r\n", evt->type, ret);
 }
 
 static void mqtt_thread_fn(void *arg1, void *arg2, void *arg3)
@@ -279,7 +271,7 @@ static int broker_init(void)
 
 	err = util_resolve_host(0, mqtt_broker_url, mqtt_broker_port, ctx.family, &sa);
 	if (err) {
-		LOG_ERR("getaddrinfo() error: %s", log_strdup(gai_strerror(err)));
+		LOG_ERR("getaddrinfo() error: %s", gai_strerror(err));
 		return -EAGAIN;
 	}
 	if (sa.sa_family == AF_INET) {
@@ -511,21 +503,19 @@ int handle_at_mqtt_connect(enum at_cmd_type cmd_type)
 
 	case AT_CMD_TYPE_READ_COMMAND:
 		if (ctx.sec_tag != INVALID_SEC_TAG) {
-			sprintf(rsp_buf, "\r\n#XMQTTCON: %d,\"%s\",\"%s\",%d,%d\r\n",
+			rsp_send("\r\n#XMQTTCON: %d,\"%s\",\"%s\",%d,%d\r\n",
 				ctx.connected, mqtt_clientid, mqtt_broker_url, mqtt_broker_port,
 				ctx.sec_tag);
 		} else {
-			sprintf(rsp_buf, "\r\n#XMQTTCON: %d,\"%s\",\"%s\",%d\r\n",
+			rsp_send("\r\n#XMQTTCON: %d,\"%s\",\"%s\",%d\r\n",
 				ctx.connected, mqtt_clientid, mqtt_broker_url, mqtt_broker_port);
 		}
-		rsp_send(rsp_buf, strlen(rsp_buf));
 		err = 0;
 		break;
 
 	case AT_CMD_TYPE_TEST_COMMAND:
-		sprintf(rsp_buf, "\r\n#XMQTTCON: (0,1,2),<cid>,<username>,"
-				 "<password>,<url>,<port>,<sec_tag>\r\n");
-		rsp_send(rsp_buf, strlen(rsp_buf));
+		rsp_send("\r\n#XMQTTCON: (0,1,2),<cid>,<username>,"
+			 "<password>,<url>,<port>,<sec_tag>\r\n");
 		err = 0;
 		break;
 
@@ -536,11 +526,16 @@ int handle_at_mqtt_connect(enum at_cmd_type cmd_type)
 	return err;
 }
 
-static int mqtt_datamode_callback(uint8_t op, const uint8_t *data, int len)
+static int mqtt_datamode_callback(uint8_t op, const uint8_t *data, int len, uint8_t flags)
 {
 	int ret = 0;
 
 	if (op == DATAMODE_SEND) {
+		if ((flags & SLM_DATAMODE_FLAGS_MORE_DATA) != 0) {
+			LOG_ERR("Datamode buffer overflow");
+			(void)exit_datamode_handler(-EOVERFLOW);
+			return -EOVERFLOW;
+		}
 		ret = do_mqtt_publish((uint8_t *)data, len);
 		LOG_INF("datamode send: %d", ret);
 	} else if (op == DATAMODE_EXIT) {
@@ -562,7 +557,8 @@ int handle_at_mqtt_publish(enum at_cmd_type cmd_type)
 	uint16_t qos = MQTT_QOS_0_AT_MOST_ONCE;
 	uint16_t retain = 0;
 	size_t topic_sz = MQTT_MAX_TOPIC_LEN;
-	size_t msg_sz = MQTT_MESSAGE_BUFFER_LEN;
+	uint8_t pub_msg[SLM_MAX_PAYLOAD_SIZE];
+	size_t msg_sz = sizeof(pub_msg);
 	uint16_t param_count = at_params_valid_count_get(&at_param_list);
 
 	switch (cmd_type) {
@@ -572,33 +568,22 @@ int handle_at_mqtt_publish(enum at_cmd_type cmd_type)
 			return err;
 		}
 		pub_msg[0] = '\0';
-		if (at_params_type_get(&at_param_list, 2) == AT_PARAM_TYPE_STRING) {
+		if (param_count > 2) {
 			err = util_string_get(&at_param_list, 2, pub_msg, &msg_sz);
 			if (err) {
 				return err;
 			}
-			if (param_count > 3) {
-				err = at_params_unsigned_short_get(&at_param_list, 3, &qos);
-				if (err) {
-					return err;
-				}
-			}
-			if (param_count > 4) {
-				err = at_params_unsigned_short_get(&at_param_list, 4, &retain);
-				if (err) {
-					return err;
-				}
-			}
-		} else if (at_params_type_get(&at_param_list, 2) == AT_PARAM_TYPE_NUM_INT) {
-			err = at_params_unsigned_short_get(&at_param_list, 2, &qos);
+		}
+		if (param_count > 3) {
+			err = at_params_unsigned_short_get(&at_param_list, 3, &qos);
 			if (err) {
 				return err;
 			}
-			if (param_count > 3) {
-				err = at_params_unsigned_short_get(&at_param_list, 3, &retain);
-				if (err) {
-					return err;
-				}
+		}
+		if (param_count > 4) {
+			err = at_params_unsigned_short_get(&at_param_list, 4, &retain);
+			if (err) {
+				return err;
 			}
 		}
 
@@ -629,8 +614,7 @@ int handle_at_mqtt_publish(enum at_cmd_type cmd_type)
 		break;
 
 	case AT_CMD_TYPE_TEST_COMMAND:
-		sprintf(rsp_buf, "\r\n#XMQTTPUB: <topic>,<msg>,(0,1,2),(0,1)\r\n");
-		rsp_send(rsp_buf, strlen(rsp_buf));
+		rsp_send("\r\n#XMQTTPUB: <topic>,<msg>,(0,1,2),(0,1)\r\n");
 		err = 0;
 		break;
 
@@ -671,8 +655,7 @@ int handle_at_mqtt_subscribe(enum at_cmd_type cmd_type)
 		break;
 
 	case AT_CMD_TYPE_TEST_COMMAND:
-		sprintf(rsp_buf, "\r\n#XMQTTSUB: <topic>,(0,1,2)\r\n");
-		rsp_send(rsp_buf, strlen(rsp_buf));
+		rsp_send("\r\n#XMQTTSUB: <topic>,(0,1,2)\r\n");
 		err = 0;
 		break;
 
@@ -710,8 +693,7 @@ int handle_at_mqtt_unsubscribe(enum at_cmd_type cmd_type)
 		break;
 
 	case AT_CMD_TYPE_TEST_COMMAND:
-		sprintf(rsp_buf, "\r\n#XMQTTUNSUB: <topic>\r\n");
-		rsp_send(rsp_buf, strlen(rsp_buf));
+		rsp_send("\r\n#XMQTTUNSUB: <topic>\r\n");
 		err = 0;
 		break;
 

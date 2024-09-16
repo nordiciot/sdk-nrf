@@ -17,6 +17,9 @@
 #include <bluetooth/mesh/light_xyl.h>
 #include <bluetooth/mesh/model_types.h>
 #include <bluetooth/mesh/lightness_srv.h>
+#if IS_ENABLED(CONFIG_EMDS) && IS_ENABLED(CONFIG_BT_SETTINGS)
+#include "emds/emds.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -87,6 +90,12 @@ struct bt_mesh_light_xy_status {
 struct bt_mesh_light_xyl_srv_handlers {
 	/** @brief Set the xy state.
 	 *
+	 * When a set message is received, the model publishes a status message, with the response
+	 * set to @c rsp. When an acknowledged set message is received, the model also sends a
+	 * response back to a client. If a state change is non-instantaneous, for example when
+	 * @ref bt_mesh_model_transition_time returns a nonzero value, the application is
+	 * responsible for publishing a value of the xy state at the end of the transition.
+	 *
 	 * @note This handler is mandatory.
 	 *
 	 * @param[in] srv Server to set the xy state of.
@@ -156,19 +165,21 @@ struct bt_mesh_light_xyl_srv {
 	/** Transaction ID tracker for the set messages. */
 	struct bt_mesh_tid_ctx prev_transaction;
 
-#if CONFIG_BT_SETTINGS
-	/** Storage timer */
-	struct k_work_delayable store_timer;
-#endif
 	/** Current range parameters */
 	struct bt_mesh_light_xy_range range;
 	/** Handler function structure. */
 	const struct bt_mesh_light_xyl_srv_handlers *handlers;
-
-	/** The last known xy Level. */
-	struct bt_mesh_light_xy xy_last;
 	/** The default xy Level. */
 	struct bt_mesh_light_xy xy_default;
+	struct __packed {
+		/** The last known xy Level. */
+		struct bt_mesh_light_xy xy_last;
+	} transient;
+
+#if IS_ENABLED(CONFIG_EMDS) && IS_ENABLED(CONFIG_BT_SETTINGS)
+	/** Dynamic entry to be stored with EMDS */
+	struct emds_dynamic_entry emds_entry;
+#endif
 };
 
 /** @brief Publish the current xyL status.

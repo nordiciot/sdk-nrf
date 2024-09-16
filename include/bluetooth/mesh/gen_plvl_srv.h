@@ -14,12 +14,15 @@
 #ifndef BT_MESH_GEN_PLVL_SRV_H__
 #define BT_MESH_GEN_PLVL_SRV_H__
 
-#include <bluetooth/mesh.h>
+#include <zephyr/bluetooth/mesh.h>
 
 #include <bluetooth/mesh/gen_plvl.h>
 #include <bluetooth/mesh/gen_lvl_srv.h>
 #include <bluetooth/mesh/gen_ponoff_srv.h>
 #include <bluetooth/mesh/model_types.h>
+#if IS_ENABLED(CONFIG_EMDS) && IS_ENABLED(CONFIG_BT_SETTINGS)
+#include "emds/emds.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -64,6 +67,12 @@ struct bt_mesh_plvl_srv;
 /** Collection of handler callbacks for the Generic Power Level Server. */
 struct bt_mesh_plvl_srv_handlers {
 	/** @brief Set the Power state.
+	 *
+	 * When a set message is received, the model publishes a status message, with the response
+	 * set to @c rsp. When an acknowledged set message is received, the model also sends a
+	 * response back to a client. If a state change is non-instantaneous, for example when
+	 * @ref bt_mesh_model_transition_time returns a nonzero value, the application is
+	 * responsible for publishing a value of the Power state at the end of the transition.
 	 *
 	 * @note This handler is mandatory.
 	 *
@@ -154,18 +163,21 @@ struct bt_mesh_plvl_srv {
 	/** User handler functions. */
 	const struct bt_mesh_plvl_srv_handlers *const handlers;
 
-#if CONFIG_BT_SETTINGS
-	/** Storage timer */
-	struct k_work_delayable store_timer;
-#endif
 	/** Current Power Range. */
 	struct bt_mesh_plvl_range range;
 	/** Current Default Power. */
 	uint16_t default_power;
-	/** The last known Power Level. */
-	uint16_t last;
-	/** Whether the Power is on. */
-	bool is_on;
+	struct __packed {
+		/** The last known Power Level. */
+		uint16_t last;
+		/** Whether the Power is on. */
+		bool is_on;
+	} transient;
+
+#if IS_ENABLED(CONFIG_EMDS) && IS_ENABLED(CONFIG_BT_SETTINGS)
+	/** Dynamic entry to be stored with EMDS */
+	struct emds_dynamic_entry emds_entry;
+#endif
 };
 
 /** @brief Publish the current Power state.

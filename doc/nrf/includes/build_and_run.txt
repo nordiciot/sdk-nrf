@@ -1,3 +1,4 @@
 This sample can be found under |sample path| in the |NCS| folder structure.
 
-See :ref:`gs_programming` for information about how to build and program the application.
+To build the sample with |VSC|, follow the steps listed on the `How to build an application`_ page in the |nRFVSC| documentation.
+See :ref:`gs_programming` for other building and programming scenarios and :ref:`gs_testing` for general information about testing and debugging in the |NCS|.

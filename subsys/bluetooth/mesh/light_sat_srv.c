@@ -5,37 +5,39 @@
  */
 
 #include <stdlib.h>
-#include <sys/byteorder.h>
+#include <zephyr/sys/byteorder.h>
 #include <bluetooth/mesh/light_sat_srv.h>
 #include <bluetooth/mesh/light_hsl_srv.h>
 #include <bluetooth/mesh/gen_dtt_srv.h>
 #include "light_hsl_internal.h"
 #include "model_utils.h"
 
-#define BT_DBG_ENABLED IS_ENABLED(CONFIG_BT_MESH_DEBUG_MODEL)
-#define LOG_MODULE_NAME bt_mesh_light_sat_srv
-#include "common/log.h"
+#define LOG_LEVEL CONFIG_BT_MESH_MODEL_LOG_LEVEL
+#include "zephyr/logging/log.h"
+LOG_MODULE_REGISTER(bt_mesh_light_sat_srv);
 
 #define LVL_TO_SAT(_lvl) ((_lvl) + 32768)
 #define SAT_TO_LVL(_satur) ((_satur) - 32768)
 
 struct settings_data {
 	struct bt_mesh_light_hsl_range range;
-	uint16_t last;
 	uint16_t dflt;
+#if !IS_ENABLED(CONFIG_EMDS)
+	uint16_t last;
+#endif
 } __packed;
 
 #if CONFIG_BT_SETTINGS
-static void store_timeout(struct k_work *work)
+static void sat_srv_pending_store(struct bt_mesh_model *model)
 {
-	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-	struct bt_mesh_light_sat_srv *srv = CONTAINER_OF(
-		dwork, struct bt_mesh_light_sat_srv, store_timer);
+	struct bt_mesh_light_sat_srv *srv = model->user_data;
 
 	struct settings_data data = {
 		.range = srv->range,
-		.last = srv->last,
 		.dflt = srv->dflt,
+#if !IS_ENABLED(CONFIG_EMDS)
+		.last = srv->transient.last,
+#endif
 	};
 
 	(void)bt_mesh_model_data_store(srv->model, false, NULL, &data,
@@ -46,9 +48,7 @@ static void store_timeout(struct k_work *work)
 static void store(struct bt_mesh_light_sat_srv *srv)
 {
 #if CONFIG_BT_SETTINGS
-	k_work_schedule(
-		&srv->store_timer,
-		K_SECONDS(CONFIG_BT_MESH_MODEL_SRV_STORE_TIMEOUT));
+	bt_mesh_model_data_store_schedule(srv->model);
 #endif
 }
 
@@ -236,7 +236,7 @@ static void lvl_delta_set(struct bt_mesh_lvl_srv *lvl_srv,
 		srv->handlers->get(srv, NULL, &status);
 		start = status.current;
 	} else {
-		start = srv->last;
+		start = srv->transient.last;
 	}
 
 	set.lvl =
@@ -249,7 +249,7 @@ static void lvl_delta_set(struct bt_mesh_lvl_srv *lvl_srv,
 	 * storage will still be the target value, allowing us to recover
 	 * correctly on power loss.
 	 */
-	srv->last = start;
+	srv->transient.last = start;
 
 	if (rsp) {
 		rsp->current = SAT_TO_LVL(status.current);
@@ -294,7 +294,7 @@ static void lvl_move_set(struct bt_mesh_lvl_srv *lvl_srv,
 					 (uint64_t)move_set->transition->time) /
 					abs(move_set->delta);
 
-		BT_DBG("Move: distance: %u delta: %u step: %u ms time: %u ms",
+		LOG_DBG("Move: distance: %u delta: %u step: %u ms time: %u ms",
 		       (uint32_t)distance, move_set->delta,
 		       move_set->transition->time, time_to_edge);
 
@@ -387,8 +387,15 @@ static int sat_srv_init(struct bt_mesh_model *model)
 	net_buf_simple_init_with_data(&srv->buf, srv->pub_data,
 				      ARRAY_SIZE(srv->pub_data));
 
-#if CONFIG_BT_SETTINGS
-	k_work_init_delayable(&srv->store_timer, store_timeout);
+#if IS_ENABLED(CONFIG_BT_SETTINGS) && IS_ENABLED(CONFIG_EMDS)
+	srv->emds_entry.entry.id = EMDS_MODEL_ID(model);
+	srv->emds_entry.entry.data = (uint8_t *)&srv->transient;
+	srv->emds_entry.entry.len = sizeof(srv->transient);
+	int err = emds_entry_add(&srv->emds_entry);
+
+	if (err) {
+		return err;
+	}
 #endif
 
 	return bt_mesh_model_extend(model, srv->lvl.model);
@@ -408,8 +415,10 @@ static int sat_srv_settings_set(struct bt_mesh_model *model, const char *name,
 	}
 
 	srv->range = data.range;
-	srv->last = data.last;
 	srv->dflt = data.dflt;
+#if !IS_ENABLED(CONFIG_EMDS)
+	srv->transient.last = data.last;
+#endif
 
 	return 0;
 }
@@ -420,7 +429,7 @@ static void sat_srv_reset(struct bt_mesh_model *model)
 
 	srv->range.min = BT_MESH_LIGHT_HSL_MIN;
 	srv->range.max = BT_MESH_LIGHT_HSL_MAX;
-	srv->last = 0;
+	srv->transient.last = 0;
 	srv->dflt = 0;
 
 	net_buf_simple_reset(srv->pub.msg);
@@ -434,6 +443,9 @@ const struct bt_mesh_model_cb _bt_mesh_light_sat_srv_cb = {
 	.init = sat_srv_init,
 	.settings_set = sat_srv_settings_set,
 	.reset = sat_srv_reset,
+#if CONFIG_BT_SETTINGS
+	.pending_store = sat_srv_pending_store,
+#endif
 };
 
 void bt_mesh_light_sat_srv_set(struct bt_mesh_light_sat_srv *srv,
@@ -441,10 +453,12 @@ void bt_mesh_light_sat_srv_set(struct bt_mesh_light_sat_srv *srv,
 			       const struct bt_mesh_light_sat *set,
 			       struct bt_mesh_light_sat_status *status)
 {
-	srv->last = set->lvl;
+	srv->transient.last = set->lvl;
 	srv->handlers->set(srv, ctx, set, status);
 
-	store(srv);
+	if (!IS_ENABLED(CONFIG_EMDS)) {
+		store(srv);
+	}
 }
 
 void bt_mesh_light_sat_srv_default_set(struct bt_mesh_light_sat_srv *srv,
@@ -484,5 +498,5 @@ int bt_mesh_light_sat_srv_pub(struct bt_mesh_light_sat_srv *srv,
 	BT_MESH_MODEL_BUF_DEFINE(msg, BT_MESH_LIGHT_SAT_OP_STATUS,
 				 BT_MESH_LIGHT_HSL_MSG_MAXLEN_SAT_STATUS);
 	encode_status(&msg, status);
-	return model_send(srv->model, ctx, &msg);
+	return bt_mesh_msg_send(srv->model, ctx, &msg);
 }

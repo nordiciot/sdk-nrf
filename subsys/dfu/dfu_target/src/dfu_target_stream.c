@@ -4,16 +4,16 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
-#include <logging/log.h>
-#include <storage/stream_flash.h>
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/storage/stream_flash.h>
 #include <stdio.h>
 #include <dfu/dfu_target_stream.h>
 
 #ifdef CONFIG_DFU_TARGET_STREAM_SAVE_PROGRESS
 #define MODULE "dfu"
 #define DFU_STREAM_OFFSET "stream/offset"
-#include <settings/settings.h>
+#include <zephyr/settings/settings.h>
 #endif /* CONFIG_DFU_TARGET_STREAM_SAVE_PROGRESS */
 
 LOG_MODULE_REGISTER(dfu_target_stream, CONFIG_DFU_TARGET_LOG_LEVEL);
@@ -53,9 +53,9 @@ static int store_progress(void)
 static int settings_set(const char *key, size_t len_rd,
 			settings_read_cb read_cb, void *cb_arg)
 {
-	if (!strcmp(key, current_id)) {
+	if (current_id && !strcmp(key, current_id)) {
 		int err;
-		int absolute_offset;
+		off_t absolute_offset;
 		struct flash_pages_info page;
 		ssize_t len = read_cb(cb_arg, &stream.bytes_written,
 				      sizeof(stream.bytes_written));
@@ -65,7 +65,13 @@ static int settings_set(const char *key, size_t len_rd,
 			return len;
 		}
 
-		absolute_offset = stream.offset + stream.bytes_written;
+		/* Zero bytes written - set last erased page to its default. */
+		if (stream.bytes_written == 0) {
+			stream.last_erased_page_start_offset = -1;
+			return 0;
+		}
+
+		absolute_offset = stream.offset + stream.bytes_written - 1;
 
 		err = flash_get_page_info_by_offs(stream.fdev,
 						  absolute_offset,
@@ -209,4 +215,20 @@ int dfu_target_stream_done(bool successful)
 	current_id = NULL;
 
 	return err;
+}
+
+int dfu_target_stream_reset(void)
+{
+	int ret;
+
+	stream.buf_bytes = 0;
+	stream.bytes_written = 0;
+
+	/* Erase just the first page. Stream write will take care of erasing remaining pages
+	 * on a next buffered_write round
+	 */
+	ret = stream_flash_erase_page(&stream, stream.offset);
+
+	current_id = NULL;
+	return ret;
 }

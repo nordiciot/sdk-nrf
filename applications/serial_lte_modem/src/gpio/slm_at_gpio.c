@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <logging/log.h>
-#include <zephyr.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/kernel.h>
 #include <stdio.h>
-#include <drivers/gpio.h>
+#include <zephyr/drivers/gpio.h>
 #include "slm_util.h"
 #include "slm_at_gpio.h"
 #include "slm_at_host.h"
@@ -16,9 +16,8 @@ LOG_MODULE_REGISTER(slm_gpio, CONFIG_SLM_LOG_LEVEL);
 
 /* global variable defined in different resources */
 extern struct at_param_list at_param_list;
-extern char rsp_buf[SLM_AT_CMD_RESPONSE_MAX_LEN];
 
-static const struct device *gpio_dev;
+static const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
 static sys_slist_t slm_gpios = SYS_SLIST_STATIC_INIT(&slm_gpios);
 
 /* global variable defined in different files */
@@ -143,16 +142,14 @@ static int do_gpio_pin_configure_read(void)
 	int err = 0;
 	struct slm_gpio_pin_node *cur = NULL, *next = NULL;
 
-	sprintf(rsp_buf, "\r\n#XGPIOCFG\r\n");
-	rsp_send(rsp_buf, strlen(rsp_buf));
+	rsp_send("\r\n#XGPIOCFG\r\n");
 
 	if (sys_slist_peek_head(&slm_gpios) != NULL) {
 		SYS_SLIST_FOR_EACH_CONTAINER_SAFE(&slm_gpios, cur,
 						  next, node) {
 			if (cur) {
 				LOG_DBG("%hu,%hu", cur->op, cur->pin);
-				sprintf(rsp_buf, "%hu,%hu\r\n", cur->op, cur->pin);
-				rsp_send(rsp_buf, strlen(rsp_buf));
+				rsp_send("%hu,%hu\r\n", cur->op, cur->pin);
 			}
 		}
 	}
@@ -185,8 +182,7 @@ static int do_gpio_pin_operate(uint16_t op, gpio_pin_t pin, uint16_t value)
 						return ret;
 					}
 					LOG_DBG("Read value: %d", ret);
-					sprintf(rsp_buf, "\r\n#XGPIO: %d,%d\r\n", pin, ret);
-					rsp_send(rsp_buf, strlen(rsp_buf));
+					rsp_send("\r\n#XGPIO: %d,%d\r\n", pin, ret);
 				} else if (op == SLM_GPIO_OP_TOGGLE) {
 					LOG_DBG("Toggle pin: %d", cur->pin);
 					ret = gpio_pin_toggle(gpio_dev, pin);
@@ -289,14 +285,12 @@ int handle_at_gpio_operate(enum at_cmd_type cmd_type)
 
 int slm_at_gpio_init(void)
 {
-	int err = 0;
-
-	gpio_dev = device_get_binding(DT_LABEL(DT_NODELABEL(gpio0)));
-	if (gpio_dev == NULL) {
-		LOG_ERR("GPIO_0 bind error");
-		err = -EIO;
+	if (!device_is_ready(gpio_dev)) {
+		LOG_ERR("GPIO controller not ready");
+		return -ENODEV;
 	}
-	return err;
+
+	return 0;
 }
 
 int slm_at_gpio_uninit(void)

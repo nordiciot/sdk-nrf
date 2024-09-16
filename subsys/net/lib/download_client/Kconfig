@@ -94,7 +94,7 @@ comment "Thread and stack buffers"
 config DOWNLOAD_CLIENT_STACK_SIZE
 	int "Thread stack size"
 	range 768 4096
-	default 1024
+	default 1280
 
 config DOWNLOAD_CLIENT_MAX_HOSTNAME_SIZE
 	int "Maximum hostname length (stack)"
@@ -116,18 +116,18 @@ config DOWNLOAD_CLIENT_TCP_SOCK_TIMEO_MS
 	  when the server is not responding and client should give up.
 	  Set to -1 disable.
 
-config DOWNLOAD_CLIENT_UDP_SOCK_TIMEO_MS
-	int "Receive timeout on UDP sockets, in milliseconds"
-	default 4000
-	range -1 30000
+config DOWNLOAD_CLIENT_COAP_MAX_RETRANSMIT_REQUEST_COUNT
+	int "Number of CoAP request retransmissions"
+	default 4
+	range 1 10
 	help
-	  Socket timeout for recv() calls, in milliseconds.
-	  When using CoAP, set a timeout to be able to detect
-	  when a retrasmission is necessary.
-	  Set to -1 disable.
+	  As part of CoAP exponential backoff mechanism this is the number
+	  of retransmissions of a request. If the retransmissions exceeds,
+	  the download will be stopped.
 
 config DOWNLOAD_CLIENT_RANGE_REQUESTS
 	bool "Always use HTTP Range requests"
+	default y
 	help
 	  Always use HTTP Range requests when downloading (RFC 7233).
 	  This option can be useful to limit the amount of incoming data from the server

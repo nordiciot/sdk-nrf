@@ -14,21 +14,22 @@ static const char * const status_name[] = {
 #undef X
 };
 
-static int log_config_event(const struct event_header *eh, char *buf,
-			    size_t buf_len)
+static void log_config_event(const struct app_event_header *aeh)
 {
-	const struct config_event *event = cast_config_event(eh);
+	const struct config_event *event = cast_config_event(aeh);
 
 	__ASSERT_NO_MSG(event->status < ARRAY_SIZE(status_name));
 
-	return snprintf(buf, buf_len, "%s %s rcpt: %02x id: %02x",
+	APP_EVENT_MANAGER_LOG(aeh, "%s %s rcpt: %02x id: %02x",
 			status_name[event->status],
 			event->is_request ? "req" : "rsp",
 			event->recipient,
 			event->event_id);
 }
 
-EVENT_TYPE_DEFINE(config_event,
-		  IS_ENABLED(CONFIG_DESKTOP_INIT_LOG_CONFIG_EVENT),
+APP_EVENT_TYPE_DEFINE(config_event,
 		  log_config_event,
-		  NULL);
+		  NULL,
+		  APP_EVENT_FLAGS_CREATE(
+			IF_ENABLED(CONFIG_DESKTOP_INIT_LOG_CONFIG_EVENT,
+				(APP_EVENT_TYPE_FLAGS_INIT_LOG_ENABLE))));

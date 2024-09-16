@@ -10,28 +10,28 @@ Bluetooth: Central HIDS
 The Central HIDS sample demonstrates how to use the :ref:`hogp_readme` to interact with a HIDS server.
 Basically, the sample simulates a computer that connects to a mouse or a keyboard.
 
-Overview
-********
-
-The sample scans available devices, searching for a HIDS server.
-If any HIDS server is found, the sample connects to it and discovers all characteristics.
-
-If any input reports are detected, the sample subscribes to them to receive notifications.
-If any boot reports are detected, the behavior depends on if they are boot mouse reports or boot keyboard reports:
-
-* If a boot mouse report is detected, the sample subscribes to it.
-* If a boot keyboard report is detected, the sample subscribes to its input report, and the sample functionality of changing the CAPSLOCK LED is enabled (Button 1 and 3).
-
 Requirements
 ************
 
 The sample supports the following development kits:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp_and_cpuapp_ns , nrf52840dk_nrf52840, nrf52833dk_nrf52833, nrf52833dk_nrf52820, nrf52dk_nrf52832
+.. table-from-sample-yaml::
 
-The sample also requires a HIDS device to connect with (for example, another development kit running the :ref:`peripheral_hids_mouse` or :ref:`peripheral_hids_keyboard` sample, or a Bluetooth® Low Energy dongle and nRF Connect for Desktop).
+.. include:: /includes/tfm.txt
+
+The sample also requires a HIDS device to connect with (for example, another development kit running the :ref:`peripheral_hids_mouse` sample or :ref:`peripheral_hids_keyboard` sample, or a computer with a Bluetooth® Low Energy dongle and `nRF Connect for Desktop`_).
+
+Overview
+********
+
+The sample scans available devices, searching for a HIDS server.
+If a HIDS server is found, the sample connects to it and discovers all characteristics.
+
+If any input reports are detected, the sample subscribes to them to receive notifications.
+If any boot reports are detected, the behavior depends on if they are boot mouse reports or boot keyboard reports:
+
+* If a boot mouse report is detected, the sample subscribes to it.
+* If a boot keyboard report is detected, the sample subscribes to its input report, and the sample functionality of changing the CAPSLOCK LED is enabled (**Button 1** and **3**).
 
 User interface
 **************
@@ -58,7 +58,7 @@ Building and Running
 ********************
 .. |sample path| replace:: :file:`samples/bluetooth/central_hids`
 
-.. include:: /includes/build_and_run.txt
+.. include:: /includes/build_and_run_ns.txt
 
 
 Testing
@@ -73,7 +73,7 @@ Testing with another development kit
 1. |connect_terminal_specific|
 #. Reset the kit.
 #. Program the other kit with the :ref:`peripheral_hids_keyboard` sample and reset it.
-#. When connected, press Button 1 on both devices to confirm the passkey value used for bonding, or press Button 2 to reject it.
+#. When connected, press **Button 1** on both devices to confirm the passkey value used for bonding, or press **Button 2** to reject it.
 #. Wait until the HIDS keyboard is detected by the central.
    All detected descriptors are listed.
    In the terminal window, check for information similar to the following::
@@ -118,12 +118,13 @@ Testing with nRF Connect for Desktop
 
 1. |connect_terminal_specific|
 #. Reset the kit.
-#. Start `nRF Connect for Desktop`_ and select the connected dongle that is used for communication.
-#. Go to the :guilabel:`Server setup` tab.
+#. Start `nRF Connect for Desktop`_.
+#. Open the Bluetooth Low Energy app and select the connected dongle that is used for communication.
+#. Open the :guilabel:`SERVER SETUP` tab.
    Click the dongle configuration and select :guilabel:`Load setup`.
    Load the :file:`hids_keyboard.ncs` file that is located under :file:`samples/bluetooth/central_hids` in the |NCS| folder structure.
 #. Click :guilabel:`Apply to device`.
-#. Go to the :guilabel:`Connection Map` tab.
+#. Open the :guilabel:`CONNECTION MAP` tab.
    Click the dongle configuration and select :guilabel:`Advertising setup`.
 
    The current version of nRF Connect cannot store the advertising setup, so it must be configured manually.
@@ -132,7 +133,7 @@ Testing with nRF Connect for Desktop
    .. figure:: /images/bt_central_hids_nrfc_ad.png
       :alt: Advertising setup for HIDS keyboard simulator
 
-   Advertising setup for HIDS keyboard simulator
+      Advertising setup for HIDS keyboard simulator
 
    Complete the following steps to configure the advertising setup:
 
@@ -146,7 +147,7 @@ Testing with nRF Connect for Desktop
    #. Add a **Complete local name** of your choice to the **Scan response data**.
    #. Click :guilabel:`Apply` and :guilabel:`Close`.
 
-#. In the Adapter settings, choose :guilabel:`Start advertising`.
+#. In the **Adapter settings**, select :guilabel:`Start advertising`.
 #. Wait until the kit that runs the Central HIDS sample connects.
    All detected descriptors are listed.
    Check for information similar to the following::
@@ -157,8 +158,8 @@ Testing with nRF Connect for Desktop
 
 #. Explore the first report inside Human Interface Device (the one with eight values).
    Change any of the values and note that the kit logs the change.
-#. Press **Button 2** on the kit and observe that the Protocol Mode value changes from ``01`` to ``00``.
-#. Press **Button 1** and **Button 3** one after another and observe that the Boot Keyboard Output Report value toggles between ``00`` and ``02``.
+#. Press **Button 2** on the kit and observe that the **Protocol Mode** value changes from ``01`` to ``00``.
+#. Press **Button 1** and **Button 3** one after another and observe that the **Boot Keyboard Output Report** value toggles between ``00`` and ``02``.
 
 Dependencies
 *************
@@ -172,14 +173,18 @@ This sample uses the following |NCS| libraries:
 
 In addition, it uses the following Zephyr libraries:
 
-* ``include/sys/byteorder.h``
-* ``include/zephyr/types.h``
-* ``lib/libc/minimal/include/errno.h``
-* ``include/sys/printk.h``
+* :file:`include/sys/byteorder.h`
+* :file:`include/zephyr/types.h`
+* :file:`lib/libc/minimal/include/errno.h`
+* :file:`include/sys/printk.h`
 * :ref:`zephyr:bluetooth_api`:
 
-  * ``include/bluetooth/bluetooth.h``
-  * ``include/bluetooth/gatt.h``
-  * ``include/bluetooth/hci.h``
-  * ``include/bluetooth/conn.h``
-  * ``include/bluetooth/uuid.h``
+  * :file:`include/bluetooth/bluetooth.h`
+  * :file:`include/bluetooth/gatt.h`
+  * :file:`include/bluetooth/hci.h`
+  * :file:`include/bluetooth/conn.h`
+  * :file:`include/bluetooth/uuid.h`
+
+The sample also uses the following secure firmware component:
+
+* :ref:`Trusted Firmware-M <ug_tfm>`

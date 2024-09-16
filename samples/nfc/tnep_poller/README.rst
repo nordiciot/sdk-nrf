@@ -9,28 +9,26 @@ NFC: TNEP poller
 
 The NFC TNEP poller sample demonstrates how to use the :ref:`tnep_poller_readme` library to exchange data using an NFC polling device.
 
-Overview
-********
-
-The sample can interact with the NFC Type 4 Tag.
-
-Initially, the sample reads the NFC Type 4 Tag and looks for the TNEP initial message.
-After finding it, the first service from the message is selected and the poller attempts to exchange data.
-Next, the service is deselected.
-
 Requirements
 ************
 
 The sample supports the following development kits:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp, nrf52840dk_nrf52840, nrf52dk_nrf52832, nrf52833dk_nrf52833
+.. table-from-sample-yaml::
 
 The sample has the following additional requirements:
 
 * NFC Reader ST25R3911B Nucleo expansion board (X-NUCLEO-NFC05A1)
 * NFC Type 4 Tag TNEP device
+
+Overview
+********
+
+The sample interacts with the NFC Type 4 Tag.
+
+The sample reads the NFC Type 4 Tag and looks for the TNEP initial message.
+After finding it, the first service from the message is selected and the poller attempts to exchange data.
+Next, the service is deselected.
 
 Building and running
 ********************
@@ -39,10 +37,14 @@ Building and running
 
 .. include:: /includes/build_and_run.txt
 
+.. note::
+   |nfc_nfct_driver_note|
+
 Testing
 =======
 
 After programming the sample to your development kit, you can test it with an NFC-A Tag device that supports NFC's TNEP.
+Complete the following steps:
 
 1. |connect_terminal|
 #. Reset the kit.
@@ -58,7 +60,7 @@ This sample uses the following |NCS| drivers:
 
 * :ref:`st25r3911b_nfc_readme`
 
-This sample uses the following |NCS| libraries:
+It uses the following |NCS| libraries:
 
 * :ref:`tnep_poller_readme`
 * :ref:`nfc_ndef_parser_readme`

@@ -4,21 +4,21 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <console/console.h>
+#include <zephyr/console/console.h>
 #include <string.h>
-#include <sys/printk.h>
+#include <zephyr/sys/printk.h>
 #include <zephyr/types.h>
 
-#if defined(CONFIG_USB)
-#include <usb/usb_device.h>
-#include <drivers/uart.h>
+#if defined(CONFIG_USB_DEVICE_STACK)
+#include <zephyr/usb/usb_device.h>
+#include <zephyr/drivers/uart.h>
 #endif
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/gatt.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/uuid.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/uuid.h>
 #include <bluetooth/services/latency.h>
 #include <bluetooth/services/latency_client.h>
 #include <bluetooth/scan.h>
@@ -27,12 +27,14 @@
 
 #define DEVICE_NAME	CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
-#define INTERVAL_MIN    0x50     /* 80 units,  100 ms */
-#define INTERVAL_MAX    0x50     /* 80 units,  100 ms */
+#define INTERVAL_MIN    0x6     /* 6 units,  7.5 ms */
+#define INTERVAL_MAX    0x6     /* 6 units,  7.5 ms */
 #define INTERVAL_LLPM   0x0D01   /* Proprietary  1 ms */
 #define INTERVAL_LLPM_US 1000
 
-static volatile bool test_ready;
+
+static K_SEM_DEFINE(test_ready_sem, 0, 1);
+static bool test_ready;
 static struct bt_conn *default_conn;
 static struct bt_latency latency;
 static struct bt_latency_client latency_client;
@@ -128,6 +130,7 @@ static void discovery_complete(struct bt_gatt_dm *dm, void *context)
 
 	/* Start testing when the GATT service is discovered */
 	test_ready = true;
+	k_sem_give(&test_ready_sem);
 }
 
 static void discovery_service_not_found(struct bt_conn *conn, void *context)
@@ -188,22 +191,20 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	}
 
 	/* make sure we're not scanning or advertising */
-	if (conn_info.role == BT_CONN_ROLE_MASTER) {
+	if (conn_info.role == BT_CONN_ROLE_CENTRAL) {
 		bt_scan_stop();
 	} else {
 		bt_le_adv_stop();
+		err = bt_conn_set_security(conn, BT_SECURITY_L2);
+		if (err) {
+			printk("Failed to set security: %d\n", err);
+		}
 	}
 
 	printk("Connected as %s\n",
-	       conn_info.role == BT_CONN_ROLE_MASTER ? "master" : "slave");
+	       conn_info.role == BT_CONN_ROLE_CENTRAL ? "central" : "peripheral");
 	printk("Conn. interval is %u units (1.25 ms/unit)\n",
 	       conn_info.le.interval);
-
-	err = bt_gatt_dm_start(default_conn, BT_UUID_LATENCY, &discovery_cb,
-			       &latency_client);
-	if (err) {
-		printk("Discover failed (err %d)\n", err);
-	}
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
@@ -217,7 +218,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 		default_conn = NULL;
 	}
 
-	if (conn_info.role == BT_CONN_ROLE_MASTER) {
+	if (conn_info.role == BT_CONN_ROLE_CENTRAL) {
 		scan_start();
 	} else {
 		adv_start();
@@ -375,7 +376,7 @@ static void test_run(void)
 	test_ready = false;
 
 	/* Switch to LLPM short connection interval */
-	if (conn_info.role == BT_CONN_ROLE_MASTER) {
+	if (conn_info.role == BT_CONN_ROLE_CENTRAL) {
 		printk("Press any key to set LLPM short connection interval (1 ms)\n");
 		console_getchar();
 
@@ -411,22 +412,41 @@ static void test_run(void)
 	}
 }
 
-void main(void)
+void security_changed(struct bt_conn *conn, bt_security_t level,
+				 enum bt_security_err err)
+{
+	printk("Security changed: level %i, err: %i\n", level, err);
+
+	if (err != 0) {
+		printk("Failed to encrypt link\n");
+		bt_conn_disconnect(conn, BT_HCI_ERR_PAIRING_NOT_SUPPORTED);
+		return;
+	}
+	/*Start service discovery when link is encrypted*/
+	err = bt_gatt_dm_start(default_conn, BT_UUID_LATENCY, &discovery_cb,
+			       &latency_client);
+	if (err) {
+		printk("Discover failed (err %d)\n", err);
+	}
+}
+
+BT_CONN_CB_DEFINE(conn_callbacks) = {
+	.connected = connected,
+	.disconnected = disconnected,
+	.le_param_updated = le_param_updated,
+	.security_changed = security_changed,
+};
+
+int main(void)
 {
 	int err;
-	static struct bt_conn_cb conn_callbacks = {
-		.connected = connected,
-		.disconnected = disconnected,
-		.le_param_updated = le_param_updated,
-	};
 
-#if defined(CONFIG_USB)
-	const struct device *uart_dev = device_get_binding(
-			CONFIG_UART_CONSOLE_ON_DEV_NAME);
+#if defined(CONFIG_USB_DEVICE_STACK)
+	const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_console));
 	uint32_t dtr = 0;
 
 	if (usb_enable(NULL)) {
-		return;
+		return 0;
 	}
 
 	/* Poll if the DTR flag was set, optional */
@@ -440,12 +460,10 @@ void main(void)
 
 	printk("Starting Bluetooth LLPM example\n");
 
-	bt_conn_cb_register(&conn_callbacks);
-
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Bluetooth initialized\n");
@@ -453,34 +471,34 @@ void main(void)
 	err = bt_latency_init(&latency, NULL);
 	if (err) {
 		printk("Latency service initialization failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	err = bt_latency_client_init(&latency_client, &latency_client_cb);
 	if (err) {
 		printk("Latency client initialization failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	if (enable_llpm_mode()) {
 		printk("Enable LLPM mode failed.\n");
-		return;
+		return 0;
 	}
 
 	while (true) {
-		printk("Choose device role - type m (master role) or s (slave role): ");
+		printk("Choose device role - type c (central) or p (peripheral): ");
 
 		char input_char = console_getchar();
 
 		printk("\n");
 
-		if (input_char == 'm') {
-			printk("Master role. Starting scanning\n");
+		if (input_char == 'c') {
+			printk("Central. Starting scanning\n");
 			scan_init();
 			scan_start();
 			break;
-		} else if (input_char == 's') {
-			printk("Slave role. Starting advertising\n");
+		} else if (input_char == 'p') {
+			printk("Peripheral. Starting advertising\n");
 			adv_start();
 			break;
 		}
@@ -490,12 +508,11 @@ void main(void)
 
 	if (enable_qos_conn_evt_report()) {
 		printk("Enable LLPM QoS failed.\n");
-		return;
+		return 0;
 	}
 
 	for (;;) {
-		if (test_ready) {
-			test_run();
-		}
+		k_sem_take(&test_ready_sem, K_FOREVER);
+		test_run();
 	}
 }

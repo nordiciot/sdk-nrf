@@ -10,6 +10,17 @@ Bluetooth: Central UART
 The Central UART sample demonstrates how to use the :ref:`nus_client_readme`.
 It uses the NUS Client to send data back and forth between a UART connection and a Bluetooth® LE connection, emulating a serial port over Bluetooth LE.
 
+Requirements
+************
+
+The sample supports the following development kits:
+
+.. table-from-sample-yaml::
+
+.. include:: /includes/tfm.txt
+
+The sample also requires another development kit running a compatible application (see :ref:`peripheral_uart`).
+
 Overview
 ********
 
@@ -34,22 +45,12 @@ FEM support
 
 .. include:: /includes/sample_fem_support.txt
 
-Requirements
-************
-
-The sample supports the following development kits:
-
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp_and_cpuapp_ns, nrf52840dk_nrf52840, nrf52dk_nrf52832, nrf52833dk_nrf52833, nrf52833dk_nrf52820, nrf21540dk_nrf52840
-
-The sample also requires another development kit running a compatible application (see :ref:`peripheral_uart`).
 
 Building and running
 ********************
 .. |sample path| replace:: :file:`samples/bluetooth/central_uart`
 
-.. include:: /includes/build_and_run.txt
+.. include:: /includes/build_and_run_ns.txt
 
 
 .. _central_uart_testing:
@@ -57,19 +58,20 @@ Building and running
 Testing
 =======
 
-After programming the sample to your development kit, test it by performing the following steps:
+|test_sample|
 
-1. Connect the kit to the computer using a USB cable. The kit is assigned a COM port (Windows) or ttyACM device (Linux), which is visible in the Device Manager.
+1. |connect_kit|
 #. |connect_terminal_specific|
 #. Optionally, connect the RTT console to display debug messages. See :ref:`central_uart_debug`.
 #. Reset the kit.
-#. Observe that the text "Starting NUS Client example" is printed on the COM listener running on the computer and the device starts scanning for Peripherals with NUS.
+#. Observe that the text "Starting Bluetooth Central UART example" is printed on the COM listener running on the computer and the device starts scanning for Peripherals with NUS.
 #. Program the :ref:`peripheral_uart` sample to the second development kit.
    See the documentation for that sample for detailed instructions.
 #. Observe that the kits connect.
+
    When service discovery is completed, the event logs are printed on the Central's terminal.
-#. Now you can send data between the two kits.
-   To do so, type some characters in the terminal of one of the kits and hit Enter.
+   Now you can send data between the two kits.
+#. To send data, type some characters in the terminal of one of the kits and press Enter.
    Observe that the data is displayed on the UART on the other kit.
 #. Disconnect the devices by, for example, pressing the Reset button on the Central.
    Observe that the kits automatically reconnect and that it is again possible to send data between the two kits.
@@ -85,19 +87,23 @@ This sample uses the following |NCS| libraries:
 
 In addition, it uses the following Zephyr libraries:
 
-* ``include/zephyr/types.h``
-* ``boards/arm/nrf*/board.h``
+* :file:`include/zephyr/types.h`
+* :file:`boards/arm/nrf*/board.h`
 * :ref:`zephyr:kernel_api`:
 
-  * ``include/kernel.h``
+  * :file:`include/kernel.h`
 
 * :ref:`zephyr:api_peripherals`:
 
-   * ``include/uart.h``
+   * :file:`include/uart.h`
 
 * :ref:`zephyr:bluetooth_api`:
 
-  * ``include/bluetooth/bluetooth.h``
-  * ``include/bluetooth/gatt.h``
-  * ``include/bluetooth/hci.h``
-  * ``include/bluetooth/uuid.h``
+  * :file:`include/bluetooth/bluetooth.h`
+  * :file:`include/bluetooth/gatt.h`
+  * :file:`include/bluetooth/hci.h`
+  * :file:`include/bluetooth/uuid.h`
+
+The sample also uses the following secure firmware component:
+
+* :ref:`Trusted Firmware-M <ug_tfm>`

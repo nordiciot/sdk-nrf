@@ -29,13 +29,14 @@ Module events
 Configuration
 *************
 
-The |hid_state| is enabled by selecting :kconfig:`CONFIG_DESKTOP_HID_STATE_ENABLE`.
-This module is optional and turned off by default.
+The |hid_state| is enabled by the :ref:`CONFIG_DESKTOP_HID_STATE_ENABLE <config_desktop_app_options>` option which is implied by the :ref:`CONFIG_DESKTOP_ROLE_HID_PERIPHERAL <config_desktop_app_options>` option.
+An nRF Desktop peripheral uses the |hid_state| to generate HID reports based on the user input.
+For details related to HID configuration in the nRF Desktop, see the :ref:`nrf_desktop_hid_configuration` documentation.
 
 To send boot reports, enable the respective Kconfig option:
 
-* :kconfig:`CONFIG_DESKTOP_HID_BOOT_INTERFACE_KEYBOARD` - This option enables sending keyboard boot reports.
-* :kconfig:`CONFIG_DESKTOP_HID_BOOT_INTERFACE_MOUSE` - This option enables sending mouse boot reports.
+* :ref:`CONFIG_DESKTOP_HID_BOOT_INTERFACE_KEYBOARD <config_desktop_app_options>` - This option enables sending keyboard boot reports.
+* :ref:`CONFIG_DESKTOP_HID_BOOT_INTERFACE_MOUSE <config_desktop_app_options>` - This option enables sending mouse boot reports.
 
 HID keymap
 ==========
@@ -44,12 +45,14 @@ You must define mapping between button IDs and usage IDs in generated HID report
 For that purpose you must create a configuration file with ``hid_keymap`` array.
 Every element of the array contains mapping from a single hardware key ID to HID report ID and usage ID.
 
-For example, the file contents should look like follows:
+For example, the file contents should look like the following:
 
 .. code-block:: c
 
-	#include "hid_keymap.h"
 	#include <caf/key_id.h>
+
+	#include "hid_keymap.h"
+	#inclue "fn_key_id.h"
 
 	static const struct hid_keymap hid_keymap[] = {
 		{ KEY_ID(0x00, 0x01), 0x0014, REPORT_ID_KEYBOARD_KEYS }, /* Q */
@@ -64,7 +67,7 @@ For example, the file contents should look like follows:
 		{ FN_KEY_ID(0x06, 0x03), 0x0196, REPORT_ID_CONSUMER_CTRL }, /* internet */
 	};
 
-You must define the mentioned array in this configuration file, and specify its location with the :kconfig:`CONFIG_DESKTOP_HID_STATE_HID_KEYMAP_DEF_PATH` Kconfig option.
+You must define the mentioned array in this configuration file, and specify its location with the :ref:`CONFIG_DESKTOP_HID_STATE_HID_KEYMAP_DEF_PATH <config_desktop_app_options>` Kconfig option.
 
 .. note::
    The configuration file should be included only by the configured module.
@@ -99,7 +102,7 @@ For example, the file contents should look like follows:
 		[HID_KEYBOARD_LEDS_KANA] = LED_UNAVAILABLE,
 	};
 
-You must define all of the mentioned data in this configuration file, and specify its location with the :kconfig:`CONFIG_DESKTOP_HID_STATE_HID_KEYBOARD_LEDS_DEF_PATH` Kconfig option.
+You must define all of the mentioned data in this configuration file, and specify its location with the :ref:`CONFIG_DESKTOP_HID_STATE_HID_KEYBOARD_LEDS_DEF_PATH <config_desktop_app_options>` Kconfig option.
 
 .. note::
    The configuration file should be included only by the configured module.
@@ -108,13 +111,13 @@ You must define all of the mentioned data in this configuration file, and specif
 Report expiration
 =================
 
-With the :kconfig:`CONFIG_DESKTOP_HID_REPORT_EXPIRATION` configuration option, you can set the amount of time after which a key will be considered expired.
+With the :ref:`CONFIG_DESKTOP_HID_REPORT_EXPIRATION <config_desktop_app_options>` configuration option, you can set the amount of time after which a key will be considered expired.
 The higher the value, the longer the period after which the nRF Desktop application will recall pressed keys when the connection is established.
 
 Queue event size
 ================
 
-With the :kconfig:`CONFIG_DESKTOP_HID_EVENT_QUEUE_SIZE` configuration option, you can set the number of elements on the queue where the keys are stored before the connection is established.
+With the :ref:`CONFIG_DESKTOP_HID_EVENT_QUEUE_SIZE <config_desktop_app_options>` configuration option, you can set the number of elements on the queue where the keys are stored before the connection is established.
 When a key state changes (it is pressed or released) before the connection is established, an element containing this key's usage is pushed onto the queue.
 If there is no space in the queue, the oldest element is released.
 
@@ -170,7 +173,7 @@ The ``button_event`` is the source of this type of data.
 
 To indicate a change to this input data, overwrite the value that is already stored.
 
-Since keys on the board can be associated to a usage ID, and thus be part of different HID reports, the first step is to identify to which report the key belongs and what usage it represents.
+Since keys on the board can be associated to a usage ID, and thus be part of different HID reports, the first step is to identify which report the key belongs to and what usage it represents.
 This is done by obtaining the key mapping from the :c:struct:`hid_keymap` structure.
 This structure is part of the application configuration files for the specific board and is defined in :file:`hid_keymap_def.h`.
 
@@ -198,11 +201,11 @@ This queue preserves an order at which input data events are received.
 Storing limitations
 -------------------
 
-The number of events that can be inserted into the queue is limited by :kconfig:`CONFIG_DESKTOP_HID_EVENT_QUEUE_SIZE`.
+The number of events that can be inserted into the queue is limited by :ref:`CONFIG_DESKTOP_HID_EVENT_QUEUE_SIZE <config_desktop_app_options>` option.
 
 Discarding events
-    When there is no space for a new input event, the |hid_state| will try to free space by discarding the oldest event in the queue.
-    Events stored in the queue are automatically discarded after the period defined by :kconfig:`CONFIG_DESKTOP_HID_REPORT_EXPIRATION`.
+    When there is no space for a new input event, the |hid_state| tries to free space by discarding the oldest event in the queue.
+    Events stored in the queue are automatically discarded after the period defined by :ref:`CONFIG_DESKTOP_HID_REPORT_EXPIRATION <config_desktop_app_options>` option.
 
     When discarding an event from the queue, the module checks if the key associated with the event is pressed.
     This is to avoid missing key releases for earlier key presses when the keys from the queue are replayed to the host.
@@ -215,7 +218,6 @@ Discarding events
 
         * The associated key is not pressed anymore.
         * Every key that was pressed after the associated key had been pressed is also released.
-
 
 If there is no space to store the input event in the queue and no old event can be discarded, the entire content of the queue is dropped to ensure the sanity.
 
@@ -260,7 +262,7 @@ The :c:struct:`report_data` structure is passed as an argument to this function.
 
 .. note::
     The HID report formatting function must work according to the HID report descriptor (``hid_report_desc``).
-    The source file containing the descriptor is given by :kconfig:`CONFIG_DESKTOP_HID_REPORT_DESC`.
+    The source file containing the descriptor is given by :ref:`CONFIG_DESKTOP_HID_REPORT_DESC <config_desktop_app_options>` option.
 
 Handling HID keyboard LED state
 ===============================
@@ -270,5 +272,3 @@ When the |hid_state| receives a :c:struct:`hid_report_event` that contains an HI
 By default, nRF Desktop supports only HID keyboard LED output report.
 The nRF Desktop peripheral displays the state of the keyboard LEDs that was specified by the HID subscriber that subscribed for keyboard key HID input report.
 When the subscriber is changed or it updates the state of the keyboard LEDs, the |hid_state| sends :c:struct:`leds_event` to update the state of the hardware LEDs.
-
-.. |hid_state| replace:: HID state module

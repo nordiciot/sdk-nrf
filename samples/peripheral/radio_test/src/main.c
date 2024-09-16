@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <sys/printk.h>
-#include <drivers/clock_control.h>
-#include <drivers/clock_control/nrf_clock_control.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/drivers/clock_control.h>
+#include <zephyr/drivers/clock_control/nrf_clock_control.h>
 
 static void clock_init(void)
 {
@@ -40,9 +40,11 @@ static void clock_init(void)
 	printk("Clock has started\n");
 }
 
-void main(void)
+int main(void)
 {
 	printk("Starting Radio Test example\n");
 
 	clock_init();
+
+	return 0;
 }

@@ -43,7 +43,6 @@ config OPENTHREAD_NRF_SECURITY
 	select MBEDTLS_TLS_LIBRARY
 	select NORDIC_SECURITY_BACKEND
 	select NRF_SECURITY_ADVANCED
-	select NRF_SECURITY_RNG
 	select OBERON_BACKEND if !CC3XX_BACKEND
 	help
 	  Enables nrf_security module for use by OpenThread. This allows
@@ -52,6 +51,12 @@ config OPENTHREAD_NRF_SECURITY
 
 config OPENTHREAD_MBEDTLS_LIB_NAME
 	default "mbedtls_external" if OPENTHREAD_NRF_SECURITY
+
+config OPENTHREAD_MBEDTLS_DEBUG
+	bool "MbedTLS logs for OpenThread"
+	select MBEDTLS
+	select MBEDTLS_DEBUG
+	select MBEDTLS_DEBUG_C
 
 config OPENTHREAD_THREAD_STACK_SIZE
 	int "OpenThread thread stack size"
@@ -62,6 +67,10 @@ config OPENTHREAD_RADIO_WORKQUEUE_STACK_SIZE
 	int "OpenThread radio transmit workqueue stack size"
 	default 1084 if SOC_NRF5340_CPUAPP
 	default 1024
+
+choice TFM_PROFILE_TYPE
+	default TFM_PROFILE_TYPE_NOT_SET
+endchoice
 
 endmenu
 

@@ -8,24 +8,24 @@
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
-#include <sys/printk.h>
-#include <sys/byteorder.h>
-#include <zephyr.h>
-#include <drivers/gpio.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/gpio.h>
 #include <soc.h>
 #include <assert.h>
 
-#include <settings/settings.h>
+#include <zephyr/settings/settings.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
 
-#include <bluetooth/services/bas.h>
+#include <zephyr/bluetooth/services/bas.h>
 #include <bluetooth/services/hids.h>
-#include <bluetooth/services/dis.h>
+#include <zephyr/bluetooth/services/dis.h>
 #include <dk_buttons_and_leds.h>
 
 #define DEVICE_NAME     CONFIG_BT_DEVICE_NAME
@@ -103,9 +103,8 @@ static const struct bt_data ad[] = {
 		      (CONFIG_BT_DEVICE_APPEARANCE >> 0) & 0xff,
 		      (CONFIG_BT_DEVICE_APPEARANCE >> 8) & 0xff),
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-	BT_DATA_BYTES(BT_DATA_UUID16_ALL,
-		      0x12, 0x18,       /* HID Service */
-		      0x0f, 0x18),      /* Battery Service */
+	BT_DATA_BYTES(BT_DATA_UUID16_ALL, BT_UUID_16_ENCODE(BT_UUID_HIDS_VAL),
+					  BT_UUID_16_ENCODE(BT_UUID_BAS_VAL)),
 };
 
 static const struct bt_data sd[] = {
@@ -333,7 +332,7 @@ static void security_changed(struct bt_conn *conn, bt_security_t level,
 #endif
 
 
-static struct bt_conn_cb conn_callbacks = {
+BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected = connected,
 	.disconnected = disconnected,
 #ifdef CONFIG_BT_HIDS_SECURITY_ENABLED
@@ -382,7 +381,7 @@ static void hid_init(void)
 	int err;
 	struct bt_hids_init_param hids_init_param = { 0 };
 	struct bt_hids_inp_rep *hids_inp_rep;
-	static const uint8_t mouse_movement_mask[ceiling_fraction(INPUT_REP_MOVEMENT_LEN, 8)] = {0};
+	static const uint8_t mouse_movement_mask[DIV_ROUND_UP(INPUT_REP_MOVEMENT_LEN, 8)] = {0};
 
 	static const uint8_t report_map[] = {
 		0x05, 0x01,     /* Usage Page (Generic Desktop) */
@@ -598,18 +597,6 @@ static void auth_cancel(struct bt_conn *conn)
 }
 
 
-static void pairing_confirm(struct bt_conn *conn)
-{
-	char addr[BT_ADDR_LE_STR_LEN];
-
-	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
-
-	bt_conn_auth_pairing_confirm(conn);
-
-	printk("Pairing confirmed: %s\n", addr);
-}
-
-
 static void pairing_complete(struct bt_conn *conn, bool bonded)
 {
 	char addr[BT_ADDR_LE_STR_LEN];
@@ -644,13 +631,16 @@ static struct bt_conn_auth_cb conn_auth_callbacks = {
 	.passkey_display = auth_passkey_display,
 	.passkey_confirm = auth_passkey_confirm,
 	.cancel = auth_cancel,
-	.pairing_confirm = pairing_confirm,
+};
+
+static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {
 	.pairing_complete = pairing_complete,
 	.pairing_failed = pairing_failed
 };
 #else
 static struct bt_conn_auth_cb conn_auth_callbacks;
-#endif
+static struct bt_conn_auth_info_cb conn_auth_info_callbacks;
+#endif /* defined(CONFIG_BT_HIDS_SECURITY_ENABLED) */
 
 
 static void num_comp_reply(bool accept)
@@ -688,17 +678,19 @@ void button_changed(uint32_t button_state, uint32_t has_changed)
 
 	memset(&pos, 0, sizeof(struct mouse_pos));
 
-	if (k_msgq_num_used_get(&mitm_queue)) {
-		if (buttons & KEY_PAIRING_ACCEPT) {
-			num_comp_reply(true);
+	if (IS_ENABLED(CONFIG_BT_HIDS_SECURITY_ENABLED)) {
+		if (k_msgq_num_used_get(&mitm_queue)) {
+			if (buttons & KEY_PAIRING_ACCEPT) {
+				num_comp_reply(true);
 
-			return;
-		}
+				return;
+			}
 
-		if (buttons & KEY_PAIRING_REJECT) {
-			num_comp_reply(false);
+			if (buttons & KEY_PAIRING_REJECT) {
+				num_comp_reply(false);
 
-			return;
+				return;
+			}
 		}
 	}
 
@@ -763,32 +755,42 @@ static void bas_notify(void)
 }
 
 
-void main(void)
+int main(void)
 {
 	int err;
 
 	printk("Starting Bluetooth Peripheral HIDS mouse example\n");
 
-	bt_conn_cb_register(&conn_callbacks);
-
 	if (IS_ENABLED(CONFIG_BT_HIDS_SECURITY_ENABLED)) {
-		bt_conn_auth_cb_register(&conn_auth_callbacks);
-	}
+		err = bt_conn_auth_cb_register(&conn_auth_callbacks);
+		if (err) {
+			printk("Failed to register authorization callbacks.\n");
+			return 0;
+		}
 
-	err = bt_enable(NULL);
-	if (err) {
-		printk("Bluetooth init failed (err %d)\n", err);
-		return;
+		err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
+		if (err) {
+			printk("Failed to register authorization info callbacks.\n");
+			return 0;
+		}
 	}
-
-	printk("Bluetooth initialized\n");
 
 	/* DIS initialized at system boot with SYS_INIT macro. */
 	hid_init();
 
+	err = bt_enable(NULL);
+	if (err) {
+		printk("Bluetooth init failed (err %d)\n", err);
+		return 0;
+	}
+
+	printk("Bluetooth initialized\n");
+
 	k_work_init(&hids_work, mouse_handler);
-	k_work_init(&pairing_work, pairing_process);
 	k_work_init(&adv_work, advertising_process);
+	if (IS_ENABLED(CONFIG_BT_HIDS_SECURITY_ENABLED)) {
+		k_work_init(&pairing_work, pairing_process);
+	}
 
 	if (IS_ENABLED(CONFIG_SETTINGS)) {
 		settings_load();

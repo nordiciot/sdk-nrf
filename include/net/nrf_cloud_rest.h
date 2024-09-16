@@ -15,7 +15,7 @@
 #include <zephyr/types.h>
 #include <net/nrf_cloud.h>
 #include <net/nrf_cloud_pgps.h>
-#include <net/nrf_cloud_cell_pos.h>
+#include <net/nrf_cloud_location.h>
 #include <modem/lte_lc.h>
 
 #ifdef __cplusplus
@@ -33,7 +33,8 @@ enum nrf_cloud_http_status {
 	NRF_CLOUD_HTTP_STATUS_OK = 200,
 	NRF_CLOUD_HTTP_STATUS_ACCEPTED = 202,
 	NRF_CLOUD_HTTP_STATUS_PARTIAL = 206,
-	NRF_CLOUD_HTTP_STATUS_BAD_REQ = 400,
+	NRF_CLOUD_HTTP_STATUS__ERROR_BEGIN = 400,
+	NRF_CLOUD_HTTP_STATUS_BAD_REQ = NRF_CLOUD_HTTP_STATUS__ERROR_BEGIN,
 	NRF_CLOUD_HTTP_STATUS_UNAUTH = 401,
 	NRF_CLOUD_HTTP_STATUS_FORBIDDEN = 403,
 	NRF_CLOUD_HTTP_STATUS_NOT_FOUND = 404,
@@ -43,13 +44,14 @@ enum nrf_cloud_http_status {
 
 /** @brief nRF Cloud AGPS REST request types */
 enum nrf_cloud_rest_agps_req_type {
+	/** Request all assistance data */
 	NRF_CLOUD_REST_AGPS_REQ_ASSISTANCE,
+	/** Request only location (NRF_CLOUD_AGPS_LOCATION) */
 	NRF_CLOUD_REST_AGPS_REQ_LOCATION,
-	NRF_CLOUD_REST_AGPS_REQ_CUSTOM,
-	NRF_CLOUD_REST_AGPS_REQ_UNSPECIFIED,
+	/** Request the data specified by nrf_modem_gnss_agps_data_frame */
+	NRF_CLOUD_REST_AGPS_REQ_CUSTOM
 };
 
-#define NRF_CLOUD_REST_TIMEOUT_MINIMUM		(5000)
 #define NRF_CLOUD_REST_TIMEOUT_NONE		(SYS_FOREVER_MS)
 
 /** @brief Parameters and data for using the nRF Cloud REST API */
@@ -60,15 +62,16 @@ struct nrf_cloud_rest_context {
 	 */
 	int connect_socket;
 	/** If the connection should remain after API call.
-	 * @note: A failed API call could result in the socket
+	 * @note A failed API call could result in the socket
 	 * being closed.
 	 */
 	bool keep_alive;
-	/** Timeout value, in milliseconds, for receiving response data.
-	 * Minimum timeout value specified by NRF_CLOUD_REST_TIMEOUT_MINIMUM.
-	 * For no timeout, set to NRF_CLOUD_REST_TIMEOUT_NONE.
-	 * @note: This parameter is currently not used; set
-	 * CONFIG_NRF_CLOUD_REST_RECV_TIMEOUT instead.
+	/** Timeout value, in milliseconds, for REST request. The timeout is set individually
+	 * for socket connection creation and data transfer meaning REST request can take
+	 * longer than this given timeout.
+	 * For no timeout (wait forever) set to less than or equal to zero,
+	 * or NRF_CLOUD_REST_TIMEOUT_NONE.
+	 * Using a timeout value that is too short can result in failed REST requests.
 	 */
 	int32_t timeout_ms;
 	/** Authentication string: JWT @ref modem_jwt.
@@ -76,6 +79,10 @@ struct nrf_cloud_rest_context {
 	 * If the device ID is the device's internal UUID, the sub claim
 	 * can be omitted for modem generated JWTs; the UUID is included
 	 * in the iss claim.
+	 * If no JWT is provided, and CONFIG_NRF_CLOUD_REST_AUTOGEN_JWT
+	 * is enabled, then one will be generated automatically with
+	 * CONFIG_NRF_CLOUD_REST_AUTOGEN_JWT_VALID_TIME_S as its lifetime in
+	 * seconds.
 	 */
 	char *auth;
 	/** User allocated buffer for receiving API response, which
@@ -103,23 +110,44 @@ struct nrf_cloud_rest_context {
 	size_t response_len;
 	/** Length of HTTPS headers + response content data */
 	size_t total_response_len;
+
+	/** Error code from nRF Cloud */
+	enum nrf_cloud_error nrf_err;
 };
 
-/** @brief Data required for nRF Cloud cellular positioning request */
-struct nrf_cloud_rest_cell_pos_request {
-	/** Network information used in request */
-	struct lte_lc_cells_info *net_info;
+/** @brief Data required for nRF Cloud location request */
+struct nrf_cloud_rest_location_request {
+	/** Cellular network information used in request */
+	struct lte_lc_cells_info *cell_info;
+	/** Wi-Fi network information used in request */
+	struct wifi_scan_info *wifi_info;
+	/** If true, nRF Cloud will not send the location data to the device
+	 * in the REST response body. The location will still be recorded in the cloud.
+	 */
+	bool disable_response;
 };
 
 /** @brief Data required for nRF Cloud Assisted GPS (A-GPS) request */
 struct nrf_cloud_rest_agps_request {
 	enum nrf_cloud_rest_agps_req_type type;
-	/** Required for custom request type */
+	/** Required for custom request type (NRF_CLOUD_REST_AGPS_REQ_CUSTOM) */
 	struct nrf_modem_gnss_agps_data_frame *agps_req;
 	/** Optional; provide network info or set to NULL. The cloud cannot
 	 * provide location assistance data if network info is NULL.
 	 */
 	struct lte_lc_cells_info *net_info;
+	/** Reduce set of ephemerides to only those visible at current
+	 * location.  This reduces the overall size of the download, but
+	 * may increase fix times towards the end of the validity period
+	 * and/or if the device is actively traveling long distances.
+	 */
+	bool filtered;
+	/** Constrain the set of ephemerides to only those currently
+	 *  visible at or above the specified elevation threshold
+	 *  angle in degrees. Range is 0 to 90.  Set to
+	 *  NRF_CLOUD_AGPS_MASK_ANGLE_NONE to exclude from request.
+	 */
+	uint8_t mask_angle;
 };
 
 /** @brief nRF Cloud Assisted GPS (A-GPS) result */
@@ -132,19 +160,10 @@ struct nrf_cloud_rest_agps_result {
 	size_t agps_sz;
 };
 
-/** @defgroup nrf_cloud_rest_pgps_omit Omit item from P-GPS request.
- * @{
- */
-#define NRF_CLOUD_REST_PGPS_REQ_NO_COUNT	0
-#define NRF_CLOUD_REST_PGPS_REQ_NO_INTERVAL	0
-#define NRF_CLOUD_REST_PGPS_REQ_NO_GPS_DAY	0
-#define NRF_CLOUD_REST_PGPS_REQ_NO_GPS_TOD	(-1)
-/** @} */
-
 /** @brief Data required for nRF Cloud Predicted GPS (P-GPS) request */
 struct nrf_cloud_rest_pgps_request {
 	/** Data to be included in the P-GPS request. To omit an item
-	 * use the appropriate define in @ref nrf_cloud_rest_pgps_omit
+	 * use the appropriate `NRF_CLOUD_PGPS_REQ_NO_` define.
 	 */
 	const struct gps_pgps_request *pgps_req;
 };
@@ -160,11 +179,13 @@ struct nrf_cloud_rest_pgps_request {
  *
  * @retval 0 If successful.
  *          Otherwise, a (negative) error code is returned.
+ *          See @verbatim embed:rst:inline :ref:`nrf_cloud_rest_failure` @endverbatim for details.
  */
-int nrf_cloud_rest_cell_pos_get(struct nrf_cloud_rest_context *const rest_ctx,
-	struct nrf_cloud_rest_cell_pos_request const *const request,
-	struct nrf_cloud_cell_pos_result *const result);
+int nrf_cloud_rest_location_get(struct nrf_cloud_rest_context *const rest_ctx,
+	struct nrf_cloud_rest_location_request const *const request,
+	struct nrf_cloud_location_result *const result);
 
+#if defined(CONFIG_NRF_CLOUD_AGPS)
 /**
  * @brief nRF Cloud Assisted GPS (A-GPS) data request.
  *
@@ -180,12 +201,23 @@ int nrf_cloud_rest_cell_pos_get(struct nrf_cloud_rest_context *const rest_ctx,
  *           size specified by rest_ctx->fragment_size, a positive value is
  *           returned, which indicates the size (in bytes) of the necessary
  *           result buffer.
- *           Otherwise, a (negative) error code is returned.
+ *           Otherwise, a (negative) error code is returned:
+ *           - -EINVAL will be returned, and an error message printed, if invalid parameters
+ *		are given.
+ *           - -ENOENT will be returned if there was no A-GPS data requested for the specified
+ *		request type.
+ *           - -ENOBUFS will be returned, and an error message printed, if there is not enough
+ *             buffer space to store retrieved AGPS data.
+ *           - See @verbatim embed:rst:inline :ref:`nrf_cloud_rest_failure` @endverbatim for all
+ *             other possible error codes.
+ *
  */
 int nrf_cloud_rest_agps_data_get(struct nrf_cloud_rest_context *const rest_ctx,
 	struct nrf_cloud_rest_agps_request const *const request,
 	struct nrf_cloud_rest_agps_result *const result);
+#endif /* CONFIG_NRF_CLOUD_AGPS */
 
+#if defined(CONFIG_NRF_CLOUD_PGPS)
 /**
  * @brief nRF Cloud Predicted GPS (P-GPS) data request.
  *
@@ -197,9 +229,11 @@ int nrf_cloud_rest_agps_data_get(struct nrf_cloud_rest_context *const rest_ctx,
  *
  * @retval 0 If successful.
  *          Otherwise, a (negative) error code is returned.
+ *          See @verbatim embed:rst:inline :ref:`nrf_cloud_rest_failure` @endverbatim for details.
  */
 int nrf_cloud_rest_pgps_data_get(struct nrf_cloud_rest_context *const rest_ctx,
 	struct nrf_cloud_rest_pgps_request const *const request);
+#endif
 
 /**
  * @brief Requests nRF Cloud FOTA job info for the specified device.
@@ -216,6 +250,7 @@ int nrf_cloud_rest_pgps_data_get(struct nrf_cloud_rest_context *const rest_ctx,
  *
  * @retval 0 If successful.
  *          Otherwise, a (negative) error code is returned.
+ *          See @verbatim embed:rst:inline :ref:`nrf_cloud_rest_failure` @endverbatim for details.
  */
 int nrf_cloud_rest_fota_job_get(struct nrf_cloud_rest_context *const rest_ctx,
 	const char *const device_id, struct nrf_cloud_fota_job_info *const job);
@@ -241,18 +276,67 @@ void nrf_cloud_rest_fota_job_free(struct nrf_cloud_fota_job_info *const job);
  *
  * @retval 0 If successful.
  *          Otherwise, a (negative) error code is returned.
+ *          See @verbatim embed:rst:inline :ref:`nrf_cloud_rest_failure` @endverbatim for details.
  */
 int nrf_cloud_rest_fota_job_update(struct nrf_cloud_rest_context *const rest_ctx,
 	const char *const device_id, const char *const job_id,
 	const enum nrf_cloud_fota_status status, const char * const details);
 
 /**
+ * @brief Updates the device's "state" in the shadow via the UpdateDeviceState endpoint.
+ *
+ * @param[in,out] rest_ctx Context for communicating with nRF Cloud's REST API.
+ * @param[in]     device_id Null-terminated, unique device ID registered with nRF Cloud.
+ * @param[in]     shadow_json Null-terminated JSON string to be written to the device's shadow.
+ *
+ * @retval 0 If successful.
+ *          Otherwise, a (negative) error code is returned.
+ *          See @verbatim embed:rst:inline :ref:`nrf_cloud_rest_failure` @endverbatim for details.
+ */
+int nrf_cloud_rest_shadow_state_update(struct nrf_cloud_rest_context *const rest_ctx,
+	const char *const device_id, const char * const shadow_json);
+
+/**
+ * @brief Updates the device's "ServiceInfo" in the shadow.
+ *
+ * @param[in,out] rest_ctx Context for communicating with nRF Cloud's REST API.
+ * @param[in]     device_id Null-terminated, unique device ID registered with nRF Cloud.
+ * @param[in]     svc_inf Service info items to be updated in the shadow.
+ *
+ * @retval 0 If successful.
+ *         Otherwise, a (negative) error code is returned.
+ *         See @verbatim embed:rst:inline :ref:`nrf_cloud_rest_failure` @endverbatim for details.
+ */
+int nrf_cloud_rest_shadow_service_info_update(struct nrf_cloud_rest_context *const rest_ctx,
+	const char *const device_id, const struct nrf_cloud_svc_info * const svc_inf);
+
+/**
+ * @brief Update the device status in the shadow.
+ *
+ * @param[in,out] rest_ctx Context for communicating with nRF Cloud's REST API.
+ * @param[in]     device_id Null-terminated, unique device ID registered with nRF Cloud.
+ * @param[in]     dev_status Device status to be encoded.
+ *
+ * @retval 0 If successful.
+ *         Otherwise, a (negative) error code is returned.
+ *         See @verbatim embed:rst:inline :ref:`nrf_cloud_rest_failure` @endverbatim for details.
+ */
+int nrf_cloud_rest_shadow_device_status_update(struct nrf_cloud_rest_context *const rest_ctx,
+	const char *const device_id, const struct nrf_cloud_device_status *const dev_status);
+
+/**
  * @brief Closes the connection to the server.
+ *	  The socket pointed to by @p rest_ctx.connect_socket will be closed,
+ *	  and @p rest_ctx.connect_socket will be set to -1.
  *
  * @param[in,out] rest_ctx Context for communicating with nRF Cloud's REST API.
  *
  * @retval 0 If successful.
- *          Otherwise, a (negative) error code is returned.
+ *          Otherwise, a (negative) error code is returned:
+ *	    - -EINVAL, if valid context is not given.
+ *	    - -ENOTCONN, if socket was already closed, or never opened.
+ *	    - -EIO, for any kind of socket-level closure failure.
+ *
  */
 int nrf_cloud_rest_disconnect(struct nrf_cloud_rest_context *const rest_ctx);
 
@@ -267,9 +351,60 @@ int nrf_cloud_rest_disconnect(struct nrf_cloud_rest_context *const rest_ctx);
  *
  * @retval 0 If successful; wait 30s before associating device with nRF Cloud account.
  * @retval 1 Device is already provisioned.
- *         Otherwise, a (negative) error code is returned.
+ *         Otherwise, a (negative) error code is returned:
+ *         - Any underlying socket or HTTP response error will be returned directly.
+ *	   - -ENODEV will be returned if device JITP immediately rejected.
  */
 int nrf_cloud_rest_jitp(const sec_tag_t nrf_cloud_sec_tag);
+
+/**
+ * @brief Send a JSON formatted device message using the SendDeviceMessage endpoint.
+ *
+ * @param[in,out] rest_ctx Context for communicating with nRF Cloud's REST API.
+ * @param[in]     device_id Null-terminated, unique device ID registered with nRF Cloud.
+ * @param[in]     json_msg Null-terminated JSON string containing the device message.
+ * @param[in]     bulk Use the bulk message topic. If true, the topic parameter is ignored.
+ * @param[in]     topic Optional; null-terminated MQTT topic string.
+ *                      If NULL, the d2c topic is used.
+ *
+ * @retval 0 If successful.
+ *          Otherwise, a (negative) error code is returned.
+ *          See @verbatim embed:rst:inline :ref:`nrf_cloud_rest_failure` @endverbatim for details.
+ */
+int nrf_cloud_rest_send_device_message(struct nrf_cloud_rest_context *const rest_ctx,
+	const char *const device_id, const char *const json_msg, const bool bulk,
+	const char *const topic);
+
+/**
+ * @brief Send GNSS data to nRF Cloud as a device message.
+ *
+ * @param[in,out] rest_ctx Context for communicating with nRF Cloud's REST API.
+ * @param[in]     device_id Null-terminated, unique device ID registered with nRF Cloud.
+ * @param[in]     gnss GNSS location data.
+ *
+ * @retval 0 If successful.
+ *          Otherwise, a (negative) error code is returned.
+ *          See @verbatim embed:rst:inline :ref:`nrf_cloud_rest_failure` @endverbatim for details.
+ */
+int nrf_cloud_rest_send_location(struct nrf_cloud_rest_context *const rest_ctx,
+	const char *const device_id, const struct nrf_cloud_gnss_data * const gnss);
+
+/**
+ * @brief Send the device status to nRF Cloud as a device message. In addition to standard
+ * message storage, the data will also be stored in the device's shadow.
+ *
+ * @param[in,out] rest_ctx Context for communicating with nRF Cloud's REST API.
+ * @param[in]     device_id Null-terminated, unique device ID registered with nRF Cloud.
+ * @param[in]     dev_status Device status to be encoded in the message.
+ * @param[in]     timestamp_ms UNIX timestamp, in milliseconds, to be included in the message.
+ *
+ * @retval 0 If successful.
+ *         Otherwise, a (negative) error code is returned.
+ *         See @verbatim embed:rst:inline :ref:`nrf_cloud_rest_failure` @endverbatim for details.
+ */
+int nrf_cloud_rest_device_status_message_send(struct nrf_cloud_rest_context *const rest_ctx,
+	const char *const device_id, const struct nrf_cloud_device_status *const dev_status,
+	const int64_t timestamp_ms);
 
 /** @} */
 

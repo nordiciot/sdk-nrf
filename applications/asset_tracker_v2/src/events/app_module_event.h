@@ -13,13 +13,14 @@
  * @{
  */
 
-#include "event_manager.h"
+#include <app_event_manager.h>
+#include <app_event_manager_profiler_tracer.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/** @brief Application event types submitted by Application module. */
+/** @brief Event types submitted by Application module. */
 enum app_module_event_type {
 	/** Signal that the application has done necessary setup, and
 	 *  now started.
@@ -40,29 +41,19 @@ enum app_module_event_type {
 	APP_EVT_DATA_GET,
 
 	/** Create a list with all available sensor types in the system and
-	 *  distribute it as a APP_EVT_DATA_GET event.
+	 *  distribute it as an APP_EVT_DATA_GET event.
 	 */
 	APP_EVT_DATA_GET_ALL,
 
 	/** Request latest configuration from the cloud. */
 	APP_EVT_CONFIG_GET,
 
-	/** Application module is waiting for movement to trigger the next sample request. This
-	 *  event is used to signal the sensor module to enable activity detection.
-	 */
-	APP_EVT_ACTIVITY_DETECTION_ENABLE,
-
-	/** Application module does not depend on activity detection. This event is used to signal
-	 *  the sensor module to disable activity detection.
-	 */
-	APP_EVT_ACTIVITY_DETECTION_DISABLE,
-
 	/** The application module has performed all procedures to prepare for
 	 *  a shutdown of the system.
 	 */
 	APP_EVT_SHUTDOWN_READY,
 
-	/** An error has occurred in the application module. Error details are
+	/** An irrecoverable error has occurred in the application module. Error details are
 	 *  attached in the event structure.
 	 */
 	APP_EVT_ERROR
@@ -77,19 +68,19 @@ enum app_module_data_type {
 	APP_DATA_MODEM_STATIC,
 	APP_DATA_MODEM_DYNAMIC,
 	APP_DATA_BATTERY,
-	APP_DATA_GNSS,
-	APP_DATA_NEIGHBOR_CELLS,
+	APP_DATA_LOCATION,
 
 	APP_DATA_COUNT,
 };
 
 /** @brief Application module event. */
 struct app_module_event {
-	struct event_header header;
+	struct app_event_header header;
 	enum app_module_event_type type;
 	enum app_module_data_type data_list[APP_DATA_COUNT];
 
 	union {
+		/** Code signifying the cause of error. */
 		int err;
 		/* Module ID, used when acknowledging shutdown requests. */
 		uint32_t id;
@@ -103,8 +94,8 @@ struct app_module_event {
 	int timeout;
 };
 
-/** Register app module events as an event type with the event manager. */
-EVENT_TYPE_DECLARE(app_module_event);
+/** Register app module events as an event type with the Application Event Manager. */
+APP_EVENT_TYPE_DECLARE(app_module_event);
 
 #ifdef __cplusplus
 }

@@ -119,7 +119,6 @@ extern const struct bt_mesh_sensor_type
 
 /** Average ambient temperature in a period of day
  *
- *  This sensor type supports series access.
  *  The series X-axis is measured in Hours.
  *
  *  Channels:
@@ -432,7 +431,7 @@ extern const struct bt_mesh_sensor_type bt_mesh_sensor_magnetic_declination;
 /** Magnetic Flux Density - 2D
  *
  * @note The Magnetic Flux Density unit is measured in tesla in the
- *       specification. In the API, it is measured in microtesla to accomodate
+ *       specification. In the API, it is measured in microtesla to accommodate
  *       the 6 digit format of the sensor values.
  *
  *  Channels:
@@ -450,7 +449,7 @@ extern const struct bt_mesh_sensor_type bt_mesh_sensor_magnetic_flux_density_2d;
 /** Magnetic Flux Density - 3D
  *
  * @note The Magnetic Flux Density unit is measured in tesla in the
- *       specification. In the API, it is measured in microtesla to accomodate
+ *       specification. In the API, it is measured in microtesla to accommodate
  *       the 6 digit format of the sensor values.
  *
  *  Channels:
@@ -613,7 +612,6 @@ extern const struct bt_mesh_sensor_type bt_mesh_sensor_present_dev_op_temp;
 
 /** Relative runtime in a device operating temperature range
  *
- *  This sensor type supports series access.
  *  The series X-axis is measured in Celsius.
  *
  *  Channels:
@@ -799,7 +797,6 @@ extern const struct bt_mesh_sensor_type bt_mesh_sensor_precise_present_amb_temp;
 
 /** Relative runtime in an input current range
  *
- *  This sensor type supports series access.
  *  The series X-axis is measured in Ampere.
  *
  *  Channels:
@@ -821,7 +818,6 @@ extern const struct bt_mesh_sensor_type
 
 /** Relative runtime in an input voltage range
  *
- *  This sensor type supports series access.
  *  The series X-axis is measured in Volt.
  *
  *  Channels:
@@ -933,7 +929,6 @@ extern const struct bt_mesh_sensor_type bt_mesh_sensor_power_factor;
 
 /** Relative device energy use in a period of day
  *
- *  This sensor type supports series access.
  *  The series X-axis is measured in Hours.
  *
  *  Channels:
@@ -961,7 +956,7 @@ extern const struct bt_mesh_sensor_type
  *    - Encoding: 32 bit unsigned scalar (Resolution: 0.001 kVAh)
  *    - Range: 0 to 4294967.293
  */
-extern const struct bt_mesh_sensor_type bt_mesh_sensor_apparent_energy32;
+extern const struct bt_mesh_sensor_type bt_mesh_sensor_apparent_energy;
 
 /** Apparent power
  *
@@ -1114,7 +1109,6 @@ extern const struct bt_mesh_sensor_type
 
 /** Relative exposure time in an illuminance range
  *
- *  This sensor type supports series access.
  *  The series X-axis is measured in Lux.
  *
  *  Channels:
@@ -1325,7 +1319,6 @@ extern const struct bt_mesh_sensor_type bt_mesh_sensor_gain;
 
 /** Relative device runtime in a generic level range
  *
- *  This sensor type supports series access.
  *  The series X-axis is unitless.
  *
  *  Channels:

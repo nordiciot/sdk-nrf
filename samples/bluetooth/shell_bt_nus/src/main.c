@@ -8,13 +8,13 @@
  *  @brief Nordic UART Bridge Service (NUS) sample
  */
 
-#include <zephyr.h>
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
-#include <bluetooth/hci.h>
+#include <zephyr/kernel.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/hci.h>
 #include <bluetooth/services/nus.h>
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 #include <shell/shell_bt_nus.h>
 #include <stdio.h>
 
@@ -60,11 +60,11 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 
 static char *log_addr(struct bt_conn *conn)
 {
-	char addr[BT_ADDR_LE_STR_LEN];
+	static char addr[BT_ADDR_LE_STR_LEN];
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-	return log_strdup(addr);
+	return addr;
 }
 
 static void __attribute__((unused)) security_changed(struct bt_conn *conn,
@@ -81,7 +81,7 @@ static void __attribute__((unused)) security_changed(struct bt_conn *conn,
 	}
 }
 
-static struct bt_conn_cb conn_callbacks = {
+BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected    = connected,
 	.disconnected = disconnected,
 	COND_CODE_1(CONFIG_BT_SMP,
@@ -98,13 +98,6 @@ static void auth_cancel(struct bt_conn *conn)
 	LOG_INF("Pairing cancelled: %s", log_addr(conn));
 }
 
-static void pairing_confirm(struct bt_conn *conn)
-{
-	bt_conn_auth_pairing_confirm(conn);
-
-	LOG_INF("Pairing confirmed: %s", log_addr(conn));
-}
-
 static void pairing_complete(struct bt_conn *conn, bool bonded)
 {
 	LOG_INF("Pairing completed: %s, bonded: %d", log_addr(conn), bonded);
@@ -118,41 +111,53 @@ static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 static struct bt_conn_auth_cb conn_auth_callbacks = {
 	.passkey_display = auth_passkey_display,
 	.cancel = auth_cancel,
-	.pairing_confirm = pairing_confirm,
+};
+
+static struct bt_conn_auth_info_cb conn_auth_info_callbacks = {
 	.pairing_complete = pairing_complete,
 	.pairing_failed = pairing_failed
 };
 
-void main(void)
+int main(void)
 {
 	int err;
 
 	printk("Starting Bluetooth NUS shell transport example\n");
 
-	bt_conn_cb_register(&conn_callbacks);
 	if (IS_ENABLED(CONFIG_BT_SMP)) {
-		bt_conn_auth_cb_register(&conn_auth_callbacks);
+		err = bt_conn_auth_cb_register(&conn_auth_callbacks);
+		if (err) {
+			printk("Failed to register authorization callbacks.\n");
+			return 0;
+		}
+
+		err = bt_conn_auth_info_cb_register(&conn_auth_info_callbacks);
+		if (err) {
+			printk("Failed to register authorization info callbacks.\n");
+			return 0;
+		}
 	}
 
 	err = bt_enable(NULL);
 	if (err) {
 		LOG_ERR("BLE enable failed (err: %d)", err);
-		return;
+		return 0;
 	}
 
 	err = shell_bt_nus_init();
 	if (err) {
 		LOG_ERR("Failed to initialize BT NUS shell (err: %d)", err);
-		return;
+		return 0;
 	}
 
 	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), sd,
 			      ARRAY_SIZE(sd));
 	if (err) {
 		LOG_ERR("Advertising failed to start (err %d)", err);
-		return;
+		return 0;
 	}
 
 	LOG_INF("Bluetooth ready. Advertising started.");
 
+	return 0;
 }

@@ -8,7 +8,7 @@ AT monitor
    :depth: 2
 
 The AT monitor library is used to define AT monitors, which consist of a handler function that receives AT notifications from the :ref:`nrfxlib:nrf_modem`, based on a filter.
-The handler is executed from the system workqueue.
+The handler is executed from the system workqueue or from an ISR, depending on the type of monitor.
 
 Overview
 ========
@@ -29,11 +29,7 @@ The AT monitor library facilitates the integration of the Modem library in |NCS|
 Initialization
 ==============
 
-The application can initialize the AT monitor library in the following ways:
-
-* Manually by using the :c:func:`at_monitor_init` function.
-* Automatically by using the ``SYS_INIT`` macro and by enabling :kconfig:`CONFIG_AT_MONITOR_SYS_INIT`.
-
+The AT monitor library initializes automatically when enabled using :kconfig:option:`CONFIG_AT_MONITOR`.
 Upon initialization, the AT monitor library registers itself as the receiver of AT notifications from the Modem library (using :c:func:`nrf_modem_at_notif_handler_set`).
 
 .. note::
@@ -42,11 +38,16 @@ Upon initialization, the AT monitor library registers itself as the receiver of 
 Usage
 =====
 
-The application can define an AT monitor to receive notifications through the :c:macro:`AT_MONITOR` macro.
+The application can define an AT monitor to receive notifications through the :c:macro:`AT_MONITOR` and :c:macro:`AT_MONITOR_ISR` macros.
 An AT monitor has a name, a filter string, and a callback function.
 In addition, it can be paused or activated (using :c:macro:`PAUSED` and :c:macro:`ACTIVE` respectively).
-When the AT monitor library receives an AT notification from the Modem library, the notification is copied on the AT monitor library heap and is dispatched using the system workqueue to all monitors whose filter matches (even partially) the contents of the notification.
 Multiple parts of the application can define their own AT monitor with the same filter as another AT monitor, and thus receive the same notifications, if desired.
+
+Deferred dispatching
+********************
+
+The application can define an AT monitor to receive AT notifications in the system workqueue using the :c:macro:`AT_MONITOR` macro.
+When the AT monitor library receives an AT notification from the Modem library, the notification is copied on the AT monitor library heap and is dispatched using the system workqueue to all monitors whose filter matches (even partially) the contents of the notification.
 
 The following code snippet shows how to register a handler that receives ``+CEREG`` notifications from the Modem library:
 
@@ -58,6 +59,27 @@ The following code snippet shows how to register a handler that receives ``+CERE
 	int cereg_mon(const char *notif)
 	{
 		printf("Received +CEREG notification: %s", notif);
+	}
+
+The size of the AT monitor library heap can be configured using the :kconfig:option:`CONFIG_AT_MONITOR_HEAP_SIZE` option.
+
+Direct dispatching
+******************
+
+The AT monitor library supports defining a particular type of monitor that receives the AT notifications in an interrupt service routine.
+Because notifications dispatched to AT monitors in an ISR are not copied onto the AT monitor library heap, the application is guaranteed that the library will not be out of memory to copy the notification.
+This can be useful for some particularly large AT notifications or AT notifications that the application must reply to, for example, SMS notifications.
+
+The following code snippet shows how to register a handler that receives ``+CEREG`` notifications from the Modem library:
+
+.. code-block:: c
+
+	/* AT monitor for +CEREG notifications, dispatched in ISR */
+	AT_MONITOR_ISR(network_registration, "+CEREG", cereg_mon);
+
+	int cereg_mon(const char *notif)
+	{
+		printf("Received +CEREG notification in ISR");
 	}
 
 Pausing and resuming
@@ -77,7 +99,7 @@ The following code snippet shows how to define an AT monitor for ``+CEREG`` noti
 	void foo(void)
 	{
 		/* let's resume the monitor */
-		at_monitor_resume(network_registration);
+		at_monitor_resume(&network_registration);
 	}
 
 Wildcard filter
@@ -96,23 +118,6 @@ The following code snippet shows how to define an AT monitor that will receive a
 	{
 		printf("Received a notification: %s", notif);
 	}
-
-Differences from the AT command notifications library
-=====================================================
-
-The AT monitor and :ref:`at_notif_readme` libraries solve similar purposes but there are two important differences between the two libraries:
-
-#. The AT notification library works with the :ref:`at_cmd_readme`, which uses the Modem library AT socket. The AT monitor library uses the Modem library :ref:`nrfxlib:nrf_modem_at_api`, which is not socket-based.
-#. The AT notification library features run-time registration of notification handlers, whereas the AT monitor library features static registration.
-
-The two libraries are separate; they do not interfere with each other in any way and can be used at the same time.
-However, because the two libraries are separate and use separate APIs in the Modem library, note the following information:
-
-#. The AT monitors will only receive the notifications to which the application subscribed by using the :ref:`nrfxlib:nrf_modem_at_api`.
-#. The modules that have registered with :ref:`at_notif_readme` library will only receive notifications that were enabled using the :ref:`at_cmd_readme`.
-
-.. note::
-   The :ref:`at_notif_readme` library is deprecated and therefore it is recommended to use the AT monitor library for new applications.
 
 API documentation
 =================

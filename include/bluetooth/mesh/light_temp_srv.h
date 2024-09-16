@@ -17,6 +17,9 @@
 #include <bluetooth/mesh/light_ctl.h>
 #include <bluetooth/mesh/model_types.h>
 #include <bluetooth/mesh/gen_lvl_srv.h>
+#if IS_ENABLED(CONFIG_EMDS) && IS_ENABLED(CONFIG_BT_SETTINGS)
+#include "emds/emds.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -58,6 +61,13 @@ struct bt_mesh_light_temp_srv;
 /** Light CTL Temperature Server state access handlers. */
 struct bt_mesh_light_temp_srv_handlers {
 	/** @brief Set the Light Temperature state.
+	 *
+	 * When a set message is received, the model publishes a status message, with the response
+	 * set to @c rsp. When an acknowledged set message is received, the model also sends a
+	 * response back to a client. If a state change is non-instantaneous, for example when
+	 * @ref bt_mesh_model_transition_time returns a nonzero value, the application is
+	 * responsible for publishing a value of the Light Temperature state at the end of the
+	 * transition.
 	 *
 	 * @note This handler is mandatory.
 	 *
@@ -125,16 +135,21 @@ struct bt_mesh_light_temp_srv {
 	/** Handler function structure. */
 	const struct bt_mesh_light_temp_srv_handlers *handlers;
 
-#if CONFIG_BT_SETTINGS
-	/** Storage timer */
-	struct k_work_delayable store_timer;
-#endif
 	/** Default light temperature and delta UV */
 	struct bt_mesh_light_temp dflt;
 	/** Current Temperature range. */
 	struct bt_mesh_light_temp_range range;
-	/** The last known color temperature. */
-	struct bt_mesh_light_temp last;
+	/** Corrective delta used by the generic level server. */
+	uint16_t corrective_delta;
+	struct __packed {
+		/** The last known color temperature. */
+		struct bt_mesh_light_temp last;
+	} transient;
+
+#if IS_ENABLED(CONFIG_EMDS) && IS_ENABLED(CONFIG_BT_SETTINGS)
+	/** Dynamic entry to be stored with EMDS */
+	struct emds_dynamic_entry emds_entry;
+#endif
 };
 
 /** @brief Publish the current CTL Temperature status.

@@ -8,9 +8,10 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stddef.h>
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 #include "common_test.h"
+
 #include <mbedtls/ecdsa.h>
 
 /* Setting LOG_LEVEL_DBG might affect time measurements! */
@@ -139,6 +140,7 @@ void exec_test_case_ecdsa_sign(void)
 	mbedtls_mpi_init(&s);
 
 	start_time_measurement();
+
 	err_code = mbedtls_ecdsa_sign(&ctx_sign.grp, &r, &s, &ctx_sign.d,
 				      m_ecdsa_input_buf, hash_len,
 				      drbg_random, &drbg_ctx);
@@ -311,7 +313,7 @@ void exec_test_case_ecdsa_random(void)
 	mbedtls_ecdsa_free(&ctx_verify);
 }
 
-/** @brief  Macro for registering the the ECDSA sign test case by using section variables.
+/** @brief  Macro for registering the ECDSA sign test case by using section variables.
  *
  * @details     This macro places a variable in a section named "test_case_data",
  *              which is initialized by main.
@@ -326,7 +328,7 @@ ITEM_REGISTER(test_case_ecdsa_data, test_case_t test_ecdsa_sign) = {
 	.vectors_stop = __stop_test_vector_ecdsa_sign_data,
 };
 
-/** @brief  Macro for registering the the ECDSA verify test case by using section variables.
+/** @brief  Macro for registering the ECDSA verify test case by using section variables.
  *
  * @details     This macro places a variable in a section named "test_case_data",
  *              which is initialized by main.
@@ -341,7 +343,7 @@ ITEM_REGISTER(test_case_ecdsa_data, test_case_t test_ecdsa_verify) = {
 	.vectors_stop = __stop_test_vector_ecdsa_verify_data,
 };
 
-/** @brief  Macro for registering the the ECDSA random test case by using section variables.
+/** @brief  Macro for registering the ECDSA random test case by using section variables.
  *
  * @details     This macro places a variable in a section named "test_case_data",
  *              which is initialized by main.
@@ -355,3 +357,23 @@ ITEM_REGISTER(test_case_ecdsa_data, test_case_t test_ecdsa_random) = {
 	.vectors_start = __start_test_vector_ecdsa_random_data,
 	.vectors_stop = __stop_test_vector_ecdsa_random_data,
 };
+
+ZTEST_SUITE(test_suite_ecdsa, NULL, NULL, NULL, NULL, NULL);
+
+ZTEST(test_suite_ecdsa, test_case_ecdsa_sign)
+{
+	ecdsa_setup_sign();
+	exec_test_case_ecdsa_sign();
+}
+
+ZTEST(test_suite_ecdsa, test_case_ecdsa_verify)
+{
+	ecdsa_setup_verify();
+	exec_test_case_ecdsa_verify();
+}
+
+ZTEST(test_suite_ecdsa, test_case_ecdsa_random)
+{
+	ecdsa_setup_random();
+	exec_test_case_ecdsa_random();
+}

@@ -4,15 +4,14 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <zephyr/types.h>
 #include <string.h>
 #include <stdio.h>
 #include <modem/lte_lc.h>
-#include <modem/at_cmd.h>
 #include <modem/at_cmd_parser.h>
 #include <modem/at_params.h>
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 #define LC_MAX_READ_LENGTH			128
 
@@ -78,10 +77,12 @@
 
 /* NCELLMEAS notification parameters */
 #define AT_NCELLMEAS_RESPONSE_PREFIX		"%NCELLMEAS"
-#define AT_NCELLMEAS_STOP			"AT%NCELLMEASSTOP"
+#define AT_NCELLMEAS_START			"AT%%NCELLMEAS"
+#define AT_NCELLMEAS_STOP			"AT%%NCELLMEASSTOP"
 #define AT_NCELLMEAS_STATUS_INDEX		1
 #define AT_NCELLMEAS_STATUS_VALUE_SUCCESS	0
 #define AT_NCELLMEAS_STATUS_VALUE_FAIL		1
+#define AT_NCELLMEAS_STATUS_VALUE_INCOMPLETE	2
 #define AT_NCELLMEAS_CELL_ID_INDEX		2
 #define AT_NCELLMEAS_PLMN_INDEX			3
 #define AT_NCELLMEAS_TAC_INDEX			4
@@ -106,6 +107,8 @@
 #define AT_NCELLMEAS_PARAMS_COUNT_MAX					\
 	(AT_NCELLMEAS_PRE_NCELLS_PARAMS_COUNT +				\
 	 AT_NCELLMEAS_N_PARAMS_COUNT * CONFIG_LTE_NEIGHBOR_CELLS_MAX)
+
+#define AT_NCELLMEAS_GCI_CELL_PARAMS_COUNT	12
 
 /* XMODEMSLEEP command parameters. */
 #define AT_XMODEMSLEEP_SUB			"AT%%XMODEMSLEEP=1,%d,%d"
@@ -138,14 +141,20 @@
 #define AT_CONEVAL_DL_PATHLOSS_INDEX		17
 
 /* MDMEV command parameters */
-#define AT_MDMEV_ENABLE				"AT%MDMEV=1"
-#define AT_MDMEV_DISABLE			"AT%MDMEV=0"
+#define AT_MDMEV_ENABLE_1			"AT%%MDMEV=1"
+#define AT_MDMEV_ENABLE_2			"AT%%MDMEV=2"
+#define AT_MDMEV_DISABLE			"AT%%MDMEV=0"
 #define AT_MDMEV_RESPONSE_PREFIX		"%MDMEV: "
 #define AT_MDMEV_OVERHEATED			"ME OVERHEATED\r\n"
 #define AT_MDMEV_BATTERY_LOW			"ME BATTERY LOW\r\n"
 #define AT_MDMEV_SEARCH_STATUS_1		"SEARCH STATUS 1\r\n"
 #define AT_MDMEV_SEARCH_STATUS_2		"SEARCH STATUS 2\r\n"
 #define AT_MDMEV_RESET_LOOP			"RESET LOOP\r\n"
+#define AT_MDMEV_NO_IMEI			"NO IMEI\r\n"
+#define AT_MDMEV_CE_LEVEL_0			"PRACH CE-LEVEL 0\r\n"
+#define AT_MDMEV_CE_LEVEL_1			"PRACH CE-LEVEL 1\r\n"
+#define AT_MDMEV_CE_LEVEL_2			"PRACH CE-LEVEL 2\r\n"
+#define AT_MDMEV_CE_LEVEL_3			"PRACH CE-LEVEL 3\r\n"
 
 /* @brief Helper function to check if a response is what was expected.
  *
@@ -183,18 +192,20 @@ int parse_rrc_mode(const char *at_response,
  */
 int parse_edrx(const char *at_response, struct lte_lc_edrx_cfg *cfg);
 
-/* @brief Parses an AT+CEREG response parameter list and extracts the PSM
- *	  configuration.
+/* @brief Parses PSM configuration from periodic TAU timer and active time strings.
  *
- * @param at_params Pointer to AT parameter list.
- * @param is_notif Indicates if the AT list is for a notification.
- * @param psm_cfg Pointer to where the PSM configuration is stored.
+ * @param active_time_str Pointer to active time string.
+ * @param tau_ext_str Pointer to TAU (T3412 extended) string.
+ * @param tau_legacy_str Pointer to TAU (T3412) string. Can be NULL.
+ * @param psm_cfg Pointer to PSM configuraion struct where the parsed values
+ *		  are stored.
  *
- * @return Zero on success or (negative) error code otherwise.
+ * @retval 0 if PSM configuration was successfully parsed.
+ * @retval -EINVAL if parsing failed.
  */
-int parse_psm(struct at_param_list *at_params,
-		  bool is_notif,
-		  struct lte_lc_psm_cfg *psm_cfg);
+int parse_psm(const char *active_time_str, const char *tau_ext_str,
+	      const char *tau_legacy_str, struct lte_lc_psm_cfg *psm_cfg);
+
 
 /* @brief Parses an CEREG response and returns network registration status,
  *	  cell information, LTE mode and pSM configuration.
@@ -205,7 +216,6 @@ int parse_psm(struct at_param_list *at_params,
  *		     Can be NULL.
  * @param cell Pointer to cell information struct. Can be NULL.
  * @param lte_mode Pointer to LTE mode struct. Can be NULL.
- * @param psm_cfg Pointer to PSM configuration struct. Can be NULL.
  *
  * @return Zero on success or (negative) error code otherwise.
  */
@@ -213,8 +223,7 @@ int parse_cereg(const char *at_response,
 		bool is_notif,
 		enum lte_lc_nw_reg_status *reg_status,
 		struct lte_lc_cell *cell,
-		enum lte_lc_lte_mode *lte_mode,
-		struct lte_lc_psm_cfg *psm_cfg);
+		enum lte_lc_lte_mode *lte_mode);
 
 /* @brief Parses an XT3412 response and extracts the time until next TAU.
  *
@@ -240,8 +249,26 @@ uint32_t neighborcell_count_get(const char *at_response);
  * @param ncell Pointer to ncell structure.
  *
  * @return Zero on success or (negative) error code otherwise.
+ *         Returns -E2BIG if the static buffers set by CONFIG_LTE_NEIGHBOR_CELLS_MAX
+ *         are to small for the modem response. The associated data is still valid,
+ *         but not complete.
  */
 int parse_ncellmeas(const char *at_response, struct lte_lc_cells_info *cells);
+
+/* @brief Parses a NCELLMEAS notification for GCI search types, and stores neighboring cell
+ *	  and measured GCI cell information in a struct.
+ *
+ * @param params Neighbor cell measurement parameters.
+ * @param at_response Pointer to buffer with AT response.
+ * @param cells Pointer to lte_lc_cells_info structure.
+ *
+ * @return Zero on success or (negative) error code otherwise.
+ *         Returns -E2BIG if the static buffers set by CONFIG_LTE_NEIGHBOR_CELLS_MAX
+ *         are to small for the modem response. The associated data is still valid,
+ *         but not complete.
+ */
+int parse_ncellmeas_gci(struct lte_lc_ncellmeas_params *params,
+	const char *at_response, struct lte_lc_cells_info *cells);
 
 /* @brief Parses an XMODEMSLEEP response and extracts the sleep type and time.
  *
@@ -318,3 +345,39 @@ void event_handler_list_dispatch(const struct lte_lc_evt *const evt);
  * @return a boolean, true if it's empty, false otherwise
  */
 bool event_handler_list_is_empty(void);
+
+/* @brief Convert string to integer with a chosen base.
+ *
+ * @param str_buf Pointer to null-terminated string.
+ * @param base The base to use when converting the string.
+ * @param output Pointer to an integer where the result is stored.
+ *
+ * @retval 0 if conversion was successful.
+ * @retval -ENODATA if conversion failed.
+ */
+int string_to_int(const char *str_buf, int base, int *output);
+
+/* @brief Get periodic search pattern string to be used in AT%PERIODICSEARCHCONF from
+ *	  a pattern struct.
+ *
+ * @param buf Buffer to store the string.
+ * @param buf_size Size of the provided buffer.
+ * @param pattern Pointer to pattern struct.
+ *
+ * @return Pointer to the buffer where the pattern string is stored.
+ */
+char *periodic_search_pattern_get(char *const buf, size_t buf_size,
+				  const struct lte_lc_periodic_search_pattern *const pattern);
+
+/* @brief Parse a periodic search pattern from an AT%PERIODICSEARCHCONF response
+ *	  and populate a pattern struct with the result.
+ *	  The pattern string is expected to be without quotation marks and null-terminated.
+ *
+ * @param pattern_str Pointer to pattern string.
+ * @param pattern Pointer to storage for the parsed pattern.
+ *
+ * @retval 0 if parsing was successful.
+ * @retval -EBADMSG if pattern could not be parsed.
+ */
+int parse_periodic_search_pattern(const char *const pattern_str,
+				  struct lte_lc_periodic_search_pattern *pattern);

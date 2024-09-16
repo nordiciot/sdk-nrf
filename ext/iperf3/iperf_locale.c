@@ -108,7 +108,6 @@ const char nrf_iperf3_usage_support_str[] =
                            "  -v, --version             show version information and quit\n"
                            "  -m, --manual              show this message and quit\n"
 #if defined (CONFIG_NRF_IPERF3_MULTICONTEXT_SUPPORT)                           
-                           "  -I, --interface <apn>     use this option to bind to PDN with specific APN.\n"
                            "      --pdn_id <pdn_id>     use this option to bind to PDN with actual PDN ID.\n"
 #endif
                            "\nServer specific:\n"
@@ -119,7 +118,7 @@ const char nrf_iperf3_usage_support_str[] =
                            "  -c, --client    <host>    run in client mode, connecting to <host>\n"
                            "  -u, --udp                 use UDP rather than TCP\n"
                            "  --connect-timeout #       timeout for control connection setup (ms)\n"
-#if defined (CONFIG_NRF_MODEM_LIB_TRACE_ENABLED) && defined (CONFIG_AT_CMD)
+#if defined (CONFIG_NRF_MODEM_LIB_TRACE)
                            "  --curr-mdm-traces         use currently configured modem traces\n"
 #endif
                            "  -b, --bitrate #[KMG][/#]  target bitrate in bits/sec (0 for unlimited)\n"

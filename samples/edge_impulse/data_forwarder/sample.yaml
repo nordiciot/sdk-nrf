@@ -2,7 +2,7 @@ sample:
   description: Sample showing Edge Impulse data forwarder usage
   name: Edge Impulse data forwarder sample
 tests:
-  samples.ei_data_forwarder:
+  sample.ei_data_forwarder:
     build_only: true
     integration_platforms:
       - nrf52dk_nrf52832
@@ -10,4 +10,5 @@ tests:
       - nrf5340dk_nrf5340_cpuapp
       - nrf5340dk_nrf5340_cpuapp_ns
       - nrf9160dk_nrf9160_ns
+    platform_exclude: native_posix qemu_x86 qemu_cortex_m3
     tags: ci_build

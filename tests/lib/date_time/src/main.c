@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <ztest.h>
+#include <zephyr/ztest.h>
 #include <stdio.h>
 #include <string.h>
 #include <date_time.h>
@@ -20,7 +20,7 @@ static void reset_to_valid_time(struct tm *time)
 	time->tm_sec = 30;
 }
 
-static void test_date_time_invalid_input(void)
+ZTEST(test_date_time, test_date_time_invalid_input)
 {
 	int ret;
 	struct tm date_time_dummy;
@@ -117,7 +117,7 @@ static void test_date_time_invalid_input(void)
 
 }
 
-static void test_date_time_premature_request(void)
+ZTEST(test_date_time, test_date_time_premature_request)
 {
 	int ret;
 	int64_t ts_unix_ms = 0;
@@ -133,7 +133,7 @@ static void test_date_time_premature_request(void)
 
 }
 
-static void test_date_time_already_converted(void)
+ZTEST(test_date_time, test_date_time_already_converted)
 {
 	int ret;
 
@@ -161,7 +161,7 @@ static void test_date_time_already_converted(void)
 		      "ts_unix_ms should equal ts_unix_ms_prev");
 }
 
-static void test_date_time_negative_uptime(void)
+ZTEST(test_date_time, test_date_time_negative_uptime)
 {
 	int ret;
 
@@ -172,7 +172,7 @@ static void test_date_time_negative_uptime(void)
 		      "date_time_uptime_to_unix_time_ms should return -EINVAL");
 }
 
-static void test_date_time_clear(void)
+ZTEST(test_date_time, test_date_time_clear)
 {
 	int ret;
 
@@ -189,7 +189,7 @@ static void test_date_time_clear(void)
 	zassert_equal(0, ts_unix_ms, "ts_unix_ms should equal 0");
 }
 
-static void test_date_time_conversion(void)
+ZTEST(test_date_time, test_date_time_conversion)
 {
 	int ret;
 	struct tm date_time_dummy = {
@@ -201,7 +201,7 @@ static void test_date_time_conversion(void)
 		.tm_sec = 30
 	};
 
-	/** UNIX timestamp equavivalent to tm structure date_time_dummy. */
+	/** UNIX timestamp equivalent to tm structure date_time_dummy. */
 	/** Fri Aug 07 2020 15:11:30 UTC. */
 	int64_t date_time_utc_unix = 1596813090000;
 	int64_t date_time_utc_unix_origin = k_uptime_get();
@@ -210,36 +210,62 @@ static void test_date_time_conversion(void)
 	int64_t ts_expect = 0;
 
 	ret = date_time_set(&date_time_dummy);
-	zassert_equal(0, ret, "date_time_set should equal 0");
+	zassert_equal(0, ret, "date_time_set() should return 0");
 
 	ret = date_time_now(&ts_unix_ms);
-	zassert_equal(0, ret, "date_time_now should equal 0");
+	zassert_equal(0, ret, "date_time_now() should return 0");
 
-	ts_expect = date_time_utc_unix + k_uptime_get() -
-			date_time_utc_unix_origin;
+	ts_expect = date_time_utc_unix - date_time_utc_unix_origin + k_uptime_get();
 
 	/* We cannot compare exact conversions given by the date time library due to the fact that
 	 * the comparing values are based on k_uptime_get(). Use range instead and compare agains an
-	 * arbitray "high" delta, just to be sure.
+	 * arbitrary "high" delta, just to be sure.
 	 */
-	zassert_within(ts_expect, ts_unix_ms, 500,
-		       "Converted value should be within 500ms of the expected result");
+	zassert_within(ts_expect, ts_unix_ms, 100,
+		       "Converted value should be within 100 ms of the expected result");
 
 	ret = date_time_timestamp_clear(&ts_unix_ms);
-	zassert_equal(0, ret, "date_time_timestamp_clear should return 0");
+	zassert_equal(0, ret, "date_time_timestamp_clear() should return 0");
+
+	zassert_equal(0, ts_unix_ms, "ts_unix_ms should equal 0");
+
+	uptime = 0;
+
+	ret = date_time_uptime_to_unix_time_ms(&uptime);
+	zassert_equal(0, ret,
+		      "date_time_uptime_to_unix_time_ms() should return 0");
+
+	ts_expect = date_time_utc_unix - date_time_utc_unix_origin;
+
+	zassert_within(ts_expect, uptime, 100,
+		       "Converted value should be within 100 ms of the expected result");
+
+	uptime = k_uptime_get();
 
 	ret = date_time_uptime_to_unix_time_ms(&uptime);
 	zassert_equal(0, ret,
 		      "date_time_uptime_to_unix_time_ms should return 0");
 
-	ts_expect = date_time_utc_unix_origin + date_time_utc_unix -
-			date_time_utc_unix_origin;
+	ts_expect = date_time_utc_unix - date_time_utc_unix_origin + k_uptime_get();
 
-	zassert_within(ts_expect, uptime, 500,
-		       "Converted value should be within 500ms of the expected result");
+	zassert_within(ts_expect, uptime, 100,
+		       "Converted value should be within 100 ms of the expected result");
+
+	k_sleep(K_SECONDS(1));
+
+	uptime = k_uptime_get();
+
+	ret = date_time_uptime_to_unix_time_ms(&uptime);
+	zassert_equal(0, ret,
+		      "date_time_uptime_to_unix_time_ms should return 0");
+
+	ts_expect = date_time_utc_unix - date_time_utc_unix_origin + k_uptime_get();
+
+	zassert_within(ts_expect, uptime, 100,
+		       "Converted value should be within 100 ms of the expected result");
 }
 
-static void test_date_time_validity(void)
+ZTEST(test_date_time, test_date_time_validity)
 {
 	int ret;
 	struct tm date_time_dummy = {
@@ -263,51 +289,21 @@ static void test_date_time_validity(void)
 	zassert_equal(true, ret, "date_time_is_valid should equal true");
 }
 
-static void test_date_time_setup(void)
+static void date_time_after(void *unused)
 {
-	/** */
+	ARG_UNUSED(unused);
+	date_time_clear();
 }
 
-static void test_date_time_teardown(void)
+static void *suite_setup(void)
 {
-	int ret;
+	/* Delay to ensure that k_uptime_get returns positive non-zero value
+	 * irrespective of what CONFIG_SYS_CLOCK_TICKS_PER_SEC value is.
+	 * This has been an issue in QEMU tests.
+	 */
+	k_sleep(K_SECONDS(1));
 
-	ret = date_time_clear();
-	zassert_equal(0, ret, "date_time_clear should return 0");
+	return NULL;
 }
 
-void test_main(void)
-{
-	ztest_test_suite(test_date_time,
-		ztest_unit_test_setup_teardown(
-					test_date_time_invalid_input,
-					test_date_time_setup,
-					test_date_time_teardown),
-		ztest_unit_test_setup_teardown(
-					test_date_time_premature_request,
-					test_date_time_setup,
-					test_date_time_teardown),
-		ztest_unit_test_setup_teardown(
-					test_date_time_clear,
-					test_date_time_setup,
-					test_date_time_teardown),
-		ztest_unit_test_setup_teardown(
-					test_date_time_negative_uptime,
-					test_date_time_setup,
-					test_date_time_teardown),
-		ztest_unit_test_setup_teardown(
-					test_date_time_already_converted,
-					test_date_time_setup,
-					test_date_time_teardown),
-		ztest_unit_test_setup_teardown(
-					test_date_time_conversion,
-					test_date_time_setup,
-					test_date_time_teardown),
-		ztest_unit_test_setup_teardown(
-					test_date_time_validity,
-					test_date_time_setup,
-					test_date_time_teardown)
-	);
-
-	ztest_run_test_suite(test_date_time);
-}
+ZTEST_SUITE(test_date_time, NULL, suite_setup, NULL, date_time_after, NULL);

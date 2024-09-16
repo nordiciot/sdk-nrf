@@ -1,8 +1,15 @@
+#
+# Copyright (c) 2023 Nordic Semiconductor
+#
+# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+#
+
 # nrf documentation build configuration file
 
 import os
 from pathlib import Path
 import sys
+import re
 
 
 # Paths ------------------------------------------------------------------------
@@ -10,16 +17,18 @@ import sys
 NRF_BASE = Path(__file__).absolute().parents[2]
 
 sys.path.insert(0, str(NRF_BASE / "doc" / "_utils"))
+import redirects
 import utils
 
 ZEPHYR_BASE = utils.get_projdir("zephyr")
+MCUBOOT_BASE = utils.get_projdir("mcuboot")
 
 # General configuration --------------------------------------------------------
 
 project = "nRF Connect SDK"
-copyright = "2019-2021, Nordic Semiconductor"
+copyright = "2019-2023, Nordic Semiconductor"
 author = "Nordic Semiconductor"
-version = release = "1.7.99"
+version = release = "2.4.99"
 
 sys.path.insert(0, str(ZEPHYR_BASE / "doc" / "_extensions"))
 sys.path.insert(0, str(NRF_BASE / "doc" / "_extensions"))
@@ -31,14 +40,20 @@ extensions = [
     "table_from_rows",
     "options_from_kconfig",
     "ncs_include",
+    "manifest_revisions_table",
     "sphinxcontrib.mscgen",
     "zephyr.html_redirects",
     "zephyr.warnings_filter",
-    "zephyr.kconfig-role",
-    "ncs_cache",
+    "zephyr.kconfig",
     "zephyr.external_content",
     "zephyr.doxyrunner",
+    "zephyr.link-roles",
     "sphinx_tabs.tabs",
+    "software_maturity_table",
+    "sphinx_togglebutton",
+    "sphinx_copybutton",
+    "notfound.extension",
+    "ncs_tool_versions",
 ]
 
 linkcheck_ignore = [
@@ -63,7 +78,6 @@ linkcheck_anchors_ignore = [r"page="]
 rst_epilog = """
 .. include:: /links.txt
 .. include:: /shortcuts.txt
-.. include:: /versions.txt
 """
 
 # Options for HTML output ------------------------------------------------------
@@ -74,7 +88,7 @@ html_last_updated_fmt = "%b %d, %Y"
 html_show_sourcelink = True
 html_show_sphinx = False
 
-html_theme_options = {"docsets": utils.get_docsets("nrf")}
+html_theme_options = {"docset": "nrf", "docsets": utils.ALL_DOCSETS}
 
 # Options for intersphinx ------------------------------------------------------
 
@@ -119,6 +133,21 @@ doxyrunner_fmt_vars = {
     "NRF_BINARY_DIR": str(utils.get_builddir() / "nrf"),
 }
 
+# create mbedtls config header (needed for Doxygen)
+doxyrunner_outdir.mkdir(exist_ok=True)
+
+fin_path = NRF_BASE / "subsys" / "nrf_security" / "configs" / "legacy_crypto_config.h.template"
+fout_path = doxyrunner_outdir / "mbedtls_doxygen_config.h"
+
+with open(fin_path) as fin, open(fout_path, "w") as fout:
+    fout.write(
+        re.sub(
+            r"#cmakedefine ([A-Z0-9_-]+)",
+            r"#define \1",
+            fin.read()
+        )
+    )
+
 # Options for breathe ----------------------------------------------------------
 
 breathe_projects = {"nrf": str(doxyrunner_outdir / "xml")}
@@ -136,17 +165,16 @@ ncs_include_mapping = {
 
 # Options for html_redirect ----------------------------------------------------
 
-html_redirect_pages = [
-    ("gs_ins_windows", "gs_installing"),
-    ("gs_ins_linux", "gs_installing"),
-    ("gs_ins_mac", "gs_installing"),
-    ("examples", "samples"),
-]
+html_redirect_pages = redirects.NRF
 
 # -- Options for zephyr.warnings_filter ----------------------------------------
 
 warnings_filter_config = str(NRF_BASE / "doc" / "nrf" / "known-warnings.txt")
-warnings_filter_silent = False
+
+# Options for zephyr.link-roles ------------------------------------------------
+
+link_roles_manifest_project = "nrf"
+link_roles_manifest_baseurl = "https://github.com/nrfconnect/sdk-nrf"
 
 # Options for external_content -------------------------------------------------
 
@@ -163,22 +191,40 @@ external_content_keep = ["versions.txt"]
 # Options for table_from_rows --------------------------------------------------
 
 table_from_rows_base_dir = NRF_BASE
+table_from_sample_yaml_board_reference = "/includes/sample_board_rows.txt"
+
+# Options for ncs_tool_versions ------------------------------------------------
+
+ncs_tool_versions_host_deps = [
+    NRF_BASE / "scripts" / "tools-versions-win10.yml",
+    NRF_BASE / "scripts" / "tools-versions-linux.yml",
+    NRF_BASE / "scripts" / "tools-versions-darwin.yml",
+]
+ncs_tool_versions_python_deps = [
+    ZEPHYR_BASE / "scripts" / "requirements-base.txt",
+    ZEPHYR_BASE / "scripts" / "requirements-doc.txt",
+    MCUBOOT_BASE / "scripts" / "requirements.txt",
+    NRF_BASE / "scripts" / "requirements-base.txt",
+    NRF_BASE / "scripts" / "requirements-doc.txt",
+    NRF_BASE / "scripts" / "requirements-build.txt",
+]
 
 # Options for options_from_kconfig ---------------------------------------------
 
 options_from_kconfig_base_dir = NRF_BASE
 options_from_kconfig_zephyr_dir = ZEPHYR_BASE
 
-# Options for ncs_cache --------------------------------------------------------
+# Options for manifest_revisions_table -----------------------------------------
 
-ncs_cache_docset = "nrf"
-ncs_cache_build_dir = utils.get_builddir()
-ncs_cache_config = NRF_BASE / "doc" / "cache.yml"
-ncs_cache_manifest = NRF_BASE / "west.yml"
+manifest_revisions_table_manifest = NRF_BASE / "west.yml"
 
+# Options for sphinx_notfound_page ---------------------------------------------
+
+notfound_urls_prefix = "/nRF_Connect_SDK/doc/{}/nrf/".format(
+    "latest" if version.endswith("99") else version
+)
 
 def setup(app):
-    app.add_css_file("css/common.css")
     app.add_css_file("css/nrf.css")
 
-    utils.add_google_analytics(app)
+    utils.add_google_analytics(app, html_theme_options)

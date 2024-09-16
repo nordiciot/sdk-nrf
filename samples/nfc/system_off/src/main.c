@@ -5,8 +5,9 @@
  */
 
 #include <stdio.h>
-#include <zephyr.h>
-#include <pm/pm.h>
+#include <zephyr/kernel.h>
+#include <zephyr/pm/pm.h>
+#include <zephyr/pm/policy.h>
 
 #include <nrfx.h>
 #include <hal/nrf_power.h>
@@ -38,7 +39,7 @@ static struct k_work_delayable system_off_work;
  * @brief Function that receives events from NFC.
  */
 static void nfc_callback(void *context,
-			 enum nfc_t2t_event event,
+			 nfc_t2t_event_t event,
 			 const uint8_t *data,
 			 size_t data_length)
 {
@@ -137,7 +138,9 @@ static void system_off(struct k_work *work)
 	/* Before we disabled entry to deep sleep. Here we need to override
 	 * that, then force a sleep so that the deep sleep takes effect.
 	 */
-	pm_power_state_force((struct pm_state_info){PM_STATE_SOFT_OFF, 0, 0});
+	const struct pm_state_info si = {PM_STATE_SOFT_OFF, 0, 0};
+
+	pm_state_force(0, &si);
 
 	dk_set_led_off(SYSTEM_ON_LED);
 
@@ -199,12 +202,12 @@ static void print_reset_reason(void)
 }
 
 
-void main(void)
+int main(void)
 {
 	/* Configure LED-pins */
 	if (dk_leds_init() < 0) {
 		printk("Cannot init LEDs!\n");
-		return;
+		return 0;
 	}
 	dk_set_led_on(SYSTEM_ON_LED);
 
@@ -218,11 +221,12 @@ void main(void)
 	/* Start NFC */
 	if (start_nfc() < 0) {
 		printk("ERROR: NFC configuration failed\n");
-		return;
+		return 0;
 	}
 
 	/* Prevent deep sleep (system off) from being entered */
-	pm_constraint_set(PM_STATE_SOFT_OFF);
+	pm_policy_state_lock_get(PM_STATE_SOFT_OFF, PM_ALL_SUBSTATES);
 
 	/* Exit main function - the rest will be done by the callbacks */
+	return 0;
 }

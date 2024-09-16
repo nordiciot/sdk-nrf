@@ -6,11 +6,11 @@
 
 #include <errno.h>
 #include <string.h>
-#include <kernel.h>
+#include <zephyr/kernel.h>
 #include <zephyr/types.h>
-#include <sys/atomic.h>
+#include <zephyr/sys/atomic.h>
 #include <nfc/t4t/isodep.h>
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(nfc_t4t_isodep, CONFIG_NFC_T4T_ISODEP_LOG_LEVEL);
 
@@ -52,7 +52,7 @@ LOG_MODULE_REGISTER(nfc_t4t_isodep, CONFIG_NFC_T4T_ISODEP_LOG_LEVEL);
 #define T4T_FC_IN_MS 13560UL
 
 #define T4T_FWT_TO_MS(_fwt)                   \
-	ceiling_fraction((_fwt), T4T_FC_IN_MS)
+	DIV_ROUND_UP((_fwt), T4T_FC_IN_MS)
 
 #define T4T_RATS_FDT (T4T_FWT_ACTIVATION +        \
 		T4T_FWT_DELTA + NFCA_T4T_FWT_T_FC)
@@ -269,6 +269,13 @@ static int ats_parse(const uint8_t *data, size_t len)
 	/* Check if ATS contains historical bytes. */
 	if (index < len) {
 		t4t_isodep.tag.historical_len = len - index;
+		/* Maximum parsing length of the historical bytes is limited to 15
+		 * NFC Forum Digital Specification 2.0 14.6.2.
+		 */
+		if (t4t_isodep.tag.historical_len > NFC_T4T_ISODEP_HIST_MAX_LEN) {
+			t4t_isodep.tag.historical_len = NFC_T4T_ISODEP_HIST_MAX_LEN;
+		}
+
 		memcpy(t4t_isodep.tag.historical, &data[index],
 		       t4t_isodep.tag.historical_len);
 	}
@@ -875,7 +882,14 @@ int nfc_t4t_isodep_transmit(const uint8_t *data, size_t data_len)
 			LOG_DBG("Wait %d ms before sending first frame after ATS Response",
 				delay);
 
-			return k_work_reschedule(&isodep_work, K_MSEC(delay));
+			int ret = k_work_reschedule(&isodep_work, K_MSEC(delay));
+
+			if (ret < 0) {
+				return ret;
+			}
+
+			__ASSERT_NO_MSG(ret == 1);
+			return 0;
 		}
 	}
 

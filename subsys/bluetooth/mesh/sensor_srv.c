@@ -14,9 +14,9 @@
 #include "model_utils.h"
 #include "sensor.h"
 
-#define BT_DBG_ENABLED IS_ENABLED(CONFIG_BT_MESH_DEBUG_MODEL)
-#define LOG_MODULE_NAME bt_mesh_sensor_srv
-#include "common/log.h"
+#define LOG_LEVEL CONFIG_BT_MESH_MODEL_LOG_LEVEL
+#include "zephyr/logging/log.h"
+LOG_MODULE_REGISTER(bt_mesh_sensor_srv);
 
 #define SENSOR_FOR_EACH(_list, _node)                                          \
 	SYS_SLIST_FOR_EACH_CONTAINER(_list, _node, state.node)
@@ -37,11 +37,9 @@ static struct bt_mesh_sensor *sensor_get(struct bt_mesh_sensor_srv *srv,
 }
 
 #if CONFIG_BT_SETTINGS
-static void store_timeout(struct k_work *work)
+static void sensor_srv_pending_store(struct bt_mesh_model *model)
 {
-	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-	struct bt_mesh_sensor_srv *srv = CONTAINER_OF(
-		dwork, struct bt_mesh_sensor_srv, store_timer);
+	struct bt_mesh_sensor_srv *srv = model->user_data;
 
 	/* Cadence is stored as a sequence of cadence status messages */
 	NET_BUF_SIMPLE_DEFINE(buf, (CONFIG_BT_MESH_SENSOR_SRV_SENSORS_MAX *
@@ -51,12 +49,16 @@ static void store_timeout(struct k_work *work)
 		const struct bt_mesh_sensor *s = srv->sensor_array[i];
 		int err;
 
+		if (!s->state.configured) {
+			continue;
+		}
+
 		net_buf_simple_add_le16(&buf, s->type->id);
 		err = sensor_cadence_encode(&buf, s->type, s->state.pub_div,
 					    s->state.min_int,
 					    &s->state.threshold);
 		if (err) {
-			BT_ERR("Failed encode data: %d", err);
+			LOG_ERR("Failed encode data: %d", err);
 			return;
 		}
 	}
@@ -70,14 +72,14 @@ static void store_timeout(struct k_work *work)
 static void cadence_store(struct bt_mesh_sensor_srv *srv)
 {
 #if CONFIG_BT_SETTINGS
-	k_work_schedule(
-		&srv->store_timer,
-		K_SECONDS(CONFIG_BT_MESH_MODEL_SRV_STORE_TIMEOUT));
+	bt_mesh_model_data_store_schedule(srv->model);
 #endif
 }
 
 
-static int value_get(struct bt_mesh_sensor *sensor, struct bt_mesh_msg_ctx *ctx,
+static int value_get(struct bt_mesh_sensor_srv *srv,
+		     struct bt_mesh_sensor *sensor,
+		     struct bt_mesh_msg_ctx *ctx,
 		     struct sensor_value *value)
 {
 	int err;
@@ -86,9 +88,9 @@ static int value_get(struct bt_mesh_sensor *sensor, struct bt_mesh_msg_ctx *ctx,
 		return -ENOTSUP;
 	}
 
-	err = sensor->get(sensor, ctx, value);
+	err = sensor->get(srv, sensor, ctx, value);
 	if (err) {
-		BT_WARN("Value get for 0x%04x: %d", sensor->type->id, err);
+		LOG_WRN("Value get for 0x%04x: %d", sensor->type->id, err);
 		return err;
 	}
 
@@ -97,14 +99,15 @@ static int value_get(struct bt_mesh_sensor *sensor, struct bt_mesh_msg_ctx *ctx,
 	return 0;
 }
 
-static int buf_status_add(struct bt_mesh_sensor *sensor,
+static int buf_status_add(struct bt_mesh_sensor_srv *srv,
+			  struct bt_mesh_sensor *sensor,
 			  struct bt_mesh_msg_ctx *ctx,
 			  struct net_buf_simple *buf)
 {
 	struct sensor_value value[CONFIG_BT_MESH_SENSOR_CHANNELS_MAX] = {};
 	int err;
 
-	err = value_get(sensor, ctx, value);
+	err = value_get(srv, sensor, ctx, value);
 	if (err) {
 		sensor_status_id_encode(buf, 0, sensor->type->id);
 		return err;
@@ -112,7 +115,7 @@ static int buf_status_add(struct bt_mesh_sensor *sensor,
 
 	err = sensor_status_encode(buf, sensor, value);
 	if (err) {
-		BT_WARN("Sensor value encode for 0x%04x: %d", sensor->type->id,
+		LOG_WRN("Sensor value encode for 0x%04x: %d", sensor->type->id,
 			err);
 		sensor_status_id_encode(buf, 0, sensor->type->id);
 	}
@@ -153,10 +156,10 @@ static int handle_descriptor_get(struct bt_mesh_model *model, struct bt_mesh_msg
 	}
 
 	SENSOR_FOR_EACH(&srv->sensors, sensor) {
-		BT_DBG("Reporting ID 0x%04x", sensor->type->id);
+		LOG_DBG("Reporting ID 0x%04x", sensor->type->id);
 
 		if (net_buf_simple_tailroom(&rsp) < (8 + BT_MESH_MIC_SHORT)) {
-			BT_WARN("Not enough room for all descriptors");
+			LOG_WRN("Not enough room for all descriptors");
 			break;
 		}
 
@@ -193,9 +196,9 @@ static int handle_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 
 		sensor = sensor_get(srv, id);
 		if (sensor) {
-			buf_status_add(sensor, ctx, &rsp);
+			buf_status_add(srv, sensor, ctx, &rsp);
 		} else {
-			BT_WARN("Unknown sensor ID 0x%04x", id);
+			LOG_DBG("Unknown sensor ID 0x%04x", id);
 			sensor_status_id_encode(&rsp, 0, id);
 		}
 
@@ -203,7 +206,7 @@ static int handle_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 	}
 
 	SENSOR_FOR_EACH(&srv->sensors, sensor) {
-		buf_status_add(sensor, ctx, &rsp);
+		buf_status_add(srv, sensor, ctx, &rsp);
 	}
 
 respond:
@@ -245,7 +248,34 @@ static int handle_column_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx
 	bt_mesh_model_msg_init(&rsp, BT_MESH_SENSOR_OP_COLUMN_STATUS);
 	net_buf_simple_add_le16(&rsp, id);
 
-	if (!sensor) {
+	if (!sensor || !sensor->series.get) {
+		LOG_DBG("No series support in 0x%04x", id);
+		goto respond;
+	}
+
+	if (sensor->type->channel_count < 3) {
+		/* For sensors with one or two channels, pull the column index
+		 * directly from the message
+		 */
+		uint32_t col_index = net_buf_simple_pull_le16(buf);
+
+		if (col_index >= sensor->series.column_count) {
+			LOG_WRN("Column out of range in 0x%04x",
+				sensor->type->id);
+			goto respond;
+		}
+
+		err = sensor_column_value_encode(&rsp, srv, sensor, ctx,
+						 col_index);
+		if (err) {
+			LOG_WRN("Failed encoding sensor column: %d", err);
+			return err;
+		}
+		goto respond;
+	}
+
+	if (!sensor->series.columns) {
+		LOG_DBG("No series support in 0x%04x", sensor->type->id);
 		goto respond;
 	}
 
@@ -254,9 +284,9 @@ static int handle_column_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx
 	struct sensor_value col_x;
 
 	col_format = bt_mesh_sensor_column_format_get(sensor->type);
-	if (!col_format || !sensor->series.columns || !sensor->series.get) {
-		BT_WARN("No series support in 0x%04x", sensor->type->id);
-		goto respond;
+
+	if (col_format == NULL) {
+		return -ENOTSUP;
 	}
 
 	err = sensor_ch_decode(buf, col_format, &col_x);
@@ -264,18 +294,18 @@ static int handle_column_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx
 		return err;
 	}
 
-	BT_DBG("Column %s", bt_mesh_sensor_ch_str(&col_x));
+	LOG_DBG("Column %s", bt_mesh_sensor_ch_str(&col_x));
 
 	col = column_get(&sensor->series, &col_x);
 	if (!col) {
-		BT_WARN("Unknown column");
-		sensor_ch_encode(&rsp, col_format, &col_x);
+		LOG_WRN("Unknown column");
+		(void) sensor_ch_encode(&rsp, col_format, &col_x);
 		goto respond;
 	}
 
-	err = sensor_column_encode(&rsp, sensor, ctx, col);
+	err = sensor_column_encode(&rsp, srv, sensor, ctx, col);
 	if (err) {
-		BT_WARN("Failed encoding sensor column: %d", err);
+		LOG_WRN("Failed encoding sensor column: %d", err);
 		return err;
 	}
 
@@ -283,6 +313,21 @@ respond:
 	bt_mesh_model_send(model, ctx, &rsp, NULL, NULL);
 
 	return 0;
+}
+
+static uint16_t max_column_count(const struct bt_mesh_sensor_type *sensor)
+{
+	uint16_t column_size = 0;
+
+	for (int i = 0; i < sensor->channel_count; i++) {
+		column_size += sensor->channels[i].format->size;
+	}
+
+	if (column_size) {
+		return (BT_MESH_TX_SDU_MAX - BT_MESH_MIC_SHORT - 3) / column_size;
+	} else {
+		return (BT_MESH_TX_SDU_MAX - BT_MESH_MIC_SHORT - 3);
+	}
 }
 
 static int handle_series_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
@@ -303,36 +348,74 @@ static int handle_series_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx
 	bt_mesh_model_msg_init(&rsp, BT_MESH_SENSOR_OP_SERIES_STATUS);
 	net_buf_simple_add_le16(&rsp, id);
 
-	if (!sensor) {
+	if (!sensor || !sensor->series.get) {
+		LOG_DBG("No series support in 0x%04x", id);
+		goto respond;
+	}
+
+	if (sensor->type->channel_count < 3) {
+		uint16_t start = 0;
+		uint16_t end = sensor->series.column_count - 1;
+
+		if (buf->len == sizeof(uint16_t) * 2) {
+			start = net_buf_simple_pull_le16(buf);
+			end = net_buf_simple_pull_le16(buf);
+			if (start >= sensor->series.column_count ||
+			    end >= sensor->series.column_count ||
+			    start > end) {
+				LOG_WRN("Invalid range");
+				goto respond;
+			}
+		} else if (buf->len != 0) {
+			LOG_WRN("Invalid length (%u)", buf->len);
+			return -EMSGSIZE;
+		}
+
+		uint16_t max_columns = max_column_count(sensor->type);
+
+		if (end - start + 1 > max_columns) {
+			end = start + max_columns - 1;
+		}
+
+		for (uint32_t i = start; i <= end; i++) {
+			int err = sensor_column_value_encode(&rsp, srv, sensor,
+							     ctx, i);
+
+			if (err) {
+				LOG_WRN("Column encode failed");
+				return err;
+			}
+		}
 		goto respond;
 	}
 
 	col_format = bt_mesh_sensor_column_format_get(sensor->type);
-	if (!col_format || !sensor->series.columns || !sensor->series.get) {
-		BT_WARN("No series support in 0x%04x", sensor->type->id);
+	if (!col_format || !sensor->series.columns) {
+		LOG_DBG("No series support in 0x%04x", sensor->type->id);
 		goto respond;
 	}
 
-	struct bt_mesh_sensor_column range;
+	/* Check buf->len different from 0, before decoding buf to range and buf->len changes. */
 	bool ranged = (buf->len != 0);
+	struct bt_mesh_sensor_column range;
 
 	if (buf->len == col_format->size * 2) {
 		int err;
 
 		err = sensor_ch_decode(buf, col_format, &range.start);
 		if (err) {
-			BT_WARN("Range start decode failed: %d", err);
+			LOG_WRN("Range start decode failed: %d", err);
 			return err;
 		}
 
 		err = sensor_ch_decode(buf, col_format, &range.end);
 		if (err) {
-			BT_WARN("Range end decode failed: %d", err);
+			LOG_WRN("Range end decode failed: %d", err);
 			return err;
 		}
 	} else if (buf->len != 0) {
 		/* invalid length */
-		BT_WARN("Invalid length (%u)", buf->len);
+		LOG_WRN("Invalid length (%u)", buf->len);
 		return -EMSGSIZE;
 	}
 
@@ -345,12 +428,12 @@ static int handle_series_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx
 			continue;
 		}
 
-		BT_DBG("Column #%u", i);
+		LOG_DBG("Column #%u", i);
 
-		int err = sensor_column_encode(&rsp, sensor, ctx, col);
+		int err = sensor_column_encode(&rsp, srv, sensor, ctx, col);
 
 		if (err) {
-			BT_WARN("Failed encoding: %d", err);
+			LOG_WRN("Failed encoding: %d", err);
 			return err;
 		}
 	}
@@ -405,8 +488,8 @@ static int handle_cadence_get(struct bt_mesh_model *model, struct bt_mesh_msg_ct
 	net_buf_simple_add_le16(&rsp, id);
 
 	sensor = sensor_get(srv, id);
-	if (!sensor || sensor->type->channel_count != 1) {
-		BT_WARN("Cadence not supported");
+	if (!sensor || sensor->type->channel_count != 1 || !sensor->state.configured) {
+		LOG_WRN("Cadence not supported or not configured");
 		goto respond;
 	}
 
@@ -443,7 +526,7 @@ static int cadence_set(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 
 	sensor = sensor_get(srv, id);
 	if (!sensor || sensor->type->channel_count != 1) {
-		BT_WARN("Cadence not supported");
+		LOG_WRN("Cadence not supported");
 		goto respond;
 	}
 
@@ -454,25 +537,43 @@ static int cadence_set(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 	err = sensor_cadence_decode(buf, sensor->type, &period_div, &min_int,
 				    &threshold);
 	if (err) {
-		BT_WARN("Invalid cadence");
+		LOG_WRN("Invalid cadence");
 		return err;
 	}
 
-	BT_DBG("Min int: %u div: %u "
-	       "delta: %s to %s "
-	       "range: %s to %s (%s)",
-	       min_int, period_div,
-	       bt_mesh_sensor_ch_str(&threshold.delta.down),
-	       bt_mesh_sensor_ch_str(&threshold.delta.up),
-	       bt_mesh_sensor_ch_str(&threshold.range.low),
-	       bt_mesh_sensor_ch_str(&threshold.range.high),
-	       (threshold.range.cadence == BT_MESH_SENSOR_CADENCE_FAST ?
-			"fast" :
-			"slow"));
+	if (IS_ENABLED(CONFIG_BT_MESH_MODEL_LOG_LEVEL_DBG)) {
+		char delta_down_str[BT_MESH_SENSOR_CH_STR_LEN];
+		char delta_up_str[BT_MESH_SENSOR_CH_STR_LEN];
+		char range_low_str[BT_MESH_SENSOR_CH_STR_LEN];
+		char range_high_str[BT_MESH_SENSOR_CH_STR_LEN];
+
+		strcpy(delta_down_str, bt_mesh_sensor_ch_str(&threshold.delta.down));
+		strcpy(delta_up_str, bt_mesh_sensor_ch_str(&threshold.delta.up));
+		strcpy(range_low_str, bt_mesh_sensor_ch_str(&threshold.range.low));
+		strcpy(range_high_str, bt_mesh_sensor_ch_str(&threshold.range.high));
+
+		LOG_DBG("Min int: %u div: %u delta: %s to %s range: %s to %s (%s)", min_int,
+			period_div, delta_down_str, delta_up_str, range_low_str, range_high_str,
+			(threshold.range.cadence == BT_MESH_SENSOR_CADENCE_FAST ? "fast" : "slow"));
+	}
 
 	sensor->state.min_int = min_int;
 	sensor->state.pub_div = period_div;
 	sensor->state.threshold = threshold;
+	sensor->state.configured = true;
+
+	/** Reschedule publication timer if the cadence increased. */
+	if (period_div > srv->pub.period_div) {
+		int period_ms;
+
+		srv->pub.period_div = period_div;
+		period_ms = bt_mesh_model_pub_period_get(srv->model);
+
+		if (period_ms > 0) {
+			LOG_DBG("New publication interval: %u", period_ms);
+			k_work_reschedule(&srv->model->pub->timer, K_MSEC(period_ms));
+		}
+	}
 
 	cadence_store(srv);
 
@@ -483,7 +584,7 @@ static int cadence_set(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 		return err;
 	}
 
-	model_send(model, NULL, &rsp);
+	bt_mesh_msg_send(model, NULL, &rsp);
 
 respond:
 	if (ack) {
@@ -516,7 +617,7 @@ static int handle_settings_get(struct bt_mesh_model *model, struct bt_mesh_msg_c
 		return -EINVAL;
 	}
 
-	BT_DBG("0x%04x", id);
+	LOG_DBG("0x%04x", id);
 
 	BT_MESH_MODEL_BUF_DEFINE(
 		rsp, BT_MESH_SENSOR_OP_SETTINGS_STATUS,
@@ -589,13 +690,13 @@ static int handle_setting_get(struct bt_mesh_model *model, struct bt_mesh_msg_ct
 
 	net_buf_simple_add_u8(&rsp, setting->set ? 0x03 : 0x01);
 
-	struct sensor_value values[CONFIG_BT_MESH_SENSOR_CHANNELS_MAX];
+	struct sensor_value values[CONFIG_BT_MESH_SENSOR_CHANNELS_MAX] = { 0 };
 
-	setting->get(sensor, setting, ctx, values);
+	setting->get(srv, sensor, setting, ctx, values);
 
 	err = sensor_value_encode(&rsp, setting->type, values);
 	if (err) {
-		BT_WARN("Failed encoding sensor setting 0x%04x: %d",
+		LOG_WRN("Failed encoding sensor setting 0x%04x: %d",
 			setting->type->id, err);
 
 		/* Undo the access field */
@@ -644,14 +745,14 @@ static int setting_set(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 
 	err = sensor_value_decode(buf, setting->type, values);
 	if (err) {
-		BT_WARN("Error decoding sensor setting 0x%04x: %d",
+		LOG_WRN("Error decoding sensor setting 0x%04x: %d",
 			setting->type->id, err);
 
 		/* Invalid parameters: ignore this message */
 		return err;
 	}
 
-	setting->set(sensor, setting, ctx, values);
+	setting->set(srv, sensor, setting, ctx, values);
 
 	uint8_t minlen = rsp.len;
 
@@ -659,7 +760,7 @@ static int setting_set(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 
 	err = sensor_value_encode(&rsp, setting->type, values);
 	if (err) {
-		BT_WARN("Error encoding sensor setting 0x%04x: %d",
+		LOG_WRN("Error encoding sensor setting 0x%04x: %d",
 			setting->type->id, err);
 
 		/* Undo the access field */
@@ -667,9 +768,9 @@ static int setting_set(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 		goto respond;
 	}
 
-	BT_DBG("0x%04x: 0x%04x", id, setting_id);
+	LOG_DBG("0x%04x: 0x%04x", id, setting_id);
 
-	model_send(model, NULL, &rsp);
+	bt_mesh_msg_send(model, NULL, &rsp);
 
 respond:
 	if (ack) {
@@ -762,7 +863,7 @@ static uint16_t min_int_get(const struct bt_mesh_sensor *sensor,
 	uint32_t pub_int = (base_period >> period_div);
 	uint32_t min_int = (1 << sensor->state.min_int);
 
-	return ceiling_fraction(min_int, pub_int);
+	return DIV_ROUND_UP(min_int, pub_int);
 }
 
 /** @brief Conditionally add a sensor value to a publication.
@@ -781,24 +882,35 @@ static void pub_msg_add(struct bt_mesh_sensor_srv *srv,
 			uint32_t base_period)
 {
 	uint16_t min_int = min_int_get(s, period_div, base_period);
+	uint16_t delta = srv->seq - s->state.seq;
 	int err;
 
-	if (srv->seq - s->state.seq < min_int) {
+	if (delta < min_int) {
+		return;
+	}
+
+	if (!s->state.configured &&
+	    (delta < (1 << period_div))) {
+		/** Don't publish a sensor value with not configured sensor cadence state more
+		 * frequently than base periodic publication.
+		 */
 		return;
 	}
 
 	struct sensor_value value[CONFIG_BT_MESH_SENSOR_CHANNELS_MAX] = {};
 
-	err = value_get(s, NULL, value);
+	err = value_get(srv, s, NULL, value);
 	if (err) {
 		return;
 	}
 
-	bool delta_triggered = bt_mesh_sensor_delta_threshold(s, value);
-	uint16_t interval = pub_int_get(s, period_div);
+	if (s->state.configured) {
+		bool delta_triggered = bt_mesh_sensor_delta_threshold(s, value);
+		uint16_t interval = pub_int_get(s, period_div);
 
-	if (!delta_triggered && srv->seq - s->state.seq < interval) {
-		return;
+		if (!delta_triggered && delta < interval) {
+			return;
+		}
 	}
 
 	err = sensor_status_encode(srv->pub.msg, s, value);
@@ -820,28 +932,33 @@ static int update_handler(struct bt_mesh_model *model)
 	uint32_t original_len = srv->pub.msg->len;
 	uint8_t period_div = srv->pub.period_div;
 
-	BT_DBG("#%u Period: %u ms Divisor: %u (%s)", srv->seq,
+	LOG_DBG("#%u Period: %u ms Divisor: %u (%s)", srv->seq,
 	       bt_mesh_model_pub_period_get(model), period_div,
 	       srv->pub.fast_period ? "fast" : "normal");
 
+	/** Reset the publication divisor and the fast period divisor flag to get the actual
+	 * publication period.
+	 */
 	srv->pub.period_div = 0;
 	srv->pub.fast_period = 0;
 
 	uint32_t base_period = bt_mesh_model_pub_period_get(model);
 
+	srv->pub.fast_period = true;
+
 	SENSOR_FOR_EACH(&srv->sensors, s)
 	{
 		pub_msg_add(srv, s, period_div, base_period);
 
-		if (s->state.fast_pub) {
-			srv->pub.fast_period = true;
-			srv->pub.period_div =
-				MAX(srv->pub.period_div, s->state.pub_div);
-		}
+		/** Update the publication divisor to a new value. This is needed to take new
+		 * changes in a sensor cadence state, .e.g. when the cadence decreased.
+		 */
+		srv->pub.period_div =
+			MAX(srv->pub.period_div, s->state.pub_div);
 	}
 
 	if (period_div != srv->pub.period_div) {
-		BT_DBG("New interval: %u",
+		LOG_DBG("New interval: %u",
 		       bt_mesh_model_pub_period_get(srv->model));
 	}
 
@@ -855,10 +972,6 @@ static int sensor_srv_init(struct bt_mesh_model *model)
 	struct bt_mesh_sensor_srv *srv = model->user_data;
 
 	sys_slist_init(&srv->sensors);
-
-#if CONFIG_BT_SETTINGS
-	k_work_init_delayable(&srv->store_timer, store_timeout);
-#endif
 
 	/* Establish a sorted list of sensors, as this is a requirement when
 	 * sending multiple sensor values in one message.
@@ -877,13 +990,13 @@ static int sensor_srv_init(struct bt_mesh_model *model)
 		}
 
 		if (!best) {
-			BT_ERR("Duplicate sensor ID");
+			LOG_ERR("Duplicate sensor ID");
 			srv->sensor_count = count;
 			break;
 		}
 
 		sys_slist_append(&srv->sensors, &best->state.node);
-		BT_DBG("Sensor 0x%04x", best->type->id);
+		LOG_DBG("Sensor 0x%04x", best->type->id);
 		min_id = best->type->id + 1;
 	}
 
@@ -893,6 +1006,10 @@ static int sensor_srv_init(struct bt_mesh_model *model)
 
 	srv->pub.update = update_handler;
 	srv->pub.msg = &srv->pub_buf;
+
+	/** Always use fast period to make the server sample sensors with the fastests cadence. */
+	srv->pub.fast_period = true;
+
 	srv->setup_pub.msg = &srv->setup_pub_buf;
 	net_buf_simple_init_with_data(&srv->pub_buf, srv->pub_data,
 				      sizeof(srv->pub_data));
@@ -914,8 +1031,11 @@ static void sensor_srv_reset(struct bt_mesh_model *model)
 
 		s->state.pub_div = 0;
 		s->state.min_int = 0;
+		s->state.configured = false;
 		memset(&s->state.threshold, 0, sizeof(s->state.threshold));
 	}
+
+	srv->pub.period_div = 0;
 
 	if (IS_ENABLED(CONFIG_BT_SETTINGS)) {
 		(void)bt_mesh_model_data_store(srv->model, false, NULL, NULL,
@@ -944,7 +1064,7 @@ static int sensor_srv_settings_set(struct bt_mesh_model *model, const char *name
 	}
 
 	if (len != len_rd) {
-		BT_ERR("Failed: %d (expected length %u)", len, len_rd);
+		LOG_ERR("Failed: %d (expected length %u)", len, len_rd);
 		return -EINVAL;
 	}
 
@@ -967,10 +1087,16 @@ static int sensor_srv_settings_set(struct bt_mesh_model *model, const char *name
 		}
 
 		s->state.pub_div = pub_div;
+		s->state.configured = true;
+
+		/** Update the publication divisor so that the publication timer starts with
+		 * the fastest cadence after settings are loaded.
+		 */
+		srv->pub.period_div = MAX(srv->pub.period_div, s->state.pub_div);
 	}
 
 	if (err) {
-		BT_ERR("Failed: %d", err);
+		LOG_ERR("Failed: %d", err);
 	}
 
 	return err;
@@ -980,6 +1106,20 @@ const struct bt_mesh_model_cb _bt_mesh_sensor_srv_cb = {
 	.init = sensor_srv_init,
 	.reset = sensor_srv_reset,
 	.settings_set = sensor_srv_settings_set,
+#if CONFIG_BT_SETTINGS
+	.pending_store = sensor_srv_pending_store,
+#endif
+};
+
+static int sensor_setup_srv_init(struct bt_mesh_model *model)
+{
+	struct bt_mesh_sensor_srv *srv = model->user_data;
+
+	return bt_mesh_model_extend(model, srv->model);
+}
+
+const struct bt_mesh_model_cb _bt_mesh_sensor_setup_srv_cb = {
+	.init = sensor_setup_srv_init,
 };
 
 int bt_mesh_sensor_srv_pub(struct bt_mesh_sensor_srv *srv,
@@ -1000,7 +1140,7 @@ int bt_mesh_sensor_srv_pub(struct bt_mesh_sensor_srv *srv,
 
 	sensor_cadence_update(sensor, value);
 
-	err = model_send(srv->model, ctx, &msg);
+	err = bt_mesh_msg_send(srv->model, ctx, &msg);
 	if (err) {
 		return err;
 	}
@@ -1015,18 +1155,19 @@ int bt_mesh_sensor_srv_sample(struct bt_mesh_sensor_srv *srv,
 	struct sensor_value value[CONFIG_BT_MESH_SENSOR_CHANNELS_MAX] = {};
 	int err;
 
-	err = value_get(sensor, NULL, value);
+	err = value_get(srv, sensor, NULL, value);
 	if (err) {
 		return -EBUSY;
 	}
 
-	if (sensor->type->channel_count == 1 &&
+	if (sensor->state.configured &&
+	    sensor->type->channel_count == 1 &&
 	    !bt_mesh_sensor_delta_threshold(sensor, value)) {
-		BT_WARN("Outside threshold");
+		LOG_WRN("Outside threshold");
 		return -EALREADY;
 	}
 
-	BT_DBG("Publishing 0x%04x", sensor->type->id);
+	LOG_DBG("Publishing 0x%04x", sensor->type->id);
 
 	return bt_mesh_sensor_srv_pub(srv, NULL, sensor, value);
 }

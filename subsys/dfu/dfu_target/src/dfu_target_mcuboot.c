@@ -16,75 +16,77 @@
 #endif
 #include <string.h>
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <pm_config.h>
-#include <logging/log.h>
-#include <nrfx.h>
-#include <dfu/mcuboot.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/dfu/mcuboot.h>
 #include <dfu/dfu_target.h>
 #include <dfu/dfu_target_stream.h>
+#include <zephyr/devicetree.h>
 
 LOG_MODULE_REGISTER(dfu_target_mcuboot, CONFIG_DFU_TARGET_LOG_LEVEL);
 
-#define MAX_FILE_SEARCH_LEN 500
 #define MCUBOOT_HEADER_MAGIC 0x96f3b83d
-#define MCUBOOT_SECONDARY_LAST_PAGE_ADDR                                       \
-	(PM_MCUBOOT_SECONDARY_ADDRESS + PM_MCUBOOT_SECONDARY_SIZE - 1)
 
 #define IS_ALIGNED_32(POINTER) (((uintptr_t)(const void *)(POINTER)) % 4 == 0)
 
+#define _MB_SEC_PAT(i, x) PM_MCUBOOT_SECONDARY_ ## i ## _ ## x
+
+#define _MB_SEC_PAT_STRING(i, x) STRINGIFY(PM_MCUBOOT_SECONDARY_ ## i ## _ ## x)
+
+#define _MB_SEC_PAT_DEV(i, x) COND_CODE_1(DT_NODE_EXISTS(PM_MCUBOOT_SECONDARY_##i##_##x), \
+			      (DEVICE_DT_GET_OR_NULL(PM_MCUBOOT_SECONDARY_##i##_##x)), \
+			      (DEVICE_DT_GET_OR_NULL(DT_NODELABEL(PM_MCUBOOT_SECONDARY_##i##_##x))))
+
+#define _H_MB_SEC_LA(i) (PM_MCUBOOT_SECONDARY_## i ##_ADDRESS + \
+			 PM_MCUBOOT_SECONDARY_## i ##_SIZE - 1)
+
+#define _MB_SEC_LA(i, _) _H_MB_SEC_LA(i)
+
+#define _STR_TARGET_NAME(i, _) STRINGIFY(MCUBOOT##i)
+
+#ifdef PM_MCUBOOT_SECONDARY_1_ID
+	#define TARGET_IMAGE_COUNT 2
+#else
+	#define TARGET_IMAGE_COUNT 1
+#endif
+
+/* For the first image the Partition Managed doesen't us 0 indice.
+ * Let's define liberal macros with 0 for making code more generic.
+ */
+#define PM_MCUBOOT_SECONDARY_0_SIZE	PM_MCUBOOT_SECONDARY_SIZE
+#define PM_MCUBOOT_SECONDARY_0_ADDRESS	PM_MCUBOOT_SECONDARY_ADDRESS
+#define PM_MCUBOOT_SECONDARY_0_NAME	STRINGIFY(PM_MCUBOOT_SECONDARY_NAME)
+#define PM_MCUBOOT_SECONDARY_0_DEV	PM_MCUBOOT_SECONDARY_DEV
+
+static const size_t secondary_size[] = {
+	LIST_DROP_EMPTY(LISTIFY(TARGET_IMAGE_COUNT, _MB_SEC_PAT, (,), SIZE))
+};
+
+static const off_t secondary_address[] = {
+	LIST_DROP_EMPTY(LISTIFY(TARGET_IMAGE_COUNT, _MB_SEC_PAT, (,), ADDRESS))
+};
+
+static const struct device *const secondary_dev[] = {
+	LIST_DROP_EMPTY(LISTIFY(TARGET_IMAGE_COUNT, _MB_SEC_PAT_DEV, (,), DEV))
+};
+
+static const char *const secondary_name[] = {
+	LIST_DROP_EMPTY(LISTIFY(TARGET_IMAGE_COUNT, _MB_SEC_PAT_STRING, (,), NAME))
+};
+
+static const off_t secondary_last_address[] = {
+	LIST_DROP_EMPTY(LISTIFY(TARGET_IMAGE_COUNT, _MB_SEC_LA, (,)))
+};
+
+static const char *const target_id_name[] = {
+	LIST_DROP_EMPTY(LISTIFY(TARGET_IMAGE_COUNT, _STR_TARGET_NAME, (,)))
+};
+
 static uint8_t *stream_buf;
 static size_t stream_buf_len;
-
-int dfu_ctx_mcuboot_set_b1_file(const char *file, bool s0_active,
-				const char **update)
-{
-	if (file == NULL || update == NULL) {
-		LOG_ERR("Got NULL pointer");
-		return -EINVAL;
-	}
-
-	if (!nrfx_is_in_ram(file)) {
-		LOG_ERR("'file' pointer is not located in RAM");
-		return -EFAULT;
-	}
-
-	/* Ensure that 'file' is null-terminated. */
-	if (strnlen(file, MAX_FILE_SEARCH_LEN) == MAX_FILE_SEARCH_LEN) {
-		LOG_ERR("Input is not null terminated");
-		return -ENOTSUP;
-	}
-
-	/* We have verified that there is a null-terminator, so this is safe */
-	char *delimiter = strstr(file, " ");
-
-	if (delimiter == NULL) {
-		/* Could not find delimiter in input */
-		*update = NULL;
-
-		return 0;
-	}
-
-	*update = file;
-	if (s0_active) {
-		char *tmp = strrchr(file, '/');
-
-		if (tmp == NULL) {
-			/* Point after delimiter to 'activate' second file path (S1) */
-			*update = delimiter + 1;
-		} else {
-			/* Copy after delimiter to 'activate' second file path (S1)
-			 * Copy one byte more to include the ending '\0' in original string
-			 */
-			memcpy(tmp + 1, delimiter + 1, strlen(delimiter));
-		}
-	} else {
-		/* Insert null-terminator to 'activate' first file path (S0) */
-		*delimiter = '\0';
-	}
-
-	return 0;
-}
+static size_t stream_buf_bytes;
+static uint8_t curr_sec_img;
 
 bool dfu_target_mcuboot_identify(const void *const buf)
 {
@@ -108,53 +110,65 @@ int dfu_target_mcuboot_set_buf(uint8_t *buf, size_t len)
 	return 0;
 }
 
-int dfu_target_mcuboot_init(size_t file_size, dfu_target_callback_t cb)
+int dfu_target_mcuboot_init(size_t file_size, int img_num, dfu_target_callback_t cb)
 {
 	ARG_UNUSED(cb);
 	const struct device *flash_dev;
 	int err;
+
+	stream_buf_bytes = 0;
 
 	if (stream_buf == NULL) {
 		LOG_ERR("Missing stream_buf, call '..set_buf' before '..init");
 		return -ENODEV;
 	}
 
-	if (file_size > PM_MCUBOOT_SECONDARY_SIZE) {
+	if (file_size > secondary_size[img_num]) {
 		LOG_ERR("Requested file too big to fit in flash %zu > 0x%x",
-			file_size, PM_MCUBOOT_SECONDARY_SIZE);
+			file_size, secondary_size[img_num]);
 		return -EFBIG;
 	}
 
-	flash_dev = device_get_binding(PM_MCUBOOT_SECONDARY_DEV_NAME);
-	if (flash_dev == NULL) {
-		LOG_ERR("Failed to get device '%s'",
-			PM_MCUBOOT_SECONDARY_DEV_NAME);
+	flash_dev = secondary_dev[img_num];
+	if (!device_is_ready(flash_dev)) {
+		LOG_ERR("Failed to get device for area '%s'",
+			secondary_name[img_num]);
 		return -EFAULT;
 	}
 
 	err = dfu_target_stream_init(&(struct dfu_target_stream_init){
-		.id = "MCUBOOT",
+		.id = target_id_name[img_num],
 		.fdev = flash_dev,
 		.buf = stream_buf,
 		.len = stream_buf_len,
-		.offset = PM_MCUBOOT_SECONDARY_ADDRESS,
-		.size = PM_MCUBOOT_SECONDARY_SIZE,
+		.offset = secondary_address[img_num],
+		.size = secondary_size[img_num],
 		.cb = NULL });
 	if (err < 0) {
 		LOG_ERR("dfu_target_stream_init failed %d", err);
 		return err;
 	}
 
+	curr_sec_img = img_num;
 	return 0;
 }
 
 int dfu_target_mcuboot_offset_get(size_t *out)
 {
-	return dfu_target_stream_offset_get(out);
+	int err = 0;
+
+	err = dfu_target_stream_offset_get(out);
+	if (err == 0) {
+		*out += stream_buf_bytes;
+	}
+
+	return err;
 }
 
 int dfu_target_mcuboot_write(const void *const buf, size_t len)
 {
+	stream_buf_bytes = (stream_buf_bytes + len) % stream_buf_len;
+
 	return dfu_target_stream_write(buf, len);
 }
 
@@ -169,23 +183,56 @@ int dfu_target_mcuboot_done(bool successful)
 	}
 
 	if (successful) {
+		stream_buf_bytes = 0;
+
 		err = stream_flash_erase_page(dfu_target_stream_get_stream(),
-					      MCUBOOT_SECONDARY_LAST_PAGE_ADDR);
+					secondary_last_address[curr_sec_img]);
 		if (err != 0) {
 			LOG_ERR("Unable to delete last page: %d", err);
 			return err;
 		}
-		err = boot_request_upgrade(BOOT_UPGRADE_TEST);
-		if (err != 0) {
-			LOG_ERR("boot_request_upgrade error %d", err);
-			return err;
-		}
-
-		LOG_INF("MCUBoot image upgrade scheduled. "
-			"Reset device to apply");
 	} else {
 		LOG_INF("MCUBoot image upgrade aborted.");
 	}
 
 	return err;
+}
+
+static int dfu_target_mcuboot_schedule_one_img(int img_num)
+{
+	int err = 0;
+
+	err = boot_request_upgrade_multi(img_num, BOOT_UPGRADE_TEST);
+	if (err != 0) {
+		LOG_ERR("boot_request_upgrade for image-%d error %d",
+			img_num, err);
+	} else {
+		LOG_INF("MCUBoot image-%d upgrade scheduled. "
+			"Reset device to apply", img_num);
+	}
+
+	return err;
+}
+
+int dfu_target_mcuboot_schedule_update(int img_num)
+{
+	int err = 0;
+
+	if (img_num == -1) {
+		for (int i = 0; i < TARGET_IMAGE_COUNT && !err; i++) {
+			err = dfu_target_mcuboot_schedule_one_img(i);
+		}
+	} else if (img_num >= 0 && img_num < TARGET_IMAGE_COUNT) {
+		err = dfu_target_mcuboot_schedule_one_img(img_num);
+	} else {
+		err = -ENOENT;
+	}
+
+	return err;
+}
+
+int dfu_target_mcuboot_reset(void)
+{
+	stream_buf_bytes = 0;
+	return dfu_target_stream_reset();
 }

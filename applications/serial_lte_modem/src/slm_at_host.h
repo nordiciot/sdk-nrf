@@ -20,17 +20,13 @@
 #include <modem/at_cmd_parser.h>
 #include "slm_defines.h"
 
+#define SLM_DATAMODE_FLAGS_NONE		0
+#define SLM_DATAMODE_FLAGS_MORE_DATA	1 << 0
+
 /**@brief Operations in datamode. */
 enum slm_datamode_operation {
 	DATAMODE_SEND,  /* Send data in datamode */
 	DATAMODE_EXIT   /* Exit data mode */
-};
-
-/**@brief Exit modes in datamode. */
-enum slm_datamode_exit_mode {
-	DATAMODE_EXIT_OK,      /* Exit datamode, send OK response */
-	DATAMODE_EXIT_ERROR,   /* Exit datamode, send ERROR response */
-	DATAMODE_EXIT_URC      /* Exit datamode, send URC notification */
 };
 
 /**@brief Data mode sending handler type.
@@ -39,7 +35,7 @@ enum slm_datamode_exit_mode {
  *         Positive value means the actual size of bytes that has been sent.
  *         Negative value means error occurrs in sending.
  */
-typedef int (*slm_datamode_handler_t)(uint8_t op, const uint8_t *data, int len);
+typedef int (*slm_datamode_handler_t)(uint8_t op, const uint8_t *data, int len, uint8_t flags);
 
 /**
  * @brief Initialize AT host for serial LTE modem
@@ -58,11 +54,21 @@ void slm_at_host_uninit(void);
 /**
  * @brief Send AT command response
  *
- * @param str Response message
- * @param len Length of response message
+ * @param fmt Response message format string
  *
  */
-void rsp_send(const char *str, size_t len);
+void rsp_send(const char *fmt, ...);
+
+/**
+ * @brief Send AT command response of OK
+ */
+void rsp_send_ok(void);
+
+/**
+ * @brief Send AT command response of ERROR
+ *
+ */
+void rsp_send_error(void);
 
 /**
  * @brief Send raw data received in data mode
@@ -71,7 +77,7 @@ void rsp_send(const char *str, size_t len);
  * @param len Length of raw data
  *
  */
-void datamode_send(const uint8_t *data, size_t len);
+void data_send(const uint8_t *data, size_t len);
 
 /**
  * @brief Request SLM AT host to enter data mode
@@ -93,14 +99,14 @@ int enter_datamode(slm_datamode_handler_t handler);
 bool in_datamode(void);
 
 /**
- * @brief Request SLM AT host to exit data mode
+ * @brief Indicate that data mode handler has closed
  *
- * @param exit_mode Response type. Refer to enum slm_datamode_exit_mode.
+ * @param result Result of sending in data mode.
  *
- * @retval true If normal exit from data mode.
+ * @retval true If handler has closed successfully.
  *         false If not in data mode.
  */
-bool exit_datamode(int exit_mode);
+bool exit_datamode_handler(int result);
 /** @} */
 
 #endif /* SLM_AT_HOST_ */

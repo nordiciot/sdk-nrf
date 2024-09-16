@@ -8,7 +8,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stddef.h>
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 #include "common_test.h"
 #include <mbedtls/md.h>
@@ -167,3 +167,21 @@ ITEM_REGISTER(test_case_hmac_data, test_case_t test_hmac_combined) = {
 	.vectors_start = __start_test_vector_hmac_data,
 	.vectors_stop = __stop_test_vector_hmac_data,
 };
+
+#if defined(CONFIG_CRYPTO_TEST_HASH)
+ZTEST_SUITE(test_suite_hmac, NULL, NULL, NULL, NULL, NULL);
+
+ZTEST(test_suite_hmac, test_case_hmac)
+{
+	hmac_setup();
+	exec_test_case_hmac();
+	hmac_teardown();
+}
+
+ZTEST(test_suite_hmac, test_case_hmac_combined)
+{
+	hmac_setup();
+	exec_test_case_hmac_combined();
+	hmac_combined_teardown();
+}
+#endif

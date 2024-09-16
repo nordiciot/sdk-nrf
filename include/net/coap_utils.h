@@ -12,12 +12,12 @@
 #ifndef __COAP_UTILS_H__
 #define __COAP_UTILS_H__
 
-#include <net/coap.h>
-#include <net/net_ip.h>
+#include <zephyr/net/coap.h>
+#include <zephyr/net/net_ip.h>
 
 /** @brief Open socket and start the receiving thread.
  *
- * @param[in] ip_family Network ip protocol family (AF_INET or AF_INET6).
+ * @param[in] ip_family Network IP protocol family (AF_INET or AF_INET6).
  * @param[in] addr Local address to bind for receiving data.
  *		   Pass NULL pointer if no address is provided.
  */

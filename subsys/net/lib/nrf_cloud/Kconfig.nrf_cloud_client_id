@@ -4,7 +4,7 @@
 #
 
 menu "Client ID (nRF Cloud Device ID)"
-choice
+choice NRF_CLOUD_CLIENT_ID_SRC
 	prompt "Client ID Source"
 	default NRF_CLOUD_CLIENT_ID_SRC_IMEI
 
@@ -20,6 +20,10 @@ config NRF_CLOUD_CLIENT_ID_SRC_INTERNAL_UUID
 	depends on MODEM_JWT
 	help
 		Requires modem firmware version 1.3 or later.
+
+config NRF_CLOUD_CLIENT_ID_SRC_HW_ID
+	depends on HW_ID_LIBRARY
+	bool "Hardware ID based value"
 
 config NRF_CLOUD_CLIENT_ID_SRC_RUNTIME
 	bool "Runtime value"

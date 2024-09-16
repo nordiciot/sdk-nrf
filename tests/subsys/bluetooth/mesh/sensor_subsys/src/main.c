@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include <float.h>
 
-#include <ztest.h>
+#include <zephyr/ztest.h>
 #include <bluetooth/mesh/properties.h>
 #include <bluetooth/mesh/sensor_types.h>
 #include <model_utils.h>
@@ -59,6 +59,16 @@ static void sensor_type_sanitize(const struct bt_mesh_sensor_type *sensor_type)
 	for (int i = 0; i < sensor_type->channel_count; i++) {
 		printk("Sensor channel name: %s\n", sensor_type->channels[i].name);
 	}
+}
+
+static void voltage_helper(uint16_t test_value, struct sensor_value *in_value, uint16_t *expected)
+{
+	in_value->val1 = test_value;
+	in_value->val2 = 0;
+	*expected = test_value > 1022 ?
+			test_value == UINT16_MAX ? UINT16_MAX
+			: raw_scalar_value_get(1022, 1, 0, -6)
+			: raw_scalar_value_get(test_value, 1, 0, -6);
 }
 
 static void encoding_checking_proceed(const struct bt_mesh_sensor_type *sensor_type,
@@ -1265,7 +1275,7 @@ static void electric_current_check(const struct bt_mesh_sensor_type *sensor_type
 static void voltage_check(const struct bt_mesh_sensor_type *sensor_type)
 {
 	struct sensor_value in_value[sensor_type->channel_count];
-	uint16_t test_vector[] = {0, 123, 159, 160, UINT16_MAX};
+	uint16_t test_vector[] = {0, 1, 159, 1000, 1022, 1023, UINT16_MAX};
 
 	memset(in_value, 0, sizeof(in_value));
 
@@ -1273,14 +1283,15 @@ static void voltage_check(const struct bt_mesh_sensor_type *sensor_type)
 		uint16_t expected[sensor_type->channel_count];
 
 		for (int j = 0; j < sensor_type->channel_count; j++) {
-			in_value[j].val1 = test_vector[i] > 159 ?
-					UINT16_MAX : test_vector[i];
-			in_value[j].val2 = 0;
-			expected[j] = test_vector[i] > 159 ?
-				UINT16_MAX : raw_scalar_value_get(test_vector[i], 1, 0, -6);
+			voltage_helper(test_vector[i], &in_value[j], &expected[j]);
 		}
 
 		encoding_checking_proceed(sensor_type, in_value, expected, sizeof(expected));
+		for (int j = 0; j < sensor_type->channel_count; j++) {
+			in_value[j].val1 = test_vector[i] > 1022 ?
+				test_vector[i] == UINT16_MAX ? UINT16_MAX
+				: 1022 : test_vector[i];
+		}
 		decoding_checking_proceed(sensor_type, expected, sizeof(expected), in_value);
 	}
 }
@@ -1326,7 +1337,7 @@ static void average_current_check(const struct bt_mesh_sensor_type *sensor_type)
 static void average_voltage_check(const struct bt_mesh_sensor_type *sensor_type)
 {
 	struct sensor_value in_value[sensor_type->channel_count];
-	uint16_t test_vector_voltage[] = {0, 123, 159, 160, UINT16_MAX};
+	uint16_t test_vector_voltage[] = {0, 1, 159, 1022, 1023, UINT16_MAX};
 
 	memset(in_value, 0, sizeof(in_value));
 
@@ -1344,15 +1355,14 @@ static void average_voltage_check(const struct bt_mesh_sensor_type *sensor_type)
 	} expected;
 
 	for (int i = 0; i < ARRAY_SIZE(test_vector_voltage); i++) {
-		in_value[0].val1 = test_vector_voltage[i] > 159 ?
-				UINT16_MAX : test_vector_voltage[i];
-		in_value[0].val2 = 0;
+		uint16_t tmp;
+
+		voltage_helper(test_vector_voltage[i], &in_value[0], &tmp);
+		expected.expected_voltage = tmp;
 
 		in_value[1].val1 = test_vector_time[i];
 		in_value[1].val2 = 0;
 
-		expected.expected_voltage = test_vector_voltage[i] > 159 ?
-				UINT16_MAX : raw_scalar_value_get(test_vector_voltage[i], 1, 0, -6);
 		expected.expected_time = expected_time[i];
 
 		encoding_checking_proceed(sensor_type, in_value, &expected, sizeof(expected));
@@ -1403,7 +1413,7 @@ static void current_stat_check(const struct bt_mesh_sensor_type *sensor_type)
 static void voltage_stat_check(const struct bt_mesh_sensor_type *sensor_type)
 {
 	struct sensor_value in_value[sensor_type->channel_count];
-	uint16_t test_vector_voltage[] = {0, 123, 159, 160, UINT16_MAX};
+	uint16_t test_vector_voltage[] = {0, 1, 159, 1022, 1023, UINT16_MAX};
 
 	memset(in_value, 0, sizeof(in_value));
 
@@ -1422,12 +1432,10 @@ static void voltage_stat_check(const struct bt_mesh_sensor_type *sensor_type)
 
 	for (int i = 0; i < ARRAY_SIZE(test_vector_voltage); i++) {
 		for (int j = 0; j < sensor_type->channel_count - 1; j++) {
-			in_value[j].val1 = test_vector_voltage[i] > 159 ?
-					UINT16_MAX : test_vector_voltage[i];
-			in_value[j].val2 = 0;
-			expected.expected_voltage[j] = test_vector_voltage[i] > 159 ?
-				UINT16_MAX :
-				raw_scalar_value_get(test_vector_voltage[i], 1, 0, -6);
+			uint16_t tmp;
+
+			voltage_helper(test_vector_voltage[i], &in_value[j], &tmp);
+			expected.expected_voltage[j] = tmp;
 		}
 
 		in_value[sensor_type->channel_count - 1].val1 = test_vector_time[i];
@@ -1474,7 +1482,7 @@ static void rel_runtime_in_current_range_check(const struct bt_mesh_sensor_type 
 static void rel_runtime_in_voltage_range_check(const struct bt_mesh_sensor_type *sensor_type)
 {
 	struct sensor_value in_value[sensor_type->channel_count];
-	uint16_t test_vector_voltage[] = {0, 123, 159, 160, UINT16_MAX};
+	uint16_t test_vector_voltage[] = {0, 1, 159, 1022, 1023, UINT16_MAX};
 	uint8_t test_vector_percentage8[] = {0, 25, 50, 75, 100, 0xFF};
 	struct __packed {
 		uint8_t expected_percentage8;
@@ -1485,18 +1493,22 @@ static void rel_runtime_in_voltage_range_check(const struct bt_mesh_sensor_type 
 
 	for (int i = 0; i < ARRAY_SIZE(test_vector_voltage); i++) {
 		for (int j = 1; j < sensor_type->channel_count; j++) {
-			in_value[j].val1 = test_vector_voltage[i] > 159 ?
-					UINT16_MAX : test_vector_voltage[i];
-			in_value[j].val2 = 0;
-			expected.expected_voltage[j - 1] = test_vector_voltage[i] > 159 ?
-				UINT16_MAX :
-				raw_scalar_value_get(test_vector_voltage[i], 1, 0, -6);
+			uint16_t tmp;
+
+			voltage_helper(test_vector_voltage[i], &in_value[j], &tmp);
+			expected.expected_voltage[j - 1] = tmp;
 		}
 
 		in_value[0].val1 = test_vector_percentage8[i];
 		in_value[0].val2 = 0;
 		expected.expected_percentage8 = test_vector_percentage8[i] == 0xFF ?
 			0xFF : raw_scalar_value_get(test_vector_percentage8[i], 1, 0, -1);
+
+		for (int j = 1; j < sensor_type->channel_count; j++) {
+			in_value[j].val1 = test_vector_voltage[i] > 1022 ?
+				test_vector_voltage[i] == UINT16_MAX ? UINT16_MAX
+				: 1022 : test_vector_voltage[i];
+		}
 
 		encoding_checking_proceed(sensor_type, in_value, &expected, sizeof(expected));
 		decoding_checking_proceed(sensor_type, &expected, sizeof(expected), in_value);
@@ -1584,7 +1596,7 @@ static void gain_check(const struct bt_mesh_sensor_type *sensor_type)
 
 /* Occupancy sensors */
 
-static void test_motion_sensor(void)
+ZTEST(sensor_types_test, test_motion_sensor)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1593,7 +1605,7 @@ static void test_motion_sensor(void)
 	percentage8_check(sensor_type);
 }
 
-static void test_motion_threshold(void)
+ZTEST(sensor_types_test, test_motion_threshold)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1602,7 +1614,7 @@ static void test_motion_threshold(void)
 	percentage8_check(sensor_type);
 }
 
-static void test_people_count(void)
+ZTEST(sensor_types_test, test_people_count)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1611,7 +1623,7 @@ static void test_people_count(void)
 	count16_check(sensor_type);
 }
 
-static void test_presence_detected(void)
+ZTEST(sensor_types_test, test_presence_detected)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1620,7 +1632,7 @@ static void test_presence_detected(void)
 	boolean_check(sensor_type);
 }
 
-static void test_time_since_motion_sensed(void)
+ZTEST(sensor_types_test, test_time_since_motion_sensed)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1629,7 +1641,7 @@ static void test_time_since_motion_sensed(void)
 	time_second16_check(sensor_type);
 }
 
-static void test_time_since_presence_detected(void)
+ZTEST(sensor_types_test, test_time_since_presence_detected)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1640,7 +1652,7 @@ static void test_time_since_presence_detected(void)
 
 /* Environmental sensors */
 
-static void test_apparent_wind_direction(void)
+ZTEST(sensor_types_test, test_apparent_wind_direction)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1649,7 +1661,7 @@ static void test_apparent_wind_direction(void)
 	plane_angle_check(sensor_type);
 }
 
-static void test_apparent_wind_speed(void)
+ZTEST(sensor_types_test, test_apparent_wind_speed)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1658,7 +1670,7 @@ static void test_apparent_wind_speed(void)
 	wind_speed_check(sensor_type);
 }
 
-static void test_dew_point(void)
+ZTEST(sensor_types_test, test_dew_point)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1667,7 +1679,7 @@ static void test_dew_point(void)
 	temp8_signed_celsius_check(sensor_type);
 }
 
-static void test_gust_factor(void)
+ZTEST(sensor_types_test, test_gust_factor)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1676,7 +1688,7 @@ static void test_gust_factor(void)
 	gust_factor_check(sensor_type);
 }
 
-static void test_heat_index(void)
+ZTEST(sensor_types_test, test_heat_index)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1685,7 +1697,7 @@ static void test_heat_index(void)
 	temp8_signed_celsius_check(sensor_type);
 }
 
-static void test_present_amb_rel_humidity(void)
+ZTEST(sensor_types_test, test_present_amb_rel_humidity)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1694,7 +1706,7 @@ static void test_present_amb_rel_humidity(void)
 	humidity_check(sensor_type);
 }
 
-static void test_present_amb_co2_concentration(void)
+ZTEST(sensor_types_test, test_present_amb_co2_concentration)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1703,7 +1715,7 @@ static void test_present_amb_co2_concentration(void)
 	concentration_check(sensor_type);
 }
 
-static void test_present_amb_voc_concentration(void)
+ZTEST(sensor_types_test, test_present_amb_voc_concentration)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1712,7 +1724,7 @@ static void test_present_amb_voc_concentration(void)
 	concentration_check(sensor_type);
 }
 
-static void test_present_amb_noise(void)
+ZTEST(sensor_types_test, test_present_amb_noise)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1721,7 +1733,7 @@ static void test_present_amb_noise(void)
 	noise_check(sensor_type);
 }
 
-static void test_present_indoor_relative_humidity(void)
+ZTEST(sensor_types_test, test_present_indoor_relative_humidity)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1730,7 +1742,7 @@ static void test_present_indoor_relative_humidity(void)
 	humidity_check(sensor_type);
 }
 
-static void test_present_outdoor_relative_humidity(void)
+ZTEST(sensor_types_test, test_present_outdoor_relative_humidity)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1739,7 +1751,7 @@ static void test_present_outdoor_relative_humidity(void)
 	humidity_check(sensor_type);
 }
 
-static void test_magnetic_declination(void)
+ZTEST(sensor_types_test, test_magnetic_declination)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1748,7 +1760,7 @@ static void test_magnetic_declination(void)
 	plane_angle_check(sensor_type);
 }
 
-static void test_magnetic_flux_density_2d(void)
+ZTEST(sensor_types_test, test_magnetic_flux_density_2d)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1757,7 +1769,7 @@ static void test_magnetic_flux_density_2d(void)
 	flux_density_check(sensor_type);
 }
 
-static void test_magnetic_flux_density_3d(void)
+ZTEST(sensor_types_test, test_magnetic_flux_density_3d)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1766,7 +1778,7 @@ static void test_magnetic_flux_density_3d(void)
 	flux_density_check(sensor_type);
 }
 
-static void test_pollen_concentration(void)
+ZTEST(sensor_types_test, test_pollen_concentration)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1775,7 +1787,7 @@ static void test_pollen_concentration(void)
 	pollen_concentration_check(sensor_type);
 }
 
-static void test_air_pressure(void)
+ZTEST(sensor_types_test, test_air_pressure)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1784,7 +1796,7 @@ static void test_air_pressure(void)
 	pressure_check(sensor_type);
 }
 
-static void test_pressure(void)
+ZTEST(sensor_types_test, test_pressure)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1793,7 +1805,7 @@ static void test_pressure(void)
 	pressure_check(sensor_type);
 }
 
-static void test_rainfall(void)
+ZTEST(sensor_types_test, test_rainfall)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1802,7 +1814,7 @@ static void test_rainfall(void)
 	rainfall_check(sensor_type);
 }
 
-static void test_true_wind_direction(void)
+ZTEST(sensor_types_test, test_true_wind_direction)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1811,7 +1823,7 @@ static void test_true_wind_direction(void)
 	plane_angle_check(sensor_type);
 }
 
-static void test_true_wind_speed(void)
+ZTEST(sensor_types_test, test_true_wind_speed)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1820,7 +1832,7 @@ static void test_true_wind_speed(void)
 	wind_speed_check(sensor_type);
 }
 
-static void test_uv_index(void)
+ZTEST(sensor_types_test, test_uv_index)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1829,7 +1841,7 @@ static void test_uv_index(void)
 	uv_index_check(sensor_type);
 }
 
-static void test_wind_chill(void)
+ZTEST(sensor_types_test, test_wind_chill)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1840,7 +1852,7 @@ static void test_wind_chill(void)
 
 /* Photometry sensors */
 
-static void test_cie_1931_chromaticity_coords(void)
+ZTEST(sensor_types_test, test_cie_1931_chromaticity_coords)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1856,7 +1868,7 @@ static void test_cie_1931_chromaticity_coords(void)
 	}
 }
 
-static void test_present_amb_light_level(void)
+ZTEST(sensor_types_test, test_present_amb_light_level)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1865,7 +1877,7 @@ static void test_present_amb_light_level(void)
 	illuminance_check(sensor_type);
 }
 
-static void test_correlated_col_temp(void)
+ZTEST(sensor_types_test, test_correlated_col_temp)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1881,7 +1893,7 @@ static void test_correlated_col_temp(void)
 	}
 }
 
-static void test_present_illuminance(void)
+ZTEST(sensor_types_test, test_present_illuminance)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1890,7 +1902,7 @@ static void test_present_illuminance(void)
 	illuminance_check(sensor_type);
 }
 
-static void test_luminous_flux(void)
+ZTEST(sensor_types_test, test_luminous_flux)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1906,7 +1918,7 @@ static void test_luminous_flux(void)
 	}
 }
 
-static void test_planckian_distance(void)
+ZTEST(sensor_types_test, test_planckian_distance)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1922,7 +1934,7 @@ static void test_planckian_distance(void)
 	}
 }
 
-static void test_rel_exposure_time_in_an_illuminance_range(void)
+ZTEST(sensor_types_test, test_rel_exposure_time_in_an_illuminance_range)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1932,7 +1944,7 @@ static void test_rel_exposure_time_in_an_illuminance_range(void)
 	percentage8_illuminance_check(sensor_type);
 }
 
-static void test_tot_light_exposure_time(void)
+ZTEST(sensor_types_test, test_tot_light_exposure_time)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1941,7 +1953,7 @@ static void test_tot_light_exposure_time(void)
 	time_hour_24_check(sensor_type);
 }
 
-static void test_lumen_maintenance_factor(void)
+ZTEST(sensor_types_test, test_lumen_maintenance_factor)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1950,7 +1962,7 @@ static void test_lumen_maintenance_factor(void)
 	percentage8_check(sensor_type);
 }
 
-static void test_luminous_efficacy(void)
+ZTEST(sensor_types_test, test_luminous_efficacy)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1959,7 +1971,7 @@ static void test_luminous_efficacy(void)
 	luminous_efficacy_check(sensor_type);
 }
 
-static void test_luminous_energy_since_turn_on(void)
+ZTEST(sensor_types_test, test_luminous_energy_since_turn_on)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1968,7 +1980,7 @@ static void test_luminous_energy_since_turn_on(void)
 	luminous_energy_check(sensor_type);
 }
 
-static void test_luminous_exposure(void)
+ZTEST(sensor_types_test, test_luminous_exposure)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1977,7 +1989,7 @@ static void test_luminous_exposure(void)
 	luminous_exposure_check(sensor_type);
 }
 
-static void test_luminous_flux_range(void)
+ZTEST(sensor_types_test, test_luminous_flux_range)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1988,7 +2000,7 @@ static void test_luminous_flux_range(void)
 
 /* Ambient temperature sensors */
 
-static void test_avg_amb_temp_in_period_of_day(void)
+ZTEST(sensor_types_test, test_avg_amb_temp_in_period_of_day)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -1997,7 +2009,7 @@ static void test_avg_amb_temp_in_period_of_day(void)
 	temp8_in_period_of_day_check(sensor_type);
 }
 
-static void test_indoor_amb_temp_stat_values(void)
+ZTEST(sensor_types_test, test_indoor_amb_temp_stat_values)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2006,7 +2018,7 @@ static void test_indoor_amb_temp_stat_values(void)
 	temp8_statistics_check(sensor_type);
 }
 
-static void test_outdoor_stat_values(void)
+ZTEST(sensor_types_test, test_outdoor_stat_values)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2015,7 +2027,7 @@ static void test_outdoor_stat_values(void)
 	temp8_statistics_check(sensor_type);
 }
 
-static void test_present_amb_temp(void)
+ZTEST(sensor_types_test, test_present_amb_temp)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2024,7 +2036,7 @@ static void test_present_amb_temp(void)
 	temp8_check(sensor_type);
 }
 
-static void test_present_indoor_amb_temp(void)
+ZTEST(sensor_types_test, test_present_indoor_amb_temp)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2033,7 +2045,7 @@ static void test_present_indoor_amb_temp(void)
 	temp8_check(sensor_type);
 }
 
-static void test_present_outdoor_amb_temp(void)
+ZTEST(sensor_types_test, test_present_outdoor_amb_temp)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2042,7 +2054,7 @@ static void test_present_outdoor_amb_temp(void)
 	temp8_check(sensor_type);
 }
 
-static void test_desired_amb_temp(void)
+ZTEST(sensor_types_test, test_desired_amb_temp)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2051,7 +2063,7 @@ static void test_desired_amb_temp(void)
 	temp8_check(sensor_type);
 }
 
-static void test_precise_present_amb_temp(void)
+ZTEST(sensor_types_test, test_precise_present_amb_temp)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2062,7 +2074,7 @@ static void test_precise_present_amb_temp(void)
 
 /* Energy management sensors */
 
-static void test_dev_power_range_spec(void)
+ZTEST(sensor_types_test, test_dev_power_range_spec)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2071,7 +2083,7 @@ static void test_dev_power_range_spec(void)
 	power_specification_check(sensor_type);
 }
 
-static void test_present_dev_input_power(void)
+ZTEST(sensor_types_test, test_present_dev_input_power)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2080,7 +2092,7 @@ static void test_present_dev_input_power(void)
 	power_check(sensor_type);
 }
 
-static void test_present_dev_op_efficiency(void)
+ZTEST(sensor_types_test, test_present_dev_op_efficiency)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2089,7 +2101,7 @@ static void test_present_dev_op_efficiency(void)
 	percentage8_check(sensor_type);
 }
 
-static void test_tot_dev_energy_use(void)
+ZTEST(sensor_types_test, test_tot_dev_energy_use)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2098,7 +2110,7 @@ static void test_tot_dev_energy_use(void)
 	energy_check(sensor_type);
 }
 
-static void test_precise_tot_dev_energy_use(void)
+ZTEST(sensor_types_test, test_precise_tot_dev_energy_use)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2107,7 +2119,7 @@ static void test_precise_tot_dev_energy_use(void)
 	energy32_check(sensor_type);
 }
 
-static void test_dev_energy_use_since_turn_on(void)
+ZTEST(sensor_types_test, test_dev_energy_use_since_turn_on)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2116,7 +2128,7 @@ static void test_dev_energy_use_since_turn_on(void)
 	energy_check(sensor_type);
 }
 
-static void test_power_factor(void)
+ZTEST(sensor_types_test, test_power_factor)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2125,7 +2137,7 @@ static void test_power_factor(void)
 	cos_of_the_angle_check(sensor_type);
 }
 
-static void test_rel_dev_energy_use_in_a_period_of_day(void)
+ZTEST(sensor_types_test, test_rel_dev_energy_use_in_a_period_of_day)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2135,7 +2147,7 @@ static void test_rel_dev_energy_use_in_a_period_of_day(void)
 	energy_in_a_period_of_day_check(sensor_type);
 }
 
-static void test_apparent_energy(void)
+ZTEST(sensor_types_test, test_apparent_energy)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2144,7 +2156,7 @@ static void test_apparent_energy(void)
 	apparent_energy32_check(sensor_type);
 }
 
-static void test_apparent_power(void)
+ZTEST(sensor_types_test, test_apparent_power)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2153,7 +2165,7 @@ static void test_apparent_power(void)
 	apparent_power_check(sensor_type);
 }
 
-static void test_active_energy_loadside(void)
+ZTEST(sensor_types_test, test_active_energy_loadside)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2162,7 +2174,7 @@ static void test_active_energy_loadside(void)
 	energy32_check(sensor_type);
 }
 
-static void test_active_power_loadside(void)
+ZTEST(sensor_types_test, test_active_power_loadside)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2173,7 +2185,7 @@ static void test_active_power_loadside(void)
 
 /* Warranty and service sensors */
 
-static void test_rel_dev_runtime_in_a_generic_level_range(void)
+ZTEST(sensor_types_test, test_rel_dev_runtime_in_a_generic_level_range)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2183,7 +2195,7 @@ static void test_rel_dev_runtime_in_a_generic_level_range(void)
 	relative_runtime_in_a_generic_level_range_check(sensor_type);
 }
 
-static void test_gain(void)
+ZTEST(sensor_types_test, test_gain)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2194,7 +2206,7 @@ static void test_gain(void)
 
 /* Electrical input sensors */
 
-static void test_avg_input_current(void)
+ZTEST(sensor_types_test, test_avg_input_current)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2203,7 +2215,7 @@ static void test_avg_input_current(void)
 	average_current_check(sensor_type);
 }
 
-static void test_avg_input_voltage(void)
+ZTEST(sensor_types_test, test_avg_input_voltage)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2212,7 +2224,7 @@ static void test_avg_input_voltage(void)
 	average_voltage_check(sensor_type);
 }
 
-static void test_input_current_range_spec(void)
+ZTEST(sensor_types_test, test_input_current_range_spec)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2221,7 +2233,7 @@ static void test_input_current_range_spec(void)
 	electric_current_check(sensor_type);
 }
 
-static void test_input_current_stat(void)
+ZTEST(sensor_types_test, test_input_current_stat)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2230,7 +2242,7 @@ static void test_input_current_stat(void)
 	current_stat_check(sensor_type);
 }
 
-static void test_input_voltage_range_spec(void)
+ZTEST(sensor_types_test, test_input_voltage_range_spec)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2239,7 +2251,7 @@ static void test_input_voltage_range_spec(void)
 	voltage_check(sensor_type);
 }
 
-static void test_input_voltage_stat(void)
+ZTEST(sensor_types_test, test_input_voltage_stat)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2248,7 +2260,7 @@ static void test_input_voltage_stat(void)
 	voltage_stat_check(sensor_type);
 }
 
-static void test_present_input_current(void)
+ZTEST(sensor_types_test, test_present_input_current)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2257,7 +2269,7 @@ static void test_present_input_current(void)
 	electric_current_check(sensor_type);
 }
 
-static void test_present_input_ripple_voltage(void)
+ZTEST(sensor_types_test, test_present_input_ripple_voltage)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2266,7 +2278,7 @@ static void test_present_input_ripple_voltage(void)
 	percentage8_check(sensor_type);
 }
 
-static void test_present_input_voltage(void)
+ZTEST(sensor_types_test, test_present_input_voltage)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2275,7 +2287,7 @@ static void test_present_input_voltage(void)
 	voltage_check(sensor_type);
 }
 
-static void test_rel_runtime_in_an_input_current_range(void)
+ZTEST(sensor_types_test, test_rel_runtime_in_an_input_current_range)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2285,7 +2297,7 @@ static void test_rel_runtime_in_an_input_current_range(void)
 	rel_runtime_in_current_range_check(sensor_type);
 }
 
-static void test_rel_runtime_in_an_input_voltage_range(void)
+ZTEST(sensor_types_test, test_rel_runtime_in_an_input_voltage_range)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2297,7 +2309,7 @@ static void test_rel_runtime_in_an_input_voltage_range(void)
 
 /* Device operating temperature sensors */
 
-static void test_dev_op_temp_range_spec(void)
+ZTEST(sensor_types_test, test_dev_op_temp_range_spec)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2306,7 +2318,7 @@ static void test_dev_op_temp_range_spec(void)
 	temp_check(sensor_type);
 }
 
-static void test_present_dev_op_temp(void)
+ZTEST(sensor_types_test, test_present_dev_op_temp)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2315,7 +2327,7 @@ static void test_present_dev_op_temp(void)
 	temp_check(sensor_type);
 }
 
-static void test_dev_op_temp_stat_values(void)
+ZTEST(sensor_types_test, test_dev_op_temp_stat_values)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2324,7 +2336,7 @@ static void test_dev_op_temp_stat_values(void)
 	temp_stat_check(sensor_type);
 }
 
-static void test_rel_runtime_in_a_dev_op_temp_range(void)
+ZTEST(sensor_types_test, test_rel_runtime_in_a_dev_op_temp_range)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2335,7 +2347,7 @@ static void test_rel_runtime_in_a_dev_op_temp_range(void)
 
 /* Power output supply sensors*/
 
-static void test_avg_output_current(void)
+ZTEST(sensor_types_test, test_avg_output_current)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2344,7 +2356,7 @@ static void test_avg_output_current(void)
 	average_current_check(sensor_type);
 }
 
-static void test_avg_output_voltage(void)
+ZTEST(sensor_types_test, test_avg_output_voltage)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2353,7 +2365,7 @@ static void test_avg_output_voltage(void)
 	average_voltage_check(sensor_type);
 }
 
-static void test_output_current_range(void)
+ZTEST(sensor_types_test, test_output_current_range)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2362,7 +2374,7 @@ static void test_output_current_range(void)
 	electric_current_check(sensor_type);
 }
 
-static void test_output_current_stat(void)
+ZTEST(sensor_types_test, test_output_current_stat)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2371,7 +2383,7 @@ static void test_output_current_stat(void)
 	current_stat_check(sensor_type);
 }
 
-static void test_output_ripple_voltage_spec(void)
+ZTEST(sensor_types_test, test_output_ripple_voltage_spec)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2380,7 +2392,7 @@ static void test_output_ripple_voltage_spec(void)
 	percentage8_check(sensor_type);
 }
 
-static void test_output_voltage_range(void)
+ZTEST(sensor_types_test, test_output_voltage_range)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2389,7 +2401,7 @@ static void test_output_voltage_range(void)
 	voltage_check(sensor_type);
 }
 
-static void test_output_voltage_stat(void)
+ZTEST(sensor_types_test, test_output_voltage_stat)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2398,7 +2410,7 @@ static void test_output_voltage_stat(void)
 	voltage_stat_check(sensor_type);
 }
 
-static void test_present_output_current(void)
+ZTEST(sensor_types_test, test_present_output_current)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2407,7 +2419,7 @@ static void test_present_output_current(void)
 	electric_current_check(sensor_type);
 }
 
-static void test_present_output_voltage(void)
+ZTEST(sensor_types_test, test_present_output_voltage)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2416,7 +2428,7 @@ static void test_present_output_voltage(void)
 	voltage_check(sensor_type);
 }
 
-static void test_present_rel_output_ripple_voltage(void)
+ZTEST(sensor_types_test, test_present_rel_output_ripple_voltage)
 {
 	const struct bt_mesh_sensor_type *sensor_type;
 
@@ -2425,116 +2437,4 @@ static void test_present_rel_output_ripple_voltage(void)
 	percentage8_check(sensor_type);
 }
 
-void test_main(void)
-{
-	ztest_test_suite(sensor_types_test,
-			/* Occupancy sensors */
-			ztest_unit_test(test_motion_sensor),
-			ztest_unit_test(test_motion_threshold),
-			ztest_unit_test(test_people_count),
-			ztest_unit_test(test_presence_detected),
-			ztest_unit_test(test_time_since_motion_sensed),
-			ztest_unit_test(test_time_since_presence_detected),
-
-			/* Photometry sensors */
-			ztest_unit_test(test_cie_1931_chromaticity_coords),
-			ztest_unit_test(test_present_amb_light_level),
-			ztest_unit_test(test_correlated_col_temp),
-			ztest_unit_test(test_present_illuminance),
-			ztest_unit_test(test_luminous_flux),
-			ztest_unit_test(test_planckian_distance),
-			ztest_unit_test(test_rel_exposure_time_in_an_illuminance_range),
-			ztest_unit_test(test_tot_light_exposure_time),
-			ztest_unit_test(test_lumen_maintenance_factor),
-			ztest_unit_test(test_luminous_efficacy),
-			ztest_unit_test(test_luminous_energy_since_turn_on),
-			ztest_unit_test(test_luminous_exposure),
-			ztest_unit_test(test_luminous_flux_range),
-
-			/* Environmental sensors */
-			ztest_unit_test(test_time_since_presence_detected),
-			ztest_unit_test(test_apparent_wind_direction),
-			ztest_unit_test(test_apparent_wind_speed),
-			ztest_unit_test(test_dew_point),
-			ztest_unit_test(test_gust_factor),
-			ztest_unit_test(test_heat_index),
-			ztest_unit_test(test_present_amb_rel_humidity),
-			ztest_unit_test(test_present_amb_co2_concentration),
-			ztest_unit_test(test_present_amb_voc_concentration),
-			ztest_unit_test(test_present_amb_noise),
-			ztest_unit_test(test_present_indoor_relative_humidity),
-			ztest_unit_test(test_present_outdoor_relative_humidity),
-			ztest_unit_test(test_magnetic_declination),
-			ztest_unit_test(test_magnetic_flux_density_2d),
-			ztest_unit_test(test_magnetic_flux_density_3d),
-			ztest_unit_test(test_pollen_concentration),
-			ztest_unit_test(test_air_pressure),
-			ztest_unit_test(test_pressure),
-			ztest_unit_test(test_rainfall),
-			ztest_unit_test(test_true_wind_direction),
-			ztest_unit_test(test_true_wind_speed),
-			ztest_unit_test(test_uv_index),
-			ztest_unit_test(test_wind_chill),
-
-			/* Ambient temperature sensors */
-			ztest_unit_test(test_avg_amb_temp_in_period_of_day),
-			ztest_unit_test(test_indoor_amb_temp_stat_values),
-			ztest_unit_test(test_outdoor_stat_values),
-			ztest_unit_test(test_present_amb_temp),
-			ztest_unit_test(test_present_indoor_amb_temp),
-			ztest_unit_test(test_present_outdoor_amb_temp),
-			ztest_unit_test(test_desired_amb_temp),
-			ztest_unit_test(test_precise_present_amb_temp),
-
-			/* Energy management sensors */
-			ztest_unit_test(test_dev_power_range_spec),
-			ztest_unit_test(test_present_dev_input_power),
-			ztest_unit_test(test_present_dev_op_efficiency),
-			ztest_unit_test(test_tot_dev_energy_use),
-			ztest_unit_test(test_precise_tot_dev_energy_use),
-			ztest_unit_test(test_dev_energy_use_since_turn_on),
-			ztest_unit_test(test_power_factor),
-			ztest_unit_test(test_rel_dev_energy_use_in_a_period_of_day),
-			ztest_unit_test(test_apparent_energy),
-			ztest_unit_test(test_apparent_power),
-			ztest_unit_test(test_active_energy_loadside),
-			ztest_unit_test(test_active_power_loadside),
-
-			/* Warranty and service sensors */
-			ztest_unit_test(test_rel_dev_runtime_in_a_generic_level_range),
-			ztest_unit_test(test_gain),
-
-			/* Electrical input sensors */
-			ztest_unit_test(test_avg_input_current),
-			ztest_unit_test(test_avg_input_voltage),
-			ztest_unit_test(test_input_current_range_spec),
-			ztest_unit_test(test_input_current_stat),
-			ztest_unit_test(test_input_voltage_range_spec),
-			ztest_unit_test(test_input_voltage_stat),
-			ztest_unit_test(test_present_input_current),
-			ztest_unit_test(test_present_input_ripple_voltage),
-			ztest_unit_test(test_present_input_voltage),
-			ztest_unit_test(test_rel_runtime_in_an_input_current_range),
-			ztest_unit_test(test_rel_runtime_in_an_input_voltage_range),
-
-			/* Device operating temperature sensors */
-			ztest_unit_test(test_dev_op_temp_range_spec),
-			ztest_unit_test(test_dev_op_temp_stat_values),
-			ztest_unit_test(test_present_dev_op_temp),
-			ztest_unit_test(test_rel_runtime_in_a_dev_op_temp_range),
-
-			/* Power output supply sensors */
-			ztest_unit_test(test_avg_output_current),
-			ztest_unit_test(test_avg_output_voltage),
-			ztest_unit_test(test_output_current_range),
-			ztest_unit_test(test_output_current_stat),
-			ztest_unit_test(test_output_ripple_voltage_spec),
-			ztest_unit_test(test_output_voltage_range),
-			ztest_unit_test(test_output_voltage_stat),
-			ztest_unit_test(test_present_output_current),
-			ztest_unit_test(test_present_output_voltage),
-			ztest_unit_test(test_present_rel_output_ripple_voltage)
-			 );
-
-	ztest_run_test_suite(sensor_types_test);
-}
+ZTEST_SUITE(sensor_types_test, NULL, NULL, NULL, NULL, NULL);

@@ -3,16 +3,19 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <ztest.h>
-#include <kernel.h>
+#include <zephyr/ztest.h>
+#include <zephyr/kernel.h>
 #include <stddef.h>
-#include <sys/util.h>
-#include <bluetooth/uuid.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/bluetooth/uuid.h>
 #include <bluetooth/gatt_dm.h>
 #include "../mock/gatt_discover_mock.h"
 
 /* Timeout for the discovery in ms */
 #define SERVICE_DISCOVERY_TIMEOUT 2000
+
+#define BT_UUID_EMPTY BT_UUID_DECLARE_16(0x1234)
+#define BT_UUID_EMPTY_CHR BT_UUID_DECLARE_16(0x1235)
 
 static char dummy_conn;
 K_SEM_DEFINE(discovery_finished, 0, 1);
@@ -36,12 +39,25 @@ const struct bt_gatt_attr discover_sim[] = {
 	BT_GATT_DISCOVER_MOCK_DESC(11, BT_UUID_HIDS_CTRL_POINT),
 
 	/* DIS */
-	BT_GATT_DISCOVER_MOCK_SERV(12, BT_UUID_DIS, 0xffff),
+	BT_GATT_DISCOVER_MOCK_SERV(12, BT_UUID_DIS, 16),
 	BT_GATT_DISCOVER_MOCK_CHRC(13, BT_UUID_DIS_MODEL_NUMBER, BT_GATT_CHRC_READ),
 	BT_GATT_DISCOVER_MOCK_DESC(14, BT_UUID_DIS_MODEL_NUMBER),
 
 	BT_GATT_DISCOVER_MOCK_CHRC(15, BT_UUID_DIS_MANUFACTURER_NAME, BT_GATT_CHRC_READ),
 	BT_GATT_DISCOVER_MOCK_DESC(16, BT_UUID_DIS_MANUFACTURER_NAME),
+
+	/* Empty Service */
+	BT_GATT_DISCOVER_MOCK_SERV(17, BT_UUID_EMPTY, 17),
+
+	/* Another instance of service with the same UUID, but with a single characteristic */
+	BT_GATT_DISCOVER_MOCK_SERV(18, BT_UUID_EMPTY, 19),
+	BT_GATT_DISCOVER_MOCK_CHRC(19, BT_UUID_EMPTY_CHR, BT_GATT_CHRC_READ),
+
+	BT_GATT_DISCOVER_MOCK_SERV(20, BT_UUID_HRS, 21),
+	BT_GATT_DISCOVER_MOCK_CHRC(21, BT_UUID_HRS_MEASUREMENT, BT_GATT_CHRC_READ),
+
+	BT_GATT_DISCOVER_MOCK_SERV(22, BT_UUID_HRS, 0xffff),
+	BT_GATT_DISCOVER_MOCK_CHRC(23, BT_UUID_HRS_MEASUREMENT, BT_GATT_CHRC_READ),
 };
 
 
@@ -65,16 +81,16 @@ void test_cb_error_found(struct bt_conn *conn, int err, void *context)
 	printk("%s\n", __func__);
 	zassert_unreachable("HIDS error found");
 }
-
-
 struct bt_gatt_dm_cb test_hids_cb = {
 	.completed         = test_cb_completed,
 	.service_not_found = test_cb_service_not_found,
 	.error_found       = test_cb_error_found
 };
 
-void test_setup(void)
+void test_before(void *fixture)
 {
+	ARG_UNUSED(fixture);
+
 	k_sem_reset(&discovery_finished);
 	bt_gatt_discover_mock_setup(discover_sim, ARRAY_SIZE(discover_sim));
 }
@@ -110,8 +126,10 @@ struct bt_gatt_dm *run_dm_next(struct bt_gatt_dm *dm)
 	return dm_next;
 }
 
+ZTEST_SUITE(gatt_tests, NULL, NULL, test_before, NULL, NULL);
+
 /* The service that is not present */
-void test_gatt_none_serv(void)
+ZTEST(gatt_tests, test_gatt_none_serv)
 {
 	struct bt_gatt_dm *dm = run_dm(BT_UUID_BAS);
 
@@ -120,7 +138,7 @@ void test_gatt_none_serv(void)
 
 /* This is just a simple test to check if another service than
  * first one can be accessed */
-void test_gatt_DIS_simple_next_attr(void)
+ZTEST(gatt_tests, test_gatt_DIS_simple_next_attr)
 {
 	const struct bt_gatt_dm_attr *attr;
 	struct bt_gatt_dm *dm = run_dm(BT_UUID_DIS);
@@ -142,10 +160,11 @@ void test_gatt_DIS_simple_next_attr(void)
 	zassert_is_null(attr, "Attr after 11 should be NULL");
 
 	bt_gatt_dm_data_release(dm);
-	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d", bt_gatt_dm_attr_cnt(dm));
+	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d",
+		      bt_gatt_dm_attr_cnt(dm));
 }
 
-void test_gatt_DIS_attr_by_handle(void)
+ZTEST(gatt_tests, test_gatt_DIS_attr_by_handle)
 {
 	const struct bt_gatt_dm_attr *attr;
 	struct bt_gatt_dm *dm = run_dm(BT_UUID_DIS);
@@ -163,10 +182,11 @@ void test_gatt_DIS_attr_by_handle(void)
 		zassert_equal(i, attr->handle, "Attr handle: %d", i);
 	}
 	bt_gatt_dm_data_release(dm);
-	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d", bt_gatt_dm_attr_cnt(dm));
+	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d",
+		      bt_gatt_dm_attr_cnt(dm));
 }
 
-void test_gatt_HIDS_simple_next_attr(void)
+ZTEST(gatt_tests, test_gatt_HIDS_simple_next_attr)
 {
 	const struct bt_gatt_dm_attr *attr;
 	struct bt_gatt_dm *dm = run_dm(BT_UUID_HIDS);
@@ -183,10 +203,11 @@ void test_gatt_HIDS_simple_next_attr(void)
 	zassert_is_null(attr, "Attr after 11 should be NULL");
 
 	bt_gatt_dm_data_release(dm);
-	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d", bt_gatt_dm_attr_cnt(dm));
+	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d",
+		      bt_gatt_dm_attr_cnt(dm));
 }
 
-void test_gatt_HIDS_attr_by_handle(void)
+ZTEST(gatt_tests, test_gatt_HIDS_attr_by_handle)
 {
 	const struct bt_gatt_dm_attr *attr;
 	struct bt_gatt_dm *dm = run_dm(BT_UUID_HIDS);
@@ -204,10 +225,11 @@ void test_gatt_HIDS_attr_by_handle(void)
 		zassert_equal(i, attr->handle, "Attr handle: %d", i);
 	}
 	bt_gatt_dm_data_release(dm);
-	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d", bt_gatt_dm_attr_cnt(dm));
+	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d",
+		      bt_gatt_dm_attr_cnt(dm));
 }
 
-void test_gatt_HIDS_next_chrc_access(void)
+ZTEST(gatt_tests, test_gatt_HIDS_next_chrc_access)
 {
 	struct bt_gatt_dm *dm;
 	const struct bt_gatt_dm_attr *attr_serv;
@@ -253,8 +275,10 @@ void test_gatt_HIDS_next_chrc_access(void)
 	zassert_equal(4, attr_chrc->handle, "Unexpected handle value for HIDS_REPORT_MAP");
 	chrc_val = bt_gatt_dm_attr_chrc_val(attr_chrc);
 	zassert_not_null(chrc_val, "Unexpected NULL instead HIDS_REPORT_MAP value");
-	zassert_true(!bt_uuid_cmp(BT_UUID_HIDS_REPORT_MAP, chrc_val->uuid), "Unexpected HIDS_REPORT_MAP UUID");
-	zassert_equal(BT_GATT_CHRC_READ, chrc_val->properties, "Unexpected HIDS_REPORT_MAP properties");
+	zassert_true(!bt_uuid_cmp(BT_UUID_HIDS_REPORT_MAP, chrc_val->uuid),
+		     "Unexpected HIDS_REPORT_MAP UUID");
+	zassert_equal(BT_GATT_CHRC_READ, chrc_val->properties,
+		      "Unexpected HIDS_REPORT_MAP properties");
 	/* Simple access to next descriptors */
 	attr_desc = bt_gatt_dm_desc_next(dm, attr_chrc);
 	zassert_not_null(attr_desc, "Unexpected NULL");
@@ -269,7 +293,8 @@ void test_gatt_HIDS_next_chrc_access(void)
 	zassert_equal(6, attr_chrc->handle, "Unexpected handle value for HIDS_REPORT");
 	chrc_val = bt_gatt_dm_attr_chrc_val(attr_chrc);
 	zassert_not_null(chrc_val, "Unexpected NULL instead HIDS_REPORT value");
-	zassert_true(!bt_uuid_cmp(BT_UUID_HIDS_REPORT, chrc_val->uuid), "Unexpected HIDS_REPORT UUID");
+	zassert_true(!bt_uuid_cmp(BT_UUID_HIDS_REPORT, chrc_val->uuid),
+		     "Unexpected HIDS_REPORT UUID");
 	zassert_equal(BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
 		      chrc_val->properties,
 		      "Unexpected HIDS_REPORT properties");
@@ -302,10 +327,11 @@ void test_gatt_HIDS_next_chrc_access(void)
 	zassert_is_null(attr_chrc, "Unexpected characteristic detected");
 
 	bt_gatt_dm_data_release(dm);
-	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d", bt_gatt_dm_attr_cnt(dm));
+	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d",
+		      bt_gatt_dm_attr_cnt(dm));
 }
 
-void test_gatt_HIDS_chrc_by_uuid(void)
+ZTEST(gatt_tests, test_gatt_HIDS_chrc_by_uuid)
 {
 	struct bt_gatt_dm *dm;
 	const struct bt_gatt_dm_attr *attr_chrc;
@@ -341,10 +367,11 @@ void test_gatt_HIDS_chrc_by_uuid(void)
 	/* ------------------------------------------------------ */
 	/* Clean up */
 	bt_gatt_dm_data_release(dm);
-	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d", bt_gatt_dm_attr_cnt(dm));
+	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d",
+		      bt_gatt_dm_attr_cnt(dm));
 }
 
-void test_gatt_generic_serv(void)
+ZTEST(gatt_tests, test_gatt_generic_serv)
 {
 	struct bt_gatt_dm *dm;
 	const struct bt_gatt_dm_attr *attr_serv;
@@ -371,24 +398,81 @@ void test_gatt_generic_serv(void)
 		      bt_gatt_dm_attr_cnt(dm));
 
 	dm = run_dm_next(dm);
+	zassert_not_null(dm, "Device Manager pointer not set");
+	attr_serv = bt_gatt_dm_service_get(dm);
+	serv_val  = bt_gatt_dm_attr_service_val(attr_serv);
+	zassert_true(!bt_uuid_cmp(BT_UUID_EMPTY, serv_val->uuid), "Invalid service detected");
+	zassert_equal(1,
+		      bt_gatt_dm_attr_cnt(dm),
+		      "Unexpected number of attributes detected: %d",
+		      bt_gatt_dm_attr_cnt(dm));
+
+	dm = run_dm_next(dm);
+	zassert_not_null(dm, "Device Manager pointer not set");
+	attr_serv = bt_gatt_dm_service_get(dm);
+	serv_val  = bt_gatt_dm_attr_service_val(attr_serv);
+	zassert_true(!bt_uuid_cmp(BT_UUID_EMPTY, serv_val->uuid), "Invalid service detected");
+	zassert_equal(2,
+		      bt_gatt_dm_attr_cnt(dm),
+		      "Unexpected number of attributes detected: %d",
+		      bt_gatt_dm_attr_cnt(dm));
+
+	dm = run_dm_next(dm);
+	zassert_not_null(dm, "Device Manager pointer not set");
+	attr_serv = bt_gatt_dm_service_get(dm);
+	serv_val  = bt_gatt_dm_attr_service_val(attr_serv);
+	zassert_true(!bt_uuid_cmp(BT_UUID_HRS, serv_val->uuid), "Invalid service detected");
+	zassert_equal(2,
+		      bt_gatt_dm_attr_cnt(dm),
+		      "Unexpected number of attributes detected: %d",
+		      bt_gatt_dm_attr_cnt(dm));
+
+	dm = run_dm_next(dm);
+	zassert_not_null(dm, "Device Manager pointer not set");
+	attr_serv = bt_gatt_dm_service_get(dm);
+	serv_val  = bt_gatt_dm_attr_service_val(attr_serv);
+	zassert_true(!bt_uuid_cmp(BT_UUID_HRS, serv_val->uuid), "Invalid service detected");
+	zassert_equal(2,
+		      bt_gatt_dm_attr_cnt(dm),
+		      "Unexpected number of attributes detected: %d",
+		      bt_gatt_dm_attr_cnt(dm));
+
+	dm = run_dm_next(dm);
 	zassert_is_null(dm, "Unexpected service detected");
 	/* ------------------------------------------------------ */
 	/* No cleanup here - cleanup is done in run_dm_next */
 }
 
-void test_main(void)
+ZTEST(gatt_tests, test_gatt_many_serv_by_uuid)
 {
-	ztest_test_suite(
-		test_gatt,
-		ztest_unit_test_setup_teardown(test_gatt_none_serv, test_setup, unit_test_noop),
-		ztest_unit_test_setup_teardown(test_gatt_DIS_simple_next_attr, test_setup, unit_test_noop),
-		ztest_unit_test_setup_teardown(test_gatt_DIS_attr_by_handle, test_setup, unit_test_noop),
-		ztest_unit_test_setup_teardown(test_gatt_HIDS_simple_next_attr, test_setup, unit_test_noop),
-		ztest_unit_test_setup_teardown(test_gatt_HIDS_attr_by_handle, test_setup, unit_test_noop),
-		ztest_unit_test_setup_teardown(test_gatt_HIDS_next_chrc_access, test_setup, unit_test_noop),
-		ztest_unit_test_setup_teardown(test_gatt_HIDS_chrc_by_uuid, test_setup, unit_test_noop),
-		ztest_unit_test_setup_teardown(test_gatt_generic_serv, test_setup, unit_test_noop)
-	);
+	struct bt_gatt_dm *dm;
+	const struct bt_gatt_dm_attr *attr_serv;
+	const struct bt_gatt_service_val *serv_val;
 
-	ztest_run_test_suite(test_gatt);
+	dm = run_dm(BT_UUID_HRS);
+
+	zassert_not_null(dm, "Device Manager pointer not set");
+	attr_serv = bt_gatt_dm_service_get(dm);
+	serv_val  = bt_gatt_dm_attr_service_val(attr_serv);
+	zassert_true(!bt_uuid_cmp(BT_UUID_HRS, serv_val->uuid), "Invalid service detected");
+	zassert_equal(2,
+		      bt_gatt_dm_attr_cnt(dm),
+		      "Unexpected number of attributes detected: %d",
+		      bt_gatt_dm_attr_cnt(dm));
+
+	dm = run_dm_next(dm);
+	zassert_not_null(dm, "Device Manager pointer not set");
+	attr_serv = bt_gatt_dm_service_get(dm);
+	serv_val  = bt_gatt_dm_attr_service_val(attr_serv);
+	zassert_true(!bt_uuid_cmp(BT_UUID_HRS, serv_val->uuid), "Invalid service detected");
+	zassert_equal(2,
+		      bt_gatt_dm_attr_cnt(dm),
+		      "Unexpected number of attributes detected: %d",
+		      bt_gatt_dm_attr_cnt(dm));
+
+	/* ------------------------------------------------------ */
+	/* Clean up */
+	bt_gatt_dm_data_release(dm);
+	zassert_equal(0, bt_gatt_dm_attr_cnt(dm), "Parameter count after clearing: %d",
+		      bt_gatt_dm_attr_cnt(dm));
 }

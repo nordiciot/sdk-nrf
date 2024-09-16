@@ -10,17 +10,17 @@
  * time by Apple and may cause this client implementation to stop working.
  */
 
-#include <sys/byteorder.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
 
 #include <bluetooth/services/ancs_client.h>
 #include "ancs_client_internal.h"
 #include "ancs_attr_parser.h"
 #include "ancs_app_attr_get.h"
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(ancs_c, CONFIG_BT_ANCS_CLIENT_LOG_LEVEL);
 
 /**< Index of the Event ID field when parsing notifications. */
@@ -61,7 +61,7 @@ static void parse_notif(struct bt_ancs_client *ancs_c,
 			const uint8_t *data_src, const uint16_t len)
 {
 	int err;
-	struct bt_ancs_evt_notif notif;
+	struct bt_ancs_evt_notif notif = {0};
 
 	if (len != BT_ANCS_NOTIF_DATA_LENGTH) {
 		bt_ancs_do_ns_notif_cb(ancs_c, -EINVAL, &notif);

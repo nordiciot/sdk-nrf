@@ -11,7 +11,7 @@
 # https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/zephyr/guides/west/index.html
 
 manifest:
-  version: "0.10"
+  version: "0.13"
 
   # "remotes" is a list of locations where git repositories are cloned
   # and fetched from.
@@ -27,24 +27,29 @@ manifest:
       url-base: https://github.com/ThrowTheSwitch
     - name: armmbed
       url-base: https://github.com/ARMmbed
-    - name: alexa
-      url-base: https://github.com/alexa
     - name: nordicsemi
       url-base: https://github.com/NordicSemiconductor
-    - name: pelioniot
-      url-base: https://github.com/PelionIoT
+    - name: dragoon
+      url-base: https://projecttools.nordicsemi.no/bitbucket/scm/drgn
     - name: memfault
       url-base: https://github.com/memfault
+    - name: ant-nrfconnect
+      url-base: https://github.com/ant-nrfconnect
+    - name: babblesim
+      url-base: https://github.com/BabbleSim
 
   # If not otherwise specified, the projects below should be obtained
   # from the ncs remote.
   defaults:
     remote: ncs
 
-  group-filter: [-homekit, -nrf-802154, -find-my]
+  group-filter: [-homekit, -nrf-802154, -dragoon, -find-my, -ant, -babblesim]
 
   # "projects" is a list of git repositories which make up the NCS
   # source code.
+  #
+  # For 'userdata' fields in the projects area, please refer to:
+  # https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/nrf/dm_code_base.html
   projects:
 
     # The Zephyr RTOS fork in the NCS, along with the subset of its
@@ -54,7 +59,7 @@ manifest:
     # https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/zephyr/guides/modules.html
     - name: zephyr
       repo-path: sdk-zephyr
-      revision: 15be5e615498377e9326cb2eb5819c7c62005299
+      revision: eb28632680089351c7bd4365cf3742bf7eff70d3
       import:
         # In addition to the zephyr repository itself, NCS also
         # imports the contents of zephyr/west.yml at the above
@@ -70,118 +75,182 @@ manifest:
         name-allowlist:
           - TraceRecorderSource
           - canopennode
-          - civetweb
+          - chre
           - cmsis
           - edtt
           - fatfs
           - hal_nordic
-          - hal_st
+          - hal_st # required for ST sensors (unrelated to STM32 MCUs)
+          - hal_wurthelektronik
+          - liblc3
           - libmetal
           - littlefs
           - loramac-node
           - lvgl
           - lz4
-          - mbedtls
-          - mcumgr
           - mipi-sys-t
           - nanopb
           - net-tools
           - nrf_hw_models
           - open-amp
+          - picolibc
+          - psa-arch-tests
           - segger
           - tinycbor
           - tinycrypt
+          - tf-m-tests
+          - uoscore-uedhoc
+          - zcbor
+          - zscilib
 
     # NCS repositories.
     #
     # Some of these are also Zephyr modules which have NCS-specific
     # changes.
+    - name: hostap
+      repo-path: sdk-hostap
+      path: modules/lib/hostap
+      revision: 8e2e758b0296e0f6e8a2261884dca15da37d96a8
+      userdata:
+        ncs:
+          upstream-url: https://w1.fi/cgit/hostap/
+          upstream-sha: e792f38db8471f35ee94f109a4093dece8f78c6a
+          compare-by-default: false
+    - name: wfa-qt-control-app
+      repo-path: sdk-wi-fiquicktrack-controlappc
+      path: modules/lib/wfa-qt-control-app
+      revision: f3391efd16c909d78c36dc7f9c81901b268deecc
+      userdata:
+        ncs:
+          upstream-url: https://github.com/Wi-FiQuickTrack/Wi-FiQuickTrack-ControlAppC
+          upstream-sha: 1225729e8d84075f03bf9fc51eee85d84dfb0091
+          compare-by-default: false
     - name: mcuboot
       repo-path: sdk-mcuboot
-      revision: 7606d9cad32c95a0d6fb7e872b070c71e85f931d
+      revision: 4e84f31172c5120bb9d300603d28ff2759d7b640
       path: bootloader/mcuboot
+    - name: qcbor
+      url: https://github.com/laurencelundblade/QCBOR.git
+      revision: b0e7033268e88c9f27146fa9a1415ef4c19ebaff
+      path: modules/tee/tf-m/qcbor
+    - name: mbedtls
+      path: modules/crypto/mbedtls
+      repo-path: sdk-mbedtls
+      revision: v3.3.0-ncs1
     - name: nrfxlib
       repo-path: sdk-nrfxlib
       path: nrfxlib
-      revision: 2b0ddce6086ad6819e5d487b7ecfef80503be41b
+      revision: 131d8037e603be6d78f7b42d8d2bb112497d5e90
     - name: trusted-firmware-m
       repo-path: sdk-trusted-firmware-m
-      path: modules/tee/tfm
-      revision: d2e93153863e7add9fae3849faf7de430258c0de
-    - name: tfm-mcuboot # This is used by the trusted-firmware-m module.
-      repo-path: sdk-mcuboot
-      path: modules/tee/tfm-mcuboot
-      revision: v1.7.2
+      path: modules/tee/tf-m/trusted-firmware-m
+      revision: c5b393bb0bc9436c486c791d8698e1cdb8ed2c18
     - name: matter
       repo-path: sdk-connectedhomeip
       path: modules/lib/matter
-      revision: 174bac11aa51c6a5b10d3bd7507a51135faf3cc0
+      revision: 8fe5bee7b651f4a375fd5afd306f1576b42a4db6
       submodules:
         - name: nlio
           path: third_party/nlio/repo
         - name: nlassert
           path: third_party/nlassert/repo
+        - name: nlunit-test
+          path: third_party/nlunit-test/repo
         - name: pigweed
           path: third_party/pigweed/repo
+      userdata:
+        ncs:
+          upstream-url: https://github.com/project-chip/connectedhomeip
+          upstream-sha: 8f66f4215bc0708efc8cc73bda80620e67d8955f
+          compare-by-default: false
     - name: nrf-802154
       repo-path: sdk-nrf-802154
       path: nrf-802154
-      revision: v1.7.0
+      revision: 9b42d042894162145b74096d25250ff618483b08
       groups:
-      - nrf-802154
+        - nrf-802154
+    - name: dragoon
+      # Only for internal Nordic development
+      repo-path: dragoon.git
+      remote: dragoon
+      revision: f870a908c06de77fd4913370e97a92684782cf76
+      submodules: true
+      groups:
+        - dragoon
     - name: cjson
       repo-path: sdk-cjson
       path: modules/lib/cjson
       revision: c6af068b7f05207b28d68880740e4b9ec1e4b50a
+      userdata:
+        ncs:
+          upstream-url: https://github.com/DaveGamble/cJSON
+          upstream-sha: d2735278ed1c2e4556f53a7a782063b31331dbf7
+          compare-by-default: false
+    - name: homekit
+      repo-path: sdk-homekit
+      revision: 77828c53c0753083e27f702801ac34cc56bc5c7b
+      groups:
+        - homekit
+    - name: find-my
+      repo-path: sdk-find-my
+      revision: 68e82297568d9c8e1d244e87858b4bd332643605
+      groups:
+        - find-my
+    - name: azure-sdk-for-c
+      repo-path: azure-sdk-for-c
+      path: modules/lib/azure-sdk-for-c
+      revision: 308c171cb4b5eed266649012a68406487ec81fb2
+      userdata:
+        ncs:
+          upstream-url: https://github.com/Azure/azure-sdk-for-c
+          upstream-sha: adc56bc6138a28b5490bce339a31a2581a072092
+          compare-by-default: false
+    - name: cirrus
+      repo-path: sdk-mcu-drivers
+      path: modules/hal/cirrus-logic
+      revision: 9f6b3812237fbb0d4157ba3584c13f1644fcbe3a
+      userdata:
+        ncs:
+          upstream-url: https://github.com/CirrusLogic/mcu-drivers
+          upstream-sha: 1be6ca7253133a21a1e9fe0fbb4656e17d63a936
+          compare-by-default: false
     - name: openthread
       repo-path: sdk-openthread
       path: modules/lib/openthread
-      revision: de387884c80094df8e310353c3a487c13c0c056b
+      revision: 37fb77098982d17555dd7a3f58832714bb9df56e
+      userdata:
+        ncs:
+          upstream-url: https://github.com/openthread/openthread
+          upstream-sha: d9abe3071c0131a4adb5d7e7451319b735e6d855
+          compare-by-default: false
+
     # Other third-party repositories.
     - name: cmock
       path: test/cmock
-      revision: 9d092898ef26ece140d9225e037274b64d4f851e
+      submodules: true
+      revision: f65066f15d8248e6dcb778efb8739904a4512087
       remote: throwtheswitch
-    - name: unity
-      path: test/cmock/vendor/unity
-      revision: 74cde089e65c3435ce9aa87d5c69f4f16b7f6ade
-      remote: throwtheswitch
-    - name: mbedtls-nrf
-      path: mbedtls
-      repo-path: mbedtls
-      revision: mbedtls-2.26.0
-      remote: armmbed
-    - name: Alexa-Gadgets-Embedded-Sample-Code
-      path: modules/alexa-embedded
-      revision: face92d8c62184832793f518bb1f19379538c5c1
-      remote: alexa
-    - name: mbed-cloud-client
-      path: modules/lib/pelion-dm
-      revision: 4.10.0
-      remote: pelioniot
-    - name: cddl-gen
-      remote: nordicsemi
-      revision: 24f1b2b0c64c694b7f9ac1b7eab60b39236ca0bf
-      path: modules/lib/cddl-gen
-    - name: homekit
-      repo-path: sdk-homekit
-      revision: 97cd0692edde464625bb3c6a1b24d89df631fd32
-      groups:
-      - homekit
-    - name: find-my
-      repo-path: sdk-find-my
-      revision: 4488adb531668d84de3b9d348823495282698abc
-      groups:
-      - find-my
     - name: memfault-firmware-sdk
       path: modules/lib/memfault-firmware-sdk
-      revision: 0.26.1
+      revision: 0.43.3
       remote: memfault
+    - name: ant
+      repo-path: sdk-ant
+      revision: 01087e4e6d2a9c4dec759ad6223d39e0cfb2bfa2
+      remote: ant-nrfconnect
+      groups:
+        - ant
+    - name: bsim
+      repo-path: bsim_west
+      remote: babblesim
+      revision: 384a091445c57b44ac8cbd18ebd245b47c71db94
+      import:
+        path-prefix: tools
+
 
   # West-related configuration for the nrf repository.
   self:
     # This repository should be cloned to ncs/nrf.
     path: nrf
-    # This line configures west extensions which are currently only
-    # for internal use by NCS maintainers.
+    # This line configures west extensions.
     west-commands: scripts/west-commands.yml

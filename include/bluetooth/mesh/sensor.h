@@ -13,9 +13,9 @@
 #ifndef BT_MESH_SENSOR_H__
 #define BT_MESH_SENSOR_H__
 
-#include <bluetooth/mesh.h>
+#include <zephyr/bluetooth/mesh.h>
 #include <bluetooth/mesh/model_types.h>
-#include <drivers/sensor.h>
+#include <zephyr/drivers/sensor.h>
 #include <stdlib.h>
 
 #ifdef __cplusplus
@@ -24,7 +24,9 @@ extern "C" {
 
 /** Largest period divisor value allowed. */
 #define BT_MESH_SENSOR_PERIOD_DIV_MAX 15
-/** Largest sensor interval allowed (in seconds). */
+/** Largest sensor interval allowed. The value is represented as
+ *  2 to the power of N milliseconds.
+ */
 #define BT_MESH_SENSOR_INTERVAL_MAX 26
 
 /** String length for representing a single sensor channel. */
@@ -177,7 +179,7 @@ struct bt_mesh_sensor_format {
 			    struct net_buf_simple *buf,
 			    struct sensor_value *val);
 
-	/** User data pointer. */
+	/** User data pointer. Used internally by the sensor types. */
 	void *user_data;
 	/** Size of the encoded data in bytes. */
 	size_t size;
@@ -219,6 +221,7 @@ struct bt_mesh_sensor_type {
 };
 
 struct bt_mesh_sensor;
+struct bt_mesh_sensor_srv;
 
 /** Single sensor setting. */
 struct bt_mesh_sensor_setting {
@@ -229,6 +232,8 @@ struct bt_mesh_sensor_setting {
 	 *
 	 *  @note This handler is mandatory.
 	 *
+	 *  @param[in]  srv     Sensor server instance associated with this
+	 *                      setting.
 	 *  @param[in]  sensor  Sensor this setting belongs to.
 	 *  @param[in]  setting Pointer to this setting structure.
 	 *  @param[in]  ctx     Context parameters for the packet this call
@@ -239,7 +244,8 @@ struct bt_mesh_sensor_setting {
 	 *                      by the setting sensor type. All channels must be
 	 *                      filled.
 	 */
-	void (*get)(struct bt_mesh_sensor *sensor,
+	void (*get)(struct bt_mesh_sensor_srv *srv,
+		    struct bt_mesh_sensor *sensor,
 		    const struct bt_mesh_sensor_setting *setting,
 		    struct bt_mesh_msg_ctx *ctx,
 		    struct sensor_value *rsp);
@@ -248,6 +254,8 @@ struct bt_mesh_sensor_setting {
 	 *
 	 *  Should only be specified for writable sensor settings.
 	 *
+	 *  @param[in] srv     Sensor server instance associated with this
+	 *                     setting.
 	 *  @param[in] sensor  Sensor this setting belongs to.
 	 *  @param[in] setting Pointer to this setting structure.
 	 *  @param[in] ctx     Context parameters for the packet this call
@@ -258,7 +266,7 @@ struct bt_mesh_sensor_setting {
 	 *
 	 *  @return 0 on success, or (negative) error code otherwise.
 	 */
-	int (*set)(
+	int (*set)(struct bt_mesh_sensor_srv *srv,
 		struct bt_mesh_sensor *sensor,
 		const struct bt_mesh_sensor_setting *setting,
 		struct bt_mesh_msg_ctx *ctx,
@@ -294,6 +302,8 @@ struct bt_mesh_sensor_series {
 	 *  range, and values that don't fit in any of the columns should be
 	 *  ignored. If columns overlap, samples must be present in all columns
 	 *  they fall into. The columns may come in any order.
+	 *
+	 *  This list is not used for sensor types with one or two channels.
 	 */
 	const struct bt_mesh_sensor_column *columns;
 
@@ -305,20 +315,24 @@ struct bt_mesh_sensor_series {
 	 *  Should return the historical data for the latest sensor readings in
 	 *  the given column.
 	 *
-	 *  @param[in]  sensor Sensor pointer.
-	 *  @param[in]  ctx    Message context pointer, or NULL if this call
-	 *                     didn't originate from a mesh message.
-	 *  @param[in]  column The requested sensor column. Points to a column
-	 *                     in the @c columns array.
-	 *  @param[out] value  Sensor value response buffer. Holds the number of
-	 *                     channels indicated by the sensor type. All
-	 *                     channels must be filled.
+	 *  @param[in]  srv          Sensor server associated with sensor instance.
+	 *  @param[in]  sensor       Sensor pointer.
+	 *  @param[in]  ctx          Message context pointer, or NULL if this call
+	 *                           didn't originate from a mesh message.
+	 *  @param[in]  column_index The index of the requested sensor column.
+	 *                           Index into the @c columns array for sensors
+	 *                           with more than two channels.
+	 *  @param[out] value        Sensor value response buffer. Holds the number
+	 *                           of channels indicated by the sensor type. All
+	 *                           channels must be filled.
 	 *
 	 *  @return 0 on success, or (negative) error code otherwise.
 	 */
-	int (*get)(struct bt_mesh_sensor *sensor, struct bt_mesh_msg_ctx *ctx,
-		   const struct bt_mesh_sensor_column *column,
-		   struct sensor_value *value);
+	int (*get)(struct bt_mesh_sensor_srv *srv,
+		struct bt_mesh_sensor *sensor,
+		struct bt_mesh_msg_ctx *ctx,
+		uint32_t column_index,
+		struct sensor_value *value);
 };
 
 /** Sensor instance. */
@@ -341,14 +355,15 @@ struct bt_mesh_sensor {
 
 	/** Sensor series specification.
 	 *
-	 *  Only sensors whose type have the @ref
-	 *  BT_MESH_SENSOR_TYPE_FLAG_SERIES flag set, a non-empty list of
-	 *  columns and a defined series getter will accept series messages.
+	 *  Only sensors who have a non-zero column-count and a defined
+	 *  series getter will accept series messages. Sensors with more than
+	 *  two channels also require a non-empty list of columns.
 	 */
 	const struct bt_mesh_sensor_series series;
 
 	/** @brief Getter function for the sensor value.
 	 *
+	 *  @param[in]  srv    Sensor server associated with sensor instance.
 	 *  @param[in]  sensor Sensor instance.
 	 *  @param[in]  ctx    Message context, or NULL if the call wasn't
 	 *                     triggered by a mesh message.
@@ -358,8 +373,10 @@ struct bt_mesh_sensor {
 	 *
 	 *  @return 0 on success, or (negative) error code otherwise.
 	 */
-	int (*const get)(struct bt_mesh_sensor *sensor,
-			 struct bt_mesh_msg_ctx *ctx, struct sensor_value *rsp);
+	int (*const get)(struct bt_mesh_sensor_srv *srv,
+			 struct bt_mesh_sensor *sensor,
+			 struct bt_mesh_msg_ctx *ctx,
+			 struct sensor_value *rsp);
 
 	/* Internal state, overwritten on init. Should only be written to by
 	 * internal modules.
@@ -377,8 +394,8 @@ struct bt_mesh_sensor {
 		/** Sequence number of the previous publication. */
 		uint16_t seq;
 
-		/** Minimum possible interval for fast cadence value publishing
-		 *  in seconds.
+		/** Minimum possible interval for fast cadence value publishing.
+		 *  The value is represented as 2 to the power of N milliseconds.
 		 *
 		 *  @see BT_MESH_SENSOR_INTERVAL_MAX
 		 */
@@ -391,6 +408,9 @@ struct bt_mesh_sensor {
 		/** Flag indicating whether the sensor is in fast cadence mode.
 		 */
 		uint8_t fast_pub : 1;
+
+		/** Flag indicating whether the sensor cadence state has been configured. */
+		uint8_t configured : 1;
 	} state;
 };
 
@@ -474,14 +494,7 @@ static inline int bt_mesh_sensor_ch_to_str(const struct sensor_value *ch,
  *
  *  @return A string representing the sensor channel.
  */
-const char *bt_mesh_sensor_ch_str_real(const struct sensor_value *ch);
-
-/** String duplication variant of @ref bt_mesh_sensor_ch_str_real for use in
- *  logging.
- *
- *  @param[in] ch Sensor channel to represent.
- */
-#define bt_mesh_sensor_ch_str(ch) log_strdup(bt_mesh_sensor_ch_str_real(ch))
+const char *bt_mesh_sensor_ch_str(const struct sensor_value *ch);
 
 /** @cond INTERNAL_HIDDEN */
 
@@ -543,7 +556,7 @@ const char *bt_mesh_sensor_ch_str_real(const struct sensor_value *ch);
 #define BT_MESH_SENSOR_MSG_MINLEN_CADENCE_SET 8
 #define BT_MESH_SENSOR_MSG_MAXLEN_CADENCE_SET                                  \
 	(4 + CONFIG_BT_MESH_SENSOR_CHANNEL_ENCODED_SIZE_MAX * 4)
-#define BT_MESH_SENSOR_MSG_MINLEN_CADENCE_STATUS 8
+#define BT_MESH_SENSOR_MSG_MINLEN_CADENCE_STATUS 2
 #define BT_MESH_SENSOR_MSG_MAXLEN_CADENCE_STATUS                               \
 	(4 + 4 * CONFIG_BT_MESH_SENSOR_CHANNEL_ENCODED_SIZE_MAX)
 #define BT_MESH_SENSOR_MSG_LEN_SETTINGS_GET 2

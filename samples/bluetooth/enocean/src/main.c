@@ -3,9 +3,9 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/bluetooth.h>
 #include <bluetooth/enocean.h>
-#include <settings/settings.h>
+#include <zephyr/settings/settings.h>
 #include <dk_buttons_and_leds.h>
 
 static void enocean_button(struct bt_enocean_device *device,
@@ -77,10 +77,27 @@ static void enocean_commissioned(struct bt_enocean_device *device)
 	bt_addr_le_to_str(&device->addr, addr, sizeof(addr));
 	printk("EnOcean Device commissioned: %s\n", addr);
 
+	/* Blink leds number of times to show commissioned */
 	for (int i = 0; i < 4; ++i) {
 		dk_set_leds_state(DK_LED1_MSK | DK_LED2_MSK, 0);
 		k_sleep(K_MSEC(100));
 		dk_set_leds_state(0, DK_LED1_MSK | DK_LED2_MSK);
+		k_sleep(K_MSEC(100));
+	}
+}
+
+static void enocean_decommissioned(struct bt_enocean_device *device)
+{
+	char addr[BT_ADDR_LE_STR_LEN];
+
+	bt_addr_le_to_str(&device->addr, addr, sizeof(addr));
+	printk("EnOcean Device decommissioned: %s\n", addr);
+
+	/* Blink leds number of times to show decommissioned */
+	for (int i = 0; i < 4; ++i) {
+		dk_set_leds_state(DK_LED3_MSK | DK_LED4_MSK, 0);
+		k_sleep(K_MSEC(100));
+		dk_set_leds_state(0, DK_LED3_MSK | DK_LED4_MSK);
 		k_sleep(K_MSEC(100));
 	}
 }
@@ -93,26 +110,27 @@ static void enocean_loaded(struct bt_enocean_device *device)
 	printk("EnOcean Device loaded: %s\n", addr);
 }
 
-void main(void)
+int main(void)
 {
 	int err;
 
 	err = dk_leds_init();
 	if (err) {
 		printk("Initializing dk_leds failed (err: %d)\n", err);
-		return;
+		return 0;
 	}
 
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	static const struct bt_enocean_callbacks enocean_callbacks = {
 		.button = enocean_button,
 		.sensor = enocean_sensor,
 		.commissioned = enocean_commissioned,
+		.decommissioned = enocean_decommissioned,
 		.loaded = enocean_loaded,
 	};
 
@@ -125,10 +143,12 @@ void main(void)
 	err = bt_le_scan_start(BT_LE_SCAN_PASSIVE, NULL);
 	if (err) {
 		printk("Bluetooth scan start failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	bt_enocean_commissioning_enable();
 
 	printk("EnOcean sample is ready!\n");
+
+	return 0;
 }

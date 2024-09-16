@@ -4,18 +4,16 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <event_manager.h>
+#include <app_event_manager.h>
 #include <modem/nrf_modem_lib.h>
+#include <zephyr/sys/reboot.h>
+#include <net/nrf_cloud.h>
 
-#if defined(CONFIG_WATCHDOG_APPLICATION)
-#include "watchdog_app.h"
-#endif
-
-/* Module name is used by the event manager macros in this file */
+/* Module name is used by the Application Event Manager macros in this file */
 #define MODULE main
 #include <caf/events/module_state_event.h>
 
@@ -24,24 +22,21 @@
 #include "events/cloud_module_event.h"
 #include "events/data_module_event.h"
 #include "events/sensor_module_event.h"
-#include "events/ui_module_event.h"
 #include "events/util_module_event.h"
 #include "events/modem_module_event.h"
-#include "events/led_state_event.h"
 
-#include <logging/log.h>
-#include <logging/log_ctrl.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
 
 LOG_MODULE_REGISTER(MODULE, CONFIG_APPLICATION_MODULE_LOG_LEVEL);
 
 /* Message structure. Events from other modules are converted to messages
- * in the event manager handler, and then queued up in the message queue
+ * in the Application Event Manager handler, and then queued up in the message queue
  * for processing in the main thread.
  */
 struct app_msg_data {
 	union {
 		struct cloud_module_event cloud;
-		struct ui_module_event ui;
 		struct sensor_module_event sensor;
 		struct data_module_event data;
 		struct util_module_event util;
@@ -60,10 +55,10 @@ static enum state_type {
 /* Application sub states. The application can be in either active or passive
  * mode.
  *
- * Active mode: Sensor data and GPS position is acquired at a configured
+ * Active mode: Sensor data and GNSS position is acquired at a configured
  *		interval and sent to cloud.
  *
- * Passive mode: Sensor data and GPS position is acquired when movement is
+ * Passive mode: Sensor data and GNSS position is acquired when movement is
  *		 detected, or after the configured movement timeout occurs.
  */
 static enum sub_state_type {
@@ -74,19 +69,29 @@ static enum sub_state_type {
 /* Internal copy of the device configuration. */
 static struct cloud_data_cfg app_cfg;
 
+/* Variable that keeps track whether modem static data has been successfully sampled by the
+ * modem module. Modem static data does not change and only needs to be sampled and sent to cloud
+ * once.
+ */
+static bool modem_static_sampled;
+
+/* Variable that is set high whenever a sample request is ongoing. */
+static bool sample_request_ongoing;
+
+/* Variable that is set high whenever the device is considered active (under movement). */
+static bool activity;
+
 /* Timer callback used to signal when timeout has occurred both in active
  * and passive mode.
  */
 static void data_sample_timer_handler(struct k_timer *timer);
 
-/* Timer callback used to signal when the application is expecting movement to trigger the next
- * sample request.
- */
-static void waiting_for_movement_handler(struct k_timer *timer);
-
 /* Application module message queue. */
 #define APP_QUEUE_ENTRY_COUNT		10
 #define APP_QUEUE_BYTE_ALIGNMENT	4
+
+/* Data fetching timeouts */
+#define DATA_FETCH_TIMEOUT_DEFAULT 2
 
 K_MSGQ_DEFINE(msgq_app, sizeof(struct app_msg_data), APP_QUEUE_ENTRY_COUNT,
 	      APP_QUEUE_BYTE_ALIGNMENT);
@@ -99,10 +104,10 @@ K_TIMER_DEFINE(movement_timeout_timer, data_sample_timer_handler, NULL);
 
 /* Movement resolution timer decides the period after movement that consecutive
  * movements are ignored and do not cause data collection. This is used to
- * lower power consumption by limiting how often GPS search is performed and
+ * lower power consumption by limiting how often GNSS search is performed and
  * data is sent on air.
  */
-K_TIMER_DEFINE(movement_resolution_timer, waiting_for_movement_handler, NULL);
+K_TIMER_DEFINE(movement_resolution_timer, NULL, NULL);
 
 /* Module data structure to hold information of the application module, which
  * opens up for using convenience functions available for modules.
@@ -168,29 +173,34 @@ static void sub_state_set(enum sub_state_type new_state)
 	sub_state = new_state;
 }
 
-/* Check the return code from nRF modem library initializaton to ensure that
+#if defined(CONFIG_NRF_MODEM_LIB)
+/* Check the return code from nRF modem library initialization to ensure that
  * the modem is rebooted if a modem firmware update is ready to be applied or
  * an error condition occurred during firmware update or library initialization.
  */
-static void handle_nrf_modem_lib_init_ret(void)
+static void modem_init(void)
 {
-	int ret = nrf_modem_lib_get_init_ret();
+	int ret = nrf_modem_lib_init();
 
 	/* Handle return values relating to modem firmware update */
 	switch (ret) {
 	case 0:
 		/* Initialization successful, no action required. */
 		return;
-	case MODEM_DFU_RESULT_OK:
-		LOG_INF("MODEM UPDATE OK. Will run new firmware after reboot");
+	case NRF_MODEM_DFU_RESULT_OK:
+		LOG_DBG("MODEM UPDATE OK. Will run new modem firmware after reboot");
 		break;
-	case MODEM_DFU_RESULT_UUID_ERROR:
-	case MODEM_DFU_RESULT_AUTH_ERROR:
+	case NRF_MODEM_DFU_RESULT_UUID_ERROR:
+	case NRF_MODEM_DFU_RESULT_AUTH_ERROR:
 		LOG_ERR("MODEM UPDATE ERROR %d. Will run old firmware", ret);
 		break;
-	case MODEM_DFU_RESULT_HARDWARE_ERROR:
-	case MODEM_DFU_RESULT_INTERNAL_ERROR:
+	case NRF_MODEM_DFU_RESULT_HARDWARE_ERROR:
+	case NRF_MODEM_DFU_RESULT_INTERNAL_ERROR:
 		LOG_ERR("MODEM UPDATE FATAL ERROR %d. Modem failure", ret);
+		break;
+	case NRF_MODEM_DFU_RESULT_VOLTAGE_LOW:
+		LOG_ERR("MODEM UPDATE CANCELLED %d.", ret);
+		LOG_ERR("Please reboot once you have sufficient power for the DFU");
 		break;
 	default:
 		/* All non-zero return codes other than DFU result codes are
@@ -200,65 +210,63 @@ static void handle_nrf_modem_lib_init_ret(void)
 		break;
 	}
 
-	LOG_WRN("Rebooting...");
+#if defined(CONFIG_NRF_CLOUD_FOTA)
+	/* Ignore return value, rebooting below */
+	(void)nrf_cloud_fota_pending_job_validate(NULL);
+#endif
+	LOG_DBG("Rebooting...");
 	LOG_PANIC();
 	sys_reboot(SYS_REBOOT_COLD);
 }
+#endif /* CONFIG_NRF_MODEM_LIB */
 
-/* Event manager handler. Puts event data into messages and adds them to the
+/* Application Event Manager handler. Puts event data into messages and adds them to the
  * application message queue.
  */
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
 	struct app_msg_data msg = {0};
 	bool enqueue_msg = false;
 
-	if (is_cloud_module_event(eh)) {
-		struct cloud_module_event *evt = cast_cloud_module_event(eh);
+	if (is_cloud_module_event(aeh)) {
+		struct cloud_module_event *evt = cast_cloud_module_event(aeh);
 
 		msg.module.cloud = *evt;
 		enqueue_msg = true;
 	}
 
-	if (is_app_module_event(eh)) {
-		struct app_module_event *evt = cast_app_module_event(eh);
+	if (is_app_module_event(aeh)) {
+		struct app_module_event *evt = cast_app_module_event(aeh);
 
 		msg.module.app = *evt;
 		enqueue_msg = true;
 	}
 
-	if (is_data_module_event(eh)) {
-		struct data_module_event *evt = cast_data_module_event(eh);
+	if (is_data_module_event(aeh)) {
+		struct data_module_event *evt = cast_data_module_event(aeh);
 
 		msg.module.data = *evt;
 		enqueue_msg = true;
 	}
 
-	if (is_sensor_module_event(eh)) {
-		struct sensor_module_event *evt = cast_sensor_module_event(eh);
+	if (is_sensor_module_event(aeh)) {
+		struct sensor_module_event *evt = cast_sensor_module_event(aeh);
 
 		msg.module.sensor = *evt;
 		enqueue_msg = true;
 	}
 
-	if (is_util_module_event(eh)) {
-		struct util_module_event *evt = cast_util_module_event(eh);
+	if (is_util_module_event(aeh)) {
+		struct util_module_event *evt = cast_util_module_event(aeh);
 
 		msg.module.util = *evt;
 		enqueue_msg = true;
 	}
 
-	if (is_modem_module_event(eh)) {
-		struct modem_module_event *evt = cast_modem_module_event(eh);
+	if (is_modem_module_event(aeh)) {
+		struct modem_module_event *evt = cast_modem_module_event(aeh);
 
 		msg.module.modem = *evt;
-		enqueue_msg = true;
-	}
-
-	if (is_ui_module_event(eh)) {
-		struct ui_module_event *evt = cast_ui_module_event(eh);
-
-		msg.module.ui = *evt;
 		enqueue_msg = true;
 	}
 
@@ -277,13 +285,20 @@ static bool event_handler(const struct event_header *eh)
 static void data_sample_timer_handler(struct k_timer *timer)
 {
 	ARG_UNUSED(timer);
-	SEND_EVENT(app, APP_EVT_DATA_GET_ALL);
-}
 
-static void waiting_for_movement_handler(struct k_timer *timer)
-{
-	ARG_UNUSED(timer);
-	SEND_EVENT(app, APP_EVT_ACTIVITY_DETECTION_ENABLE);
+	/* Cancel if a previous sample request has not completed. */
+	if (sample_request_ongoing) {
+		return;
+	}
+
+	/* Cancel if the data sample timer expired and device is not under activity in passive mode.
+	 * Movement timeout timer triggers sampling also when there is no movement.
+	 */
+	if (timer == &data_sample_timer && sub_state == SUB_STATE_PASSIVE_MODE && !activity) {
+		return;
+	}
+
+	SEND_EVENT(app, APP_EVT_DATA_GET_ALL);
 }
 
 /* Static module functions. */
@@ -295,6 +310,10 @@ static void passive_mode_timers_start_all(void)
 	LOG_DBG("%d seconds until movement can trigger a new data sample/publication",
 		app_cfg.movement_resolution);
 
+	k_timer_start(&data_sample_timer,
+		      K_SECONDS(app_cfg.movement_resolution),
+		      K_SECONDS(app_cfg.movement_resolution));
+
 	k_timer_start(&movement_resolution_timer,
 		      K_SECONDS(app_cfg.movement_resolution),
 		      K_SECONDS(0));
@@ -302,8 +321,6 @@ static void passive_mode_timers_start_all(void)
 	k_timer_start(&movement_timeout_timer,
 		      K_SECONDS(app_cfg.movement_timeout),
 		      K_SECONDS(app_cfg.movement_timeout));
-
-	k_timer_stop(&data_sample_timer);
 }
 
 static void active_mode_timers_start_all(void)
@@ -317,64 +334,76 @@ static void active_mode_timers_start_all(void)
 
 	k_timer_stop(&movement_resolution_timer);
 	k_timer_stop(&movement_timeout_timer);
+}
 
-	SEND_EVENT(app, APP_EVT_ACTIVITY_DETECTION_DISABLE);
+static void activity_event_handle(enum sensor_module_event_type sensor_event)
+{
+	__ASSERT(((sensor_event == SENSOR_EVT_MOVEMENT_ACTIVITY_DETECTED) ||
+		  (sensor_event == SENSOR_EVT_MOVEMENT_INACTIVITY_DETECTED)),
+		  "Unknown event");
+
+	activity = (sensor_event == SENSOR_EVT_MOVEMENT_ACTIVITY_DETECTED) ? true : false;
+
+	if (sample_request_ongoing) {
+		LOG_DBG("Sample request ongoing, abort request.");
+		return;
+	}
+
+	if ((sensor_event == SENSOR_EVT_MOVEMENT_ACTIVITY_DETECTED) &&
+	    (k_timer_remaining_get(&movement_resolution_timer) != 0)) {
+		LOG_DBG("Movement resolution timer has not expired, abort request.");
+		return;
+	}
+
+	SEND_EVENT(app, APP_EVT_DATA_GET_ALL);
+	passive_mode_timers_start_all();
 }
 
 static void data_get(void)
 {
-	static bool first = true;
 	struct app_module_event *app_module_event = new_app_module_event();
+
+	__ASSERT(app_module_event, "Not enough heap left to allocate event");
+
 	size_t count = 0;
 
-	/* Specify a timeout that each module has to fetch data. If data is not
-	 * fetched within this timeout, the data that is available is sent.
+	/* Set a low sample timeout. If location is requested, the sample timeout
+	 * will be increased to accommodate the location request.
 	 */
-	app_module_event->timeout = 10;
+	app_module_event->timeout = DATA_FETCH_TIMEOUT_DEFAULT;
 
 	/* Specify which data that is to be included in the transmission. */
 	app_module_event->data_list[count++] = APP_DATA_MODEM_DYNAMIC;
 	app_module_event->data_list[count++] = APP_DATA_BATTERY;
 	app_module_event->data_list[count++] = APP_DATA_ENVIRONMENTAL;
 
-	if (IS_ENABLED(CONFIG_APP_REQUEST_NEIGHBOR_CELLS_DATA) && !app_cfg.no_data.neighbor_cell) {
-		app_module_event->data_list[count++] = APP_DATA_NEIGHBOR_CELLS;
+	if (!modem_static_sampled) {
+		app_module_event->data_list[count++] = APP_DATA_MODEM_STATIC;
 	}
 
-	/* The reason for having at least 75 seconds timeout in the case of requesting GNSS data
-	 * is that the GNSS module in nRF9160 will always search for at least 60 seconds for the
-	 * first position fix after a reboot.
-	 *
-	 * The addition of 15 seconds to the configured GPS timeout is done
-	 * to let the GPS module run the currently ongoing search until
-	 * the end. If the timeout for sending data is exactly the same as for
-	 * the GPS search, a fix occurring at the same time as timeout is
-	 * triggered will be missed and not sent to cloud before the next
-	 * interval has  passed in active mode, or until next movement in
-	 * passive mode.
-	 */
+	if (!app_cfg.no_data.neighbor_cell || !app_cfg.no_data.gnss || !app_cfg.no_data.wifi) {
+		app_module_event->data_list[count++] = APP_DATA_LOCATION;
 
-	if (first) {
-		if (IS_ENABLED(CONFIG_APP_REQUEST_GPS_ON_INITIAL_SAMPLING) &&
-		    !app_cfg.no_data.gnss) {
-			app_module_event->data_list[count++] = APP_DATA_GNSS;
-			app_module_event->timeout = MAX(app_cfg.gps_timeout + 15, 75);
-		}
-
-		app_module_event->data_list[count++] = APP_DATA_MODEM_STATIC;
-		first = false;
-	} else {
-		if (!app_cfg.no_data.gnss) {
-			app_module_event->data_list[count++] = APP_DATA_GNSS;
-			app_module_event->timeout = MAX(app_cfg.gps_timeout + 15, 75);
-		}
+		/* Set application module timeout when location sampling is requested.
+		 * This is selected to be long enough so that most of the GNSS would
+		 * have enough time to run to get a fix. We also want it to be smaller than
+		 * the sampling interval (120s). So, 110s was selected but we take
+		 * minimum of sampling interval minus 5 (just some selected number) and 110.
+		 * And mode (active or passive) is taken into account.
+		 * If the timeout would become smaller than 5s, we want to ensure some time for
+		 * the modules so the minimum value for application module timeout is 5s.
+		 */
+		app_module_event->timeout = (app_cfg.active_mode) ?
+			MIN(app_cfg.active_wait_timeout - 5, 110) :
+			MIN(app_cfg.movement_resolution - 5, 110);
+		app_module_event->timeout = MAX(app_module_event->timeout, 5);
 	}
 
 	/* Set list count to number of data types passed in app_module_event. */
 	app_module_event->count = count;
 	app_module_event->type = APP_EVT_DATA_GET;
 
-	EVENT_SUBMIT(app_module_event);
+	APP_EVENT_SUBMIT(app_module_event);
 }
 
 /* Message handler for STATE_INIT. */
@@ -399,8 +428,15 @@ static void on_state_init(struct app_msg_data *msg)
 /* Message handler for STATE_RUNNING. */
 static void on_state_running(struct app_msg_data *msg)
 {
-	if (IS_EVENT(msg, data, DATA_EVT_DATE_TIME_OBTAINED)) {
+	/* A flag used to trigger sampling when connected to the cloud for the first time. Cloud
+	 * connection re-establishment should not trigger sampling.
+	 */
+	static bool initial_sampling_requested;
+
+	if (IS_EVENT(msg, cloud, CLOUD_EVT_CONNECTED) && !initial_sampling_requested) {
 		data_get();
+
+		initial_sampling_requested = true;
 	}
 
 	if (IS_EVENT(msg, app, APP_EVT_DATA_GET_ALL)) {
@@ -424,23 +460,9 @@ void on_sub_state_passive(struct app_msg_data *msg)
 		passive_mode_timers_start_all();
 	}
 
-	if ((IS_EVENT(msg, ui, UI_EVT_BUTTON_DATA_READY)) ||
-	    (IS_EVENT(msg, sensor, SENSOR_EVT_MOVEMENT_DATA_READY))) {
-
-		if (IS_EVENT(msg, ui, UI_EVT_BUTTON_DATA_READY) &&
-		    msg->module.ui.data.ui.button_number != 2) {
-			return;
-		}
-
-		/* Trigger a sample request if button 2 has been pushed on the DK or activity has
-		 * been detected. The data request can only be triggered if the movement
-		 * resolution timer has timed out.
-		 */
-
-		if (k_timer_remaining_get(&movement_resolution_timer) == 0) {
-			data_sample_timer_handler(NULL);
-			passive_mode_timers_start_all();
-		}
+	if ((IS_EVENT(msg, sensor, SENSOR_EVT_MOVEMENT_ACTIVITY_DETECTED)) ||
+	    (IS_EVENT(msg, sensor, SENSOR_EVT_MOVEMENT_INACTIVITY_DETECTED))) {
+		activity_event_handle(msg->module.sensor.type);
 	}
 }
 
@@ -472,27 +494,43 @@ static void on_all_events(struct app_msg_data *msg)
 		SEND_SHUTDOWN_ACK(app, APP_EVT_SHUTDOWN_READY, self.id);
 		state_set(STATE_SHUTDOWN);
 	}
-}
 
-void main(void)
-{
-	int err;
-	struct app_msg_data msg;
-
-	if (!IS_ENABLED(CONFIG_LWM2M_CARRIER)) {
-		handle_nrf_modem_lib_init_ret();
+	if (IS_EVENT(msg, modem, MODEM_EVT_MODEM_STATIC_DATA_READY)) {
+		modem_static_sampled = true;
 	}
 
-	if (event_manager_init()) {
-		/* Without the event manager, the application will not work
+	if (IS_EVENT(msg, app, APP_EVT_DATA_GET)) {
+		sample_request_ongoing = true;
+	}
+
+	if (IS_EVENT(msg, data, DATA_EVT_DATA_READY)) {
+		sample_request_ongoing = false;
+	}
+
+	if (IS_EVENT(msg, sensor, SENSOR_EVT_MOVEMENT_IMPACT_DETECTED)) {
+		SEND_EVENT(app, APP_EVT_DATA_GET_ALL);
+	}
+}
+
+int main(void)
+{
+	int err;
+	struct app_msg_data msg = { 0 };
+
+	if (app_event_manager_init()) {
+		/* Without the Application Event Manager, the application will not work
 		 * as intended. A reboot is required in an attempt to recover.
 		 */
-		LOG_ERR("Event manager could not be initialized, rebooting...");
+		LOG_ERR("Application Event Manager could not be initialized, rebooting...");
 		k_sleep(K_SECONDS(5));
 		sys_reboot(SYS_REBOOT_COLD);
 	} else {
 		module_set_state(MODULE_STATE_READY);
 		SEND_EVENT(app, APP_EVT_START);
+
+#if defined(CONFIG_NRF_MODEM_LIB)
+		modem_init();
+#endif
 	}
 
 	self.thread_id = k_current_get();
@@ -502,14 +540,6 @@ void main(void)
 		LOG_ERR("Failed starting module, error: %d", err);
 		SEND_ERROR(app, APP_EVT_ERROR, err);
 	}
-
-#if defined(CONFIG_WATCHDOG_APPLICATION)
-	err = watchdog_init_and_start();
-	if (err) {
-		LOG_DBG("watchdog_init_and_start, error: %d", err);
-		SEND_ERROR(app, APP_EVT_ERROR, err);
-	}
-#endif
 
 	while (true) {
 		module_get_next_msg(&self, &msg);
@@ -527,7 +557,7 @@ void main(void)
 				on_sub_state_passive(&msg);
 				break;
 			default:
-				LOG_WRN("Unknown application sub state");
+				LOG_ERR("Unknown sub state");
 				break;
 			}
 
@@ -537,19 +567,19 @@ void main(void)
 			/* The shutdown state has no transition. */
 			break;
 		default:
-			LOG_WRN("Unknown application state");
+			LOG_ERR("Unknown state");
 			break;
 		}
 
 		on_all_events(&msg);
 	}
+	return 0;
 }
 
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE_EARLY(MODULE, cloud_module_event);
-EVENT_SUBSCRIBE(MODULE, app_module_event);
-EVENT_SUBSCRIBE(MODULE, data_module_event);
-EVENT_SUBSCRIBE(MODULE, util_module_event);
-EVENT_SUBSCRIBE_FINAL(MODULE, ui_module_event);
-EVENT_SUBSCRIBE_FINAL(MODULE, sensor_module_event);
-EVENT_SUBSCRIBE_FINAL(MODULE, modem_module_event);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE_EARLY(MODULE, cloud_module_event);
+APP_EVENT_SUBSCRIBE(MODULE, app_module_event);
+APP_EVENT_SUBSCRIBE(MODULE, data_module_event);
+APP_EVENT_SUBSCRIBE(MODULE, util_module_event);
+APP_EVENT_SUBSCRIBE_FINAL(MODULE, sensor_module_event);
+APP_EVENT_SUBSCRIBE_FINAL(MODULE, modem_module_event);

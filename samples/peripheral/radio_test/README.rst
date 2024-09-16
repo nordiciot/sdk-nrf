@@ -1,49 +1,31 @@
 .. _radio_test:
 
-Radio test
-##########
+Radio test (short-range)
+########################
 
 .. contents::
    :local:
    :depth: 2
 
-The Radio test sample demonstrates how to configure the radio in a specific mode and then test its performance.
+The Radio test sample demonstrates how to configure the 2.4 GHz short-range radio (Bluetooth® LE, IEEE 802.15.4 and proprietary) in a specific mode and then test its performance.
 The sample provides a set of predefined commands that allow you to configure the radio in three modes:
 
 * Constant RX or TX carrier
 * Modulated TX carrier
 * RX or TX sweep
 
-Overview
-********
-
-You can run the tests by connecting to the development kit through the serial port and sending shell commands.
-Zephyr's :ref:`zephyr:shell_api` module is used to handle the commands.
-At any time during the tests, you can dynamically set the radio parameters, such as output power, bit rate, and channel.
-In sweep mode, you can set the time for which the radio scans each channel from 1 millisecond to 99 milliseconds, in steps of 1 millisecond.
-The sample also allows you to send a data pattern to another development kit.
-
-The sample starts with enabling the high frequency crystal oscillator and configuring the shell.
-You can then start running commands to set up and control the radio.
-See :ref:`radio_test_ui` for a list of available commands.
-
-.. note::
-   For the IEEE 802.15.4 mode, the start channel and the end channel must be within the channel range of 11 to 26.
-   Use the ``start_channel`` and ``end_channel`` commands to control this setting.
-
 Requirements
 ************
 
 The sample supports the following development kits:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpunet, nrf52840dk_nrf52840, nrf52dk_nrf52832, nrf21540dk_nrf52840
+.. table-from-sample-yaml::
 
 You can use any one of the development kits listed above.
 
 .. note::
-   On nRF5340 DK, the sample is designed to run on the network core.
+   On nRF5340 DK and nRF7002 DK, the sample is designed to run on the network core and requires the :ref:`nrf5340_remote_shell` running on the application core.
+   This sample uses the :ref:`shell_ipc_readme` library to forward shell data through the physical UART interface of the application core.
 
 The sample also requires one of the following testing devices:
 
@@ -61,7 +43,32 @@ nRF21540 front-end module
 
 .. include:: /includes/sample_dtm_radio_test_fem.txt
 
-The nRF21540 transmitted power gain, antenna and an activation delay can be configured using the user interface :ref:`radio_test_ui`.
+You can configure the nRF21540 front-end module (FEM) transmitted power gain, antenna output and activation delay using the main shell commands of the :ref:`radio_test_ui`.
+
+Skyworks front-end module
+=========================
+
+.. include:: /includes/sample_dtm_radio_test_skyworks.txt
+
+You can configure the Skyworks front-end module (FEM) antenna output and activation delay using the main shell commands of the :ref:`radio_test_ui`.
+
+Overview
+********
+
+To run the tests, connect to the development kit through the serial port and send shell commands.
+Zephyr's :ref:`zephyr:shell_api` module is used to handle the commands.
+At any time during the tests, you can dynamically set the radio parameters, such as output power, bit rate, and channel.
+In sweep mode, you can set the time for which the radio scans each channel from 1 millisecond to 99 milliseconds, in steps of 1 millisecond.
+The sample also allows you to send a data pattern to another development kit.
+
+The sample first enables the high frequency crystal oscillator and configures the shell.
+You can then start running commands to set up and control the radio.
+See :ref:`radio_test_ui` for a list of available commands.
+
+.. note::
+   For the IEEE 802.15.4 mode, the start channel and the end channel must be within the channel range of 11 to 26.
+   Use the ``start_channel`` and ``end_channel`` commands to control this setting.
+
 
 .. _radio_test_ui:
 
@@ -81,13 +88,14 @@ User interface
      - Set the data rate.
    * - end_channel
      - <channel>
-     - End the channel for the sweep.
-   * - nRF21540
+     - End channel for the sweep (in MHz, as difference from 2400 MHz).
+   * - fem
      - <sub_cmd>
-     - Set nRF21540 Front-End-Module parameters.
+     - Set front-end module (FEM) parameters.
    * - output_power
      - <sub_cmd>
      - Output power set.
+       If a front-end module is attached and the :kconfig:option:`CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC` Kconfig option is enabled, it has the same effect as the ``total_output_power`` command.
    * - parameters_print
      -
      - Print current delay, channel, and other parameters.
@@ -96,10 +104,10 @@ User interface
      - Print the received RX payload.
    * - start_channel
      - <channel>
-     - Start the channel for the sweep or the channel for the constant carrier.
+     - Start channel for the sweep or the channel for the constant carrier (in MHz, as difference from 2400 MHz).
    * - start_duty_cycle_modulated_tx
      - <duty_cycle>
-     - Duty cycle in percent (two decimal digits, between 01 and 99).
+     - Duty cycle in percent (two decimal digits, between 01 and 90).
    * - start_rx
      -
      - Start RX.
@@ -117,13 +125,41 @@ User interface
      - Start the TX sweep.
    * - time_on_channel
      - <time>
-     - Time on each channel (between 1 ms and 99 ms).
+     - Time on each channel in ms (between 1 and 99).
    * - toggle_dcdc_state
      - <state>
      - Toggle DC/DC converter state.
    * - transmit_pattern
      - <sub_cmd>
      - Set transmission pattern.
+   * - total_output_power
+     - <tx output power>
+     - Set total output power in dBm.
+       This value includes SoC output power and front-end module gain.
+
+Tx output power
+===============
+
+This sample has a few commands that you can use to test the device output power.
+The behavior of the commands vary depending on the hardware configuration and Kconfig options as follows:
+
+* Radio Test without front-end module support:
+
+  * The ``output_power`` command sets the SoC output command with a subcommand set.
+    The output power is set directly in the radio peripheral.
+
+* Radio Test with front-end module support in default configuration (the :kconfig:option:`CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC` Kconfig option is enabled):
+
+  * The ``output_power`` command sets the total output power, including front-end module gain.
+  * The ``total_output_power`` command sets the total output power, including front-end module gain with a value in dBm unit provided by user.
+  * For these commands, the radio peripheral and FEM gain is calculated and set automatically to meet your requirements.
+  * If an exact output power value cannot be set, a lower value is used.
+
+* Radio Test with front-end module support and manual Tx output power control (the :kconfig:option:`CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC` Kconfig option is disabled):
+
+  * The ``output_power`` command sets the SoC output command with a subcommands set.
+  * The ``fem`` command with the ``tx_gain`` subcommand sets the front-end module gain to an arbitrary value for given front-end module.
+  * You can use this configuration to perform tests on your hardware design.
 
 Building and running
 ********************
@@ -132,21 +168,39 @@ Building and running
 .. include:: /includes/build_and_run.txt
 
 .. note::
-   On the |nRF5340DKnoref|, the Radio test sample is a standalone network sample that does not require any counterpart application sample.
-   However, you must still program the application core to boot up the network core.
-   You can use any sample for this, for example :ref:`nrf5340_empty_app_core`.
-   The :ref:`nrf5340_empty_app_core` is built and programmed automatically by default.
-   If you want to program another sample for the application core, unset the :kconfig:`CONFIG_NCS_SAMPLE_EMPTY_APP_CORE_CHILD_IMAGE` option.
+   On the nRF5340 or nRF7002 development kit, the Radio Test sample requires the :ref:`nrf5340_remote_shell` sample on the application core.
+   The Remote IPC shell sample is built and programmed automatically by default.
+   If you want to program your custom solution for the application core, unset the :kconfig:option:`CONFIG_NCS_SAMPLE_REMOTE_SHELL_CHILD_IMAGE` Kconfig option.
+
+Remote USB CDC ACM Shell variant
+================================
+
+This sample can run the remote IPC Service Shell through the USB on the nRF5340 DK application core.
+For example, when building on the command line, you can do so as follows:
+
+.. code-block:: console
+
+  west build samples/peripheral/radio_test -b nrf5340dk_nrf5340_cpunet -- -DCONFIG_RADIO_TEST_USB=y
+
+You can also build this sample with the remote IPC Service Shell and support for the front-end module.
+You can use the following command:
+
+.. code-block:: console
+
+  west build samples/peripheral/radio_test -b nrf5340dk_nrf5340_cpunet -- -DSHIELD=nrf21540_ek -DCONFIG_RADIO_TEST_USB=y
+
+.. note::
+    You can also build the sample with the remote IPC Service Shell for the |nRF7002DKnoref| using the ``nrf7002dk_nrf5340_cpunet`` build target in the commands.
 
 .. _radio_test_testing:
 
 Testing
 =======
 
-After programming the sample to your development kit, you can test it in one of two ways.
+After programming the sample to your development kit, complete the following steps to test it in one of the following two ways:
 
 .. note::
-   For the |nRF5340DKnoref|, see :ref:`logging_cpunet` for information about the COM terminals on which the logging output is available.
+   For the |nRF5340DKnoref| or |nRF7002DKnoref|, see :ref:`logging_cpunet` for information about the COM terminals on which the logging output is available.
 
 .. _radio_test_testing_board:
 
@@ -155,11 +209,13 @@ Testing with another development kit
 
 1. Connect both development kits to the computer using a USB cable.
    The kits are assigned a COM port (Windows) or ttyACM device (Linux), which is visible in the Device Manager.
-#. |connect_terminal_both|
+#. |connect_terminal_both_ANSI|
 #. Run the following commands on one of the kits:
-   #. Set the data rate with the ``data_rate`` command to ``ble_2Mbit``.
+
+   a. Set the data rate with the ``data_rate`` command to ``ble_2Mbit``.
    #. Set the transmission pattern with the ``transmit_pattern`` command to ``pattern_11110000``.
    #. Set the radio channel with the ``start_channel`` command to 40.
+
 #. Repeat all steps for the second kit.
 #. On both kits, run the ``parameters_print`` command to confirm that the radio configuration is the same on both kits.
 #. Set one kit in the Modulated TX Carrier mode using the ``start_tx_modulated_carrier`` command.
@@ -173,35 +229,42 @@ Testing with RSSI Viewer
 
 1. Connect the kit to the computer using a USB cable.
    The kit is assigned a COM port (Windows) or ttyACM device (Linux), which is visible in the Device Manager.
-#. |connect_terminal|
+#. |connect_terminal_ANSI|
 #. Set the start channel with the ``start_channel`` command to 20.
 #. Set the end channel with the ``end_channel`` command to 60.
-#. Set the time on channel with the ``time_on_channel`` command to 50ms.
+#. Set the time on channel with the ``time_on_channel`` command to 50 ms.
 #. Set the kit in the TX sweep mode using the ``start_tx_sweep`` command.
 #. Start the RSSI Viewer application and select the kit to communicate with.
-#. On the application chart, observe the TX sweep in the form of a wave that starts at 2420 MHz frequency and ends with 2480MHz.
+#. On the application chart, observe the TX sweep in the form of a wave that starts at 2420 MHz frequency and ends with 2480 MHz.
 
 Dependencies
 ************
 
-This sample uses the following nrfx dependencies:
+This sample uses the following |NCS| libraries:
 
-  * ``nrfx/drivers/include/nrfx_timer.h``
-  * ``nrfx/hal/nrf_nvmc.h``
-  * ``nrfx/hal/nrf_power.h``
-  * ``nrfx/hal/nrf_radio.h``
-  * ``nrfx/hal/nrf_rng.h``
+  * :ref:`shell_ipc_readme`
+  * :ref:`fem_al_lib`
+
+This sample has the following nrfx dependencies:
+
+  * :file:`nrfx/drivers/include/nrfx_timer.h`
+  * :file:`nrfx/hal/nrf_power.h`
+  * :file:`nrfx/hal/nrf_radio.h`
+
+The sample also has the following nrfxlib dependency:
+
+  * :ref:`nrfxlib:mpsl_fem`
 
 In addition, it uses the following Zephyr libraries:
 
 * :ref:`zephyr:device_model_api`:
 
-   * ``drivers/clock_control.h``
+   * :file:`drivers/clock_control.h`
 
 * :ref:`zephyr:kernel_api`:
 
-  * ``include/init.h``
+  * :file:`include/init.h`
 
 * :ref:`zephyr:shell_api`:
 
-  * ``include/shell/shell.h``
+  * :file:`include/shell/shell.h`

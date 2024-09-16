@@ -7,13 +7,13 @@
 #include <bluetooth/mesh/gen_ponoff_srv.h>
 
 #include <string.h>
-#include <settings/settings.h>
+#include <zephyr/settings/settings.h>
 #include <stdlib.h>
 #include "model_utils.h"
 
-#define BT_DBG_ENABLED IS_ENABLED(CONFIG_BT_MESH_DEBUG_MODEL)
-#define LOG_MODULE_NAME bt_mesh_gen_ponoff_srv
-#include "common/log.h"
+#define LOG_LEVEL CONFIG_BT_MESH_MODEL_LOG_LEVEL
+#include "zephyr/logging/log.h"
+LOG_MODULE_REGISTER(bt_mesh_gen_ponoff_srv);
 
 /** Persistent storage handling */
 struct ponoff_settings_data {
@@ -61,13 +61,11 @@ static int store_data(struct bt_mesh_ponoff_srv *srv,
 
 }
 
-static void store_timeout(struct k_work *work)
+static void bt_mesh_ponoff_srv_pending_store(struct bt_mesh_model *model)
 {
 	int err;
 
-	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-	struct bt_mesh_ponoff_srv *srv = CONTAINER_OF(
-		dwork, struct bt_mesh_ponoff_srv, store_timer);
+	struct bt_mesh_ponoff_srv *srv = model->user_data;
 
 	struct bt_mesh_onoff_status onoff_status = {0};
 
@@ -78,7 +76,7 @@ static void store_timeout(struct k_work *work)
 	err = store_data(srv, &onoff_status);
 
 	if (err) {
-		BT_ERR("Failed storing data: %d", err);
+		LOG_ERR("Failed storing data: %d", err);
 	}
 }
 #endif
@@ -86,27 +84,26 @@ static void store_timeout(struct k_work *work)
 static void store_state(struct bt_mesh_ponoff_srv *srv)
 {
 #if CONFIG_BT_SETTINGS
-	k_work_schedule(
-		&srv->store_timer,
-		K_SECONDS(CONFIG_BT_MESH_MODEL_SRV_STORE_TIMEOUT));
-
+	bt_mesh_model_data_store_schedule(srv->ponoff_model);
 #endif
 }
 
-static void send_rsp(struct bt_mesh_ponoff_srv *srv,
+static void send_rsp(struct bt_mesh_model *model,
 		     struct bt_mesh_msg_ctx *ctx)
 {
+	struct bt_mesh_ponoff_srv *srv = model->user_data;
+
 	BT_MESH_MODEL_BUF_DEFINE(msg, BT_MESH_PONOFF_OP_STATUS,
 				 BT_MESH_PONOFF_MSG_LEN_STATUS);
 	bt_mesh_model_msg_init(&msg, BT_MESH_PONOFF_OP_STATUS);
 	net_buf_simple_add_u8(&msg, srv->on_power_up);
-	bt_mesh_model_send(srv->ponoff_model, ctx, &msg, NULL, NULL);
+	bt_mesh_model_send(model, ctx, &msg, NULL, NULL);
 }
 
 static int handle_get(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
 		      struct net_buf_simple *buf)
 {
-	send_rsp(model->user_data, ctx);
+	send_rsp(model, ctx);
 
 	return 0;
 }
@@ -147,7 +144,7 @@ static int handle_set_msg(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *c
 	set_on_power_up(srv, ctx, new);
 
 	if (ack) {
-		send_rsp(model->user_data, ctx);
+		send_rsp(model, ctx);
 	}
 
 	(void)bt_mesh_ponoff_srv_pub(srv, NULL);
@@ -293,10 +290,6 @@ static int bt_mesh_ponoff_srv_init(struct bt_mesh_model *model)
 	net_buf_simple_init_with_data(&srv->pub_buf, srv->pub_data,
 				      sizeof(srv->pub_data));
 
-#if CONFIG_BT_SETTINGS
-	k_work_init_delayable(&srv->store_timer, store_timeout);
-#endif
-
 	return bt_mesh_model_extend(model, srv->onoff.model);
 }
 
@@ -369,6 +362,7 @@ const struct bt_mesh_model_cb _bt_mesh_ponoff_srv_cb = {
 	.reset = bt_mesh_ponoff_srv_reset,
 #ifdef CONFIG_BT_SETTINGS
 	.settings_set = bt_mesh_ponoff_srv_settings_set,
+	.pending_store = bt_mesh_ponoff_srv_pending_store,
 #endif
 };
 
@@ -408,5 +402,5 @@ int bt_mesh_ponoff_srv_pub(struct bt_mesh_ponoff_srv *srv,
 	bt_mesh_model_msg_init(&msg, BT_MESH_PONOFF_OP_STATUS);
 	net_buf_simple_add_u8(&msg, srv->on_power_up);
 
-	return model_send(srv->ponoff_model, ctx, &msg);
+	return bt_mesh_msg_send(srv->ponoff_model, ctx, &msg);
 }

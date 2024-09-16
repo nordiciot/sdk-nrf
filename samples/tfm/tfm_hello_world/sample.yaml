@@ -13,14 +13,30 @@ common:
       type: multi_line
       regex:
         - "Hello World! .*"
+        - "Reading some secure memory that NS is allowed to read"
+        - ".*"
+        - "FICR->INFO.RAM: 0x[0-9a-f]{8}"
+        - "FICR->INFO.FLASH: 0x[0-9a-f]{8}"
         - "Generating random number"
         - "0x[0-9a-f]{64}"
-        - "Reading some secure memory that NS is allowed to read"
-        - "FICR->INFO.PART: 0x[0-9a-f]{8}"
-        - "FICR->INFO.VARIANT: 0x[0-9a-f]{8}"
-        - "Hashing 'Hello World! .*'"
-        - "SHA256 digest:"
-        - "0x[0-9a-f]{64}"
+        - "MCU selection .*"
 tests:
   sample.tfm.helloworld:
     tags: tfm ci_build
+
+  sample.tfm.hello_world.bootloaders:
+    tags: tfm ci_build
+    extra_args: CONFIG_BOOTLOADER_MCUBOOT=y CONFIG_SECURE_BOOT=y
+
+  sample.tfm.hello_world.bootloaders_debug:
+    build_only: true
+    tags: tfm ci_build
+    extra_args: CONFIG_BOOTLOADER_MCUBOOT=y CONFIG_SECURE_BOOT=y CONFIG_DEBUG_OPTIMIZATIONS=y
+
+  sample.tfm.hello_world.full:
+    tags: tfm ci_build
+    extra_args: CONFIG_TFM_PROFILE_TYPE_NOT_SET=y CONFIG_NRF_SECURITY=y
+
+  sample.tfm.hello_world.lvl2:
+    tags: tfm ci_build
+    extra_args: CONFIG_TFM_IPC=y CONFIG_TFM_ISOLATION_LEVEL=2 CONFIG_TFM_PROFILE_TYPE_NOT_SET=y

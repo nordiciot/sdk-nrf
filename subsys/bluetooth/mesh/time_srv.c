@@ -6,7 +6,6 @@
 
 #include <bluetooth/mesh/time_srv.h>
 #include "time_internal.h"
-#include <stdlib.h>
 #include "model_utils.h"
 #include "time_util.h"
 
@@ -169,12 +168,12 @@ static int send_time_status(struct bt_mesh_model *model,
 	int err;
 
 	BT_MESH_MODEL_BUF_DEFINE(msg, BT_MESH_TIME_OP_TIME_STATUS,
-				 BT_MESH_TIME_MSG_LEN_TIME_STATUS);
+				 BT_MESH_TIME_MSG_MAXLEN_TIME_STATUS);
 	bt_mesh_model_msg_init(&msg, BT_MESH_TIME_OP_TIME_STATUS);
 
 	err = bt_mesh_time_srv_status(srv, uptime, &status);
 	if (err) {
-		/* Mesh Model Specification 5.2.1.4: If the TAI Seconds field is
+		/* Mesh Model Specification 5.2.1.3: If the TAI Seconds field is
 		 * 0, all other fields shall be omitted
 		 */
 		bt_mesh_time_buf_put_tai_sec(&msg, 0);
@@ -184,7 +183,7 @@ static int send_time_status(struct bt_mesh_model *model,
 		bt_mesh_time_encode_time_params(&msg, &status);
 	}
 
-	return model_send(model, ctx, &msg);
+	return bt_mesh_msg_send(model, ctx, &msg);
 }
 
 static int handle_time_status(struct bt_mesh_model *model, struct bt_mesh_msg_ctx *ctx,
@@ -338,7 +337,7 @@ const struct bt_mesh_model_op _bt_mesh_time_srv_op[] = {
 	},
 	{
 		BT_MESH_TIME_OP_TIME_STATUS,
-		BT_MESH_LEN_EXACT(BT_MESH_TIME_MSG_LEN_TIME_STATUS),
+		BT_MESH_LEN_MIN(BT_MESH_TIME_MSG_MINLEN_TIME_STATUS),
 		handle_time_status,
 	},
 	{
@@ -478,6 +477,15 @@ int bt_mesh_time_srv_time_status_send(struct bt_mesh_time_srv *srv,
 				      struct bt_mesh_msg_ctx *ctx)
 {
 	srv->model->pub->ttl = 0;
+
+	/** Mesh Model Specification 5.3.1.2.2:
+	 * The message (Time Status) may be sent as an unsolicited message at any time
+	 * if the value of the Time Role state is 0x01 (Time Authority) or 0x02 (Time Relay).
+	 */
+	if ((srv->data.role != BT_MESH_TIME_AUTHORITY) && (srv->data.role != BT_MESH_TIME_RELAY)) {
+		return -EOPNOTSUPP;
+	}
+
 	return send_time_status(srv->model, ctx, k_uptime_get());
 }
 
@@ -512,8 +520,6 @@ int64_t bt_mesh_time_srv_mktime(struct bt_mesh_time_srv *srv, struct tm *timeptr
 	}
 
 	sec = tai.sec;
-	sec -= curr_time_zone;
-	sec += curr_utc_delta;
 
 	int64_t new_time_zone =
 		zone_offset_to_sec(srv->data.time_zone_change.new_offset);
@@ -555,7 +561,7 @@ struct tm *bt_mesh_time_srv_localtime_r(struct bt_mesh_time_srv *srv,
 	struct bt_mesh_time_tai tai = tai_at(srv, uptime);
 
 	tai.sec += zone_offset_to_sec(get_zone_offset(srv, uptime));
-	tai.sec += get_utc_delta(srv, uptime);
+	tai.sec -= get_utc_delta(srv, uptime);
 
 	tai_to_ts(&tai, timeptr);
 	return timeptr;

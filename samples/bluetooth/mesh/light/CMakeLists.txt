@@ -5,25 +5,26 @@
 #
 cmake_minimum_required(VERSION 3.20.0)
 
-set(PM_STATIC_YML_FILE
-  ${CMAKE_CURRENT_SOURCE_DIR}/boards/pm_static_${BOARD}.yml
-  )
-
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(NONE)
+
+include_directories(
+	${NRF_DIR}/samples/bluetooth/mesh/common
+)
 
 # NORDIC SDK APP START
 target_sources(app PRIVATE
 	src/main.c
 	src/model_handler.c)
-target_include_directories(app PRIVATE include)
+target_include_directories(app PRIVATE
+	include
+	${NRF_DIR}/samples/bluetooth/mesh/common
+)
 
-# Preinitialization related to Thingy:53 DFU
-target_sources_ifdef(CONFIG_BOARD_THINGY53_NRF5340_CPUAPP app PRIVATE
-  boards/thingy53.c
-)
-target_sources_ifdef(CONFIG_BOARD_THINGY53_NRF5340_CPUAPP_NS app PRIVATE
-  boards/thingy53.c
-)
+# Preinitialization related to DFU over SMP for nRF52 series
+if(CONFIG_SOC_SERIES_NRF52X)
+  target_sources_ifdef(CONFIG_MCUMGR_TRANSPORT_BT app PRIVATE
+    ${NRF_DIR}/samples/bluetooth/mesh/common/smp_bt.c)
+endif()
 
 # NORDIC SDK APP END

@@ -7,13 +7,13 @@ CAF: Bluetooth state power manager module
    :local:
    :depth: 2
 
-The |ble_state_pm| is a minor module that counts the number of active Bluetooth® connections and imposes a :ref:`power manager module <caf_power_manager>` power level restriction if there is at least one active connection.
+The Bluetooth® state power manager module is a minor module that counts the number of active Bluetooth® connections and imposes a :ref:`power manager module <caf_power_manager>` power level restriction if there is at least one active connection.
 
 Configuration
 *************
 
-The module is enabled by selecting :kconfig:`CONFIG_CAF_BLE_STATE_PM`.
-It depends on :kconfig:`CONFIG_CAF_BLE_STATE` and :kconfig:`CONFIG_CAF_POWER_MANAGER`.
+The module is enabled by selecting :kconfig:option:`CONFIG_CAF_BLE_STATE_PM`.
+It depends on :kconfig:option:`CONFIG_CAF_BLE_STATE` and :kconfig:option:`CONFIG_CAF_POWER_MANAGER`.
 
 Implementation details
 **********************
@@ -28,5 +28,3 @@ Depending on the count result:
 * If there is no active connection, the limitation on power level is removed.
 
 For more information about the CAF power levels, see the :ref:`caf_power_manager` documentation page.
-
-.. |ble_state_pm| replace:: Bluetooth state power manager module

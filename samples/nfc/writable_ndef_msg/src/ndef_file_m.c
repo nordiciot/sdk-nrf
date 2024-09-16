@@ -13,14 +13,14 @@
  *
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <soc.h>
-#include <device.h>
+#include <zephyr/device.h>
 #include <string.h>
-#include <fs/nvs.h>
+#include <zephyr/fs/nvs.h>
 #include <nfc/t4t/ndef_file.h>
 #include <nfc/ndef/uri_msg.h>
-#include <storage/flash_map.h>
+#include <zephyr/storage/flash_map.h>
 
 #include "ndef_file_m.h"
 
@@ -29,11 +29,13 @@
 static const uint8_t m_url[] = /**< Default NDEF message: URL "nordicsemi.com". */
 	{'n', 'o', 'r', 'd', 'i', 'c', 's', 'e', 'm', 'i', '.', 'c', 'o', 'm'};
 
- /* Flash block size in bytes */
+/* Flash partition for NVS */
+#define NVS_FLASH_DEVICE FIXED_PARTITION_DEVICE(storage_partition)
+/* Flash block size in bytes */
 #define NVS_SECTOR_SIZE  (DT_PROP(DT_CHOSEN(zephyr_flash), erase_block_size))
 #define NVS_SECTOR_COUNT 2
- /* Start address of the filesystem in flash */
-#define NVS_STORAGE_OFFSET FLASH_AREA_OFFSET(storage)
+/* Start address of the filesystem in flash */
+#define NVS_STORAGE_OFFSET FIXED_PARTITION_OFFSET(storage_partition)
 
 static struct nvs_fs fs = {
 	.sector_size = NVS_SECTOR_SIZE,
@@ -45,7 +47,12 @@ int ndef_file_setup(void)
 {
 	int err;
 
-	err = nvs_init(&fs, DT_CHOSEN_ZEPHYR_FLASH_CONTROLLER_LABEL);
+	fs.flash_device = NVS_FLASH_DEVICE;
+	if (fs.flash_device == NULL) {
+		return -ENODEV;
+	}
+
+	err = nvs_mount(&fs);
 	if (err < 0) {
 		printk("Cannot initialize NVS!\n");
 	}

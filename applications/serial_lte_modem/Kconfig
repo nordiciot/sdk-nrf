@@ -17,6 +17,7 @@ config SLM_AT_MODE
 	bool "Serial LTE Modem by raw AT mode"
 	default y
 	select AT_CMD_PARSER
+	select AT_MONITOR
 
 config SLM_AT_MAX_PARAM
 	int "Maximum number of parameters in AT command"
@@ -33,24 +34,8 @@ config SLM_EXTERNAL_XTAL
 	default y
 
 #
-# Inter-Connect
+# AT command terminator
 #
-choice
-	prompt "UART for interconnect"
-	default SLM_CONNECT_UART_0
-	help
-		Selects which UART to use for interconnect:
-		-  UART 0
-		-  UART 2
-	config SLM_CONNECT_UART_0
-		bool "UART 0"
-	  select UART_0_NRF_HW_ASYNC
-	config SLM_CONNECT_UART_2
-		bool "UART 2"
-	  select UART_2_NRF_UARTE
-	  select UART_2_NRF_HW_ASYNC
-endchoice
-
 choice
 	prompt "Termination mode"
 	default SLM_CR_LF_TERMINATION
@@ -69,6 +54,30 @@ choice
 endchoice
 
 #
+# UART buffers
+#
+config SLM_UART_RX_BUF_COUNT
+	int "Receive buffers for UART"
+	range 2 4
+	default 3
+	help
+	  Amount of buffers for receiving (RX) UART traffic. If the buffers are full, UART RX will be disabled until the buffers are processed.
+
+config SLM_UART_RX_BUF_SIZE
+	int "Receive buffer size for UART"
+	range 128 4096
+	default 256
+	help
+	  Amount of received (RX), unprocessed, UART traffic that can be held by single buffer.
+
+config SLM_UART_TX_BUF_SIZE
+	int "Send buffer size for UART"
+	range 128 4096
+	default 256
+	help
+	  Amount of UART traffic waiting to be sent (TX), that can be held. If the buffers are full, will send synchronously.
+
+#
 # GPIO wakeup
 #
 config SLM_START_SLEEP
@@ -76,10 +85,23 @@ config SLM_START_SLEEP
 	help
 	  Put nRF9160 into deep sleep mode after startup.
 
-config SLM_INTERFACE_PIN
-	int "Interface GPIO to wake up or exit idle mode"
-	default 6 if SLM_CONNECT_UART_0
-	default 31 if SLM_CONNECT_UART_2
+config SLM_WAKEUP_PIN
+	int "Wakeup pin"
+	default -1
+	help
+	  Interface GPIO to wake up from sleep or exit idle
+
+config SLM_INDICATE_PIN
+	int "Indicate pin"
+	default -1
+	help
+	  Interface GPIO pin used to indicate that data is available or an unexpected reset has occurred
+
+config SLM_INDICATE_TIME
+	int "Indication period"
+	default 100
+	help
+	  GPIO active indication time in milliseconds. This setting specify the period length for the pin to be active
 
 #
 # Socket
@@ -112,11 +134,17 @@ config SLM_DATAMODE_TERMINATOR
 	help
 	  Use a pattern to terminate data mode
 
-config SLM_DATAMODE_SILENCE
-	int "Silence time to exit data mode"
-	default 1
+config SLM_DATAMODE_URC
+	bool "Send URC in data mode"
 	help
-	  Exit data mode after the specified time (in seconds) of UART silence
+	  Report result of data mode sending
+
+config SLM_DATAMODE_BUF_SIZE
+	int "Buffer size for data mode"
+	range 1024 8192
+	default 4096
+	help
+	  Size of the buffer for data received in data mode.
 
 #
 # Configurable services
@@ -128,12 +156,20 @@ config SLM_SMS
 	help
 	  Support SMS send/receive in plain text
 
-rsource "src/gnss/Kconfig"
+config SLM_GNSS
+	bool "GNSS support in SLM"
+	default y
+
+config SLM_NRF_CLOUD
+	bool "nRF Cloud support in SLM"
+	default y
+
 rsource "src/ftp_c/Kconfig"
 rsource "src/mqtt_c/Kconfig"
 rsource "src/http_c/Kconfig"
 rsource "src/twi/Kconfig"
 rsource "src/gpio/Kconfig"
+rsource "src/lwm2m_carrier/Kconfig"
 
 module = SLM
 module-str = serial modem

@@ -4,13 +4,17 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <stdio.h>
-#include <drivers/sensor.h>
-#include <event_manager.h>
+#include <zephyr/drivers/sensor.h>
+#include <app_event_manager.h>
 
 #if defined(CONFIG_EXTERNAL_SENSORS)
 #include "ext_sensors.h"
+#endif
+
+#if defined(CONFIG_ADP536X)
+#include <adp536x.h>
 #endif
 
 #define MODULE sensor_module
@@ -21,7 +25,7 @@
 #include "events/sensor_module_event.h"
 #include "events/util_module_event.h"
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(sensor_module, CONFIG_SENSOR_MODULE_LOG_LEVEL);
 
 struct sensor_msg_data {
@@ -82,27 +86,27 @@ static void state_set(enum state_type new_state)
 }
 
 /* Handlers */
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
 	struct sensor_msg_data msg = {0};
 	bool enqueue_msg = false;
 
-	if (is_app_module_event(eh)) {
-		struct app_module_event *event = cast_app_module_event(eh);
+	if (is_app_module_event(aeh)) {
+		struct app_module_event *event = cast_app_module_event(aeh);
 
 		msg.module.app = *event;
 		enqueue_msg = true;
 	}
 
-	if (is_data_module_event(eh)) {
-		struct data_module_event *event = cast_data_module_event(eh);
+	if (is_data_module_event(aeh)) {
+		struct data_module_event *event = cast_data_module_event(aeh);
 
 		msg.module.data = *event;
 		enqueue_msg = true;
 	}
 
-	if (is_util_module_event(eh)) {
-		struct util_module_event *event = cast_util_module_event(eh);
+	if (is_util_module_event(aeh)) {
+		struct util_module_event *event = cast_util_module_event(aeh);
 
 		msg.module.util = *event;
 		enqueue_msg = true;
@@ -121,6 +125,7 @@ static bool event_handler(const struct event_header *eh)
 }
 
 /* Static module functions. */
+
 #if defined(CONFIG_EXTERNAL_SENSORS)
 /* Function that enables or disables trigger callbacks from the accelerometer. */
 static void accelerometer_callback_set(bool enable)
@@ -133,26 +138,45 @@ static void accelerometer_callback_set(bool enable)
 	}
 }
 
-static void movement_data_send(const struct ext_sensor_evt *const acc_data)
+static void activity_data_send(const struct ext_sensor_evt *const acc_data)
 {
-	struct sensor_module_event *sensor_module_event =
-			new_sensor_module_event();
+	struct sensor_module_event *sensor_module_event = new_sensor_module_event();
 
-	sensor_module_event->data.accel.values[0] = acc_data->value_array[0];
-	sensor_module_event->data.accel.values[1] = acc_data->value_array[1];
-	sensor_module_event->data.accel.values[2] = acc_data->value_array[2];
-	sensor_module_event->data.accel.timestamp = k_uptime_get();
-	sensor_module_event->type = SENSOR_EVT_MOVEMENT_DATA_READY;
+	__ASSERT(sensor_module_event, "Not enough heap left to allocate event");
 
-	accelerometer_callback_set(false);
-	EVENT_SUBMIT(sensor_module_event);
+	if (acc_data->type == EXT_SENSOR_EVT_ACCELEROMETER_ACT_TRIGGER)	{
+		sensor_module_event->type = SENSOR_EVT_MOVEMENT_ACTIVITY_DETECTED;
+	} else {
+		__ASSERT_NO_MSG(acc_data->type == EXT_SENSOR_EVT_ACCELEROMETER_INACT_TRIGGER);
+		sensor_module_event->type = SENSOR_EVT_MOVEMENT_INACTIVITY_DETECTED;
+	}
+	APP_EVENT_SUBMIT(sensor_module_event);
+}
+
+static void impact_data_send(const struct ext_sensor_evt *const evt)
+{
+	struct sensor_module_event *sensor_module_event = new_sensor_module_event();
+
+	__ASSERT(sensor_module_event, "Not enough heap left to allocate event");
+
+	sensor_module_event->data.impact.magnitude = evt->value;
+	sensor_module_event->data.impact.timestamp = k_uptime_get();
+	sensor_module_event->type = SENSOR_EVT_MOVEMENT_IMPACT_DETECTED;
+
+	APP_EVENT_SUBMIT(sensor_module_event);
 }
 
 static void ext_sensor_handler(const struct ext_sensor_evt *const evt)
 {
 	switch (evt->type) {
-	case EXT_SENSOR_EVT_ACCELEROMETER_TRIGGER:
-		movement_data_send(evt);
+	case EXT_SENSOR_EVT_ACCELEROMETER_ACT_TRIGGER:
+		activity_data_send(evt);
+		break;
+	case EXT_SENSOR_EVT_ACCELEROMETER_INACT_TRIGGER:
+		activity_data_send(evt);
+		break;
+	case EXT_SENSOR_EVT_ACCELEROMETER_IMPACT_TRIGGER:
+		impact_data_send(evt);
 		break;
 	case EXT_SENSOR_EVT_ACCELEROMETER_ERROR:
 		LOG_ERR("EXT_SENSOR_EVT_ACCELEROMETER_ERROR");
@@ -163,40 +187,145 @@ static void ext_sensor_handler(const struct ext_sensor_evt *const evt)
 	case EXT_SENSOR_EVT_HUMIDITY_ERROR:
 		LOG_ERR("EXT_SENSOR_EVT_HUMIDITY_ERROR");
 		break;
+	case EXT_SENSOR_EVT_PRESSURE_ERROR:
+		LOG_ERR("EXT_SENSOR_EVT_PRESSURE_ERROR");
+		break;
+	case EXT_SENSOR_EVT_BME680_BSEC_ERROR:
+		LOG_ERR("EXT_SENSOR_EVT_BME680_BSEC_ERROR");
+		break;
 	default:
 		break;
 	}
 }
+#endif /* CONFIG_EXTERNAL_SENSORS */
+
+#if defined(CONFIG_EXTERNAL_SENSORS)
+static void configure_acc(const struct cloud_data_cfg *cfg)
+{
+		int err;
+		double accelerometer_activity_threshold =
+			cfg->accelerometer_activity_threshold;
+		double accelerometer_inactivity_threshold =
+			cfg->accelerometer_inactivity_threshold;
+		double accelerometer_inactivity_timeout =
+			cfg->accelerometer_inactivity_timeout;
+
+		err = ext_sensors_accelerometer_threshold_set(accelerometer_activity_threshold,
+							      true);
+		if (err == -ENOTSUP) {
+			LOG_WRN("The requested act threshold value not valid");
+		} else if (err) {
+			LOG_ERR("Failed to set act threshold, error: %d", err);
+		}
+		err = ext_sensors_accelerometer_threshold_set(accelerometer_inactivity_threshold,
+							      false);
+		if (err == -ENOTSUP) {
+			LOG_WRN("The requested inact threshold value not valid");
+		} else if (err) {
+			LOG_ERR("Failed to set inact threshold, error: %d", err);
+		}
+		err = ext_sensors_inactivity_timeout_set(accelerometer_inactivity_timeout);
+		if (err == -ENOTSUP) {
+			LOG_WRN("The requested timeout value not valid");
+		} else if (err) {
+			LOG_ERR("Failed to set timeout, error: %d", err);
+		}
+}
 #endif
+
+static void apply_config(struct sensor_msg_data *msg)
+{
+#if defined(CONFIG_EXTERNAL_SENSORS)
+	configure_acc(&msg->module.data.data.cfg);
+
+	if (msg->module.data.data.cfg.active_mode) {
+		accelerometer_callback_set(false);
+	} else {
+		accelerometer_callback_set(true);
+	}
+#endif /* CONFIG_EXTERNAL_SENSORS */
+}
+
+static void battery_data_get(void)
+{
+	struct sensor_module_event *sensor_module_event;
+
+#if defined(CONFIG_ADP536X)
+	int err;
+	uint8_t percentage;
+
+	err = adp536x_fg_soc(&percentage);
+	if (err) {
+		LOG_ERR("Failed to get battery level: %d", err);
+		return;
+	}
+
+	sensor_module_event = new_sensor_module_event();
+
+	__ASSERT(sensor_module_event, "Not enough heap left to allocate event");
+
+	sensor_module_event->data.bat.timestamp = k_uptime_get();
+	sensor_module_event->data.bat.battery_level = percentage;
+	sensor_module_event->type = SENSOR_EVT_FUEL_GAUGE_READY;
+#else
+	sensor_module_event = new_sensor_module_event();
+
+	__ASSERT(sensor_module_event, "Not enough heap left to allocate event");
+
+	sensor_module_event->type = SENSOR_EVT_FUEL_GAUGE_NOT_SUPPORTED;
+#endif
+	APP_EVENT_SUBMIT(sensor_module_event);
+}
 
 static void environmental_data_get(void)
 {
 	struct sensor_module_event *sensor_module_event;
 #if defined(CONFIG_EXTERNAL_SENSORS)
 	int err;
-	double temp, hum;
+	double temperature = 0, humidity = 0, pressure = 0;
+	uint16_t bsec_air_quality = UINT16_MAX;
 
 	/* Request data from external sensors. */
-	err = ext_sensors_temperature_get(&temp);
+	err = ext_sensors_temperature_get(&temperature);
 	if (err) {
-		LOG_ERR("temperature_get, error: %d", err);
+		LOG_ERR("ext_sensors_temperature_get, error: %d", err);
 	}
 
-	err = ext_sensors_humidity_get(&hum);
+	err = ext_sensors_humidity_get(&humidity);
 	if (err) {
-		LOG_ERR("temperature_get, error: %d", err);
+		LOG_ERR("ext_sensors_humidity_get, error: %d", err);
+	}
+
+	err = ext_sensors_pressure_get(&pressure);
+	if (err) {
+		LOG_ERR("ext_sensors_pressure_get, error: %d", err);
+	}
+
+	err = ext_sensors_air_quality_get(&bsec_air_quality);
+	if (err && err == -ENOTSUP) {
+		/* Air quality is not available, enable the Bosch BSEC library driver.
+		 * Propagate the air quality value as -1.
+		 */
+	} else if (err) {
+		LOG_ERR("ext_sensors_bsec_air_quality_get, error: %d", err);
 	}
 
 	sensor_module_event = new_sensor_module_event();
+
+	__ASSERT(sensor_module_event, "Not enough heap left to allocate event");
+
 	sensor_module_event->data.sensors.timestamp = k_uptime_get();
-	sensor_module_event->data.sensors.temperature = temp;
-	sensor_module_event->data.sensors.humidity = hum;
+	sensor_module_event->data.sensors.temperature = temperature;
+	sensor_module_event->data.sensors.humidity = humidity;
+	sensor_module_event->data.sensors.pressure = pressure;
+	sensor_module_event->data.sensors.bsec_air_quality =
+					(bsec_air_quality == UINT16_MAX) ? -1 : bsec_air_quality;
 	sensor_module_event->type = SENSOR_EVT_ENVIRONMENTAL_DATA_READY;
 #else
 
 	/* This event must be sent even though environmental sensors are not
 	 * available on the nRF9160DK. This is because the Data module expects
-	 * responses from the different modules within a certain amounf of time
+	 * responses from the different modules within a certain amount of time
 	 * after the APP_EVT_DATA_GET event has been emitted.
 	 */
 	LOG_DBG("No external sensors, submitting dummy sensor data");
@@ -205,9 +334,12 @@ static void environmental_data_get(void)
 	 * This makes sure that the entry is not stored in the circular buffer.
 	 */
 	sensor_module_event = new_sensor_module_event();
+
+	__ASSERT(sensor_module_event, "Not enough heap left to allocate event");
+
 	sensor_module_event->type = SENSOR_EVT_ENVIRONMENTAL_NOT_SUPPORTED;
 #endif
-	EVENT_SUBMIT(sensor_module_event);
+	APP_EVENT_SUBMIT(sensor_module_event);
 }
 
 static int setup(void)
@@ -236,22 +368,23 @@ static bool environmental_data_requested(enum app_module_data_type *data_list,
 	return false;
 }
 
+static bool battery_data_requested(enum app_module_data_type *data_list,
+					 size_t count)
+{
+	for (size_t i = 0; i < count; i++) {
+		if (data_list[i] == APP_DATA_BATTERY) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 /* Message handler for STATE_INIT. */
 static void on_state_init(struct sensor_msg_data *msg)
 {
 	if (IS_EVENT(msg, data, DATA_EVT_CONFIG_INIT)) {
-#if defined(CONFIG_EXTERNAL_SENSORS)
-		int err;
-		double accelerometer_threshold =
-			msg->module.data.data.cfg.accelerometer_threshold;
-
-		err = ext_sensors_mov_thres_set(accelerometer_threshold);
-		if (err == -ENOTSUP) {
-			LOG_WRN("Passed in threshold value not valid");
-		} else if (err) {
-			LOG_ERR("Failed to set threshold, error: %d", err);
-		}
-#endif
+		apply_config(msg);
 		state_set(STATE_RUNNING);
 	}
 }
@@ -260,29 +393,18 @@ static void on_state_init(struct sensor_msg_data *msg)
 static void on_state_running(struct sensor_msg_data *msg)
 {
 	if (IS_EVENT(msg, data, DATA_EVT_CONFIG_READY)) {
-
-#if defined(CONFIG_EXTERNAL_SENSORS)
-		int err;
-		double accelerometer_threshold =
-			msg->module.data.data.cfg.accelerometer_threshold;
-
-		err = ext_sensors_mov_thres_set(accelerometer_threshold);
-		if (err == -ENOTSUP) {
-			LOG_WRN("Passed in threshold value not valid");
-		} else if (err) {
-			LOG_ERR("Failed to set threshold, error: %d", err);
-		}
-#endif
+		apply_config(msg);
 	}
 
 	if (IS_EVENT(msg, app, APP_EVT_DATA_GET)) {
-		if (!environmental_data_requested(
-			msg->module.app.data_list,
-			msg->module.app.count)) {
-			return;
+		if (environmental_data_requested(msg->module.app.data_list,
+						 msg->module.app.count)) {
+			environmental_data_get();
 		}
 
-		environmental_data_get();
+		if (battery_data_requested(msg->module.app.data_list, msg->module.app.count)) {
+			battery_data_get();
+		}
 	}
 }
 
@@ -296,22 +418,12 @@ static void on_all_states(struct sensor_msg_data *msg)
 		SEND_SHUTDOWN_ACK(sensor, SENSOR_EVT_SHUTDOWN_READY, self.id);
 		state_set(STATE_SHUTDOWN);
 	}
-
-#if defined(CONFIG_EXTERNAL_SENSORS)
-	if (IS_EVENT(msg, app, APP_EVT_ACTIVITY_DETECTION_ENABLE)) {
-		accelerometer_callback_set(true);
-	}
-
-	if (IS_EVENT(msg, app, APP_EVT_ACTIVITY_DETECTION_DISABLE)) {
-		accelerometer_callback_set(false);
-	}
-#endif
 }
 
 static void module_thread_fn(void)
 {
 	int err;
-	struct sensor_msg_data msg;
+	struct sensor_msg_data msg = { 0 };
 
 	self.thread_id = k_current_get();
 
@@ -343,7 +455,7 @@ static void module_thread_fn(void)
 			/* The shutdown state has no transition. */
 			break;
 		default:
-			LOG_WRN("Unknown sensor module state.");
+			LOG_ERR("Unknown state.");
 			break;
 		}
 
@@ -355,7 +467,7 @@ K_THREAD_DEFINE(sensor_module_thread, CONFIG_SENSOR_THREAD_STACK_SIZE,
 		module_thread_fn, NULL, NULL, NULL,
 		K_LOWEST_APPLICATION_THREAD_PRIO, 0, 0);
 
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, app_module_event);
-EVENT_SUBSCRIBE(MODULE, data_module_event);
-EVENT_SUBSCRIBE(MODULE, util_module_event);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, app_module_event);
+APP_EVENT_SUBSCRIBE(MODULE, data_module_event);
+APP_EVENT_SUBSCRIBE(MODULE, util_module_event);

@@ -1,18 +1,7 @@
 /*
- * Copyright (c) 2018-2020 Arm Limited. All rights reserved.
- * Copyright (c) 2021 Nordic Semiconductor ASA. All rights reserved.
+ * Copyright (c) 2021 - 2022 Nordic Semiconductor ASA
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
 #ifndef __FLASH_LAYOUT_H__
@@ -29,12 +18,13 @@
  */
 
 /* Size of a Secure and of a Non-secure image */
-#define FLASH_S_PARTITION_SIZE                (PM_TFM_SIZE)
-#define FLASH_NS_PARTITION_SIZE               (PM_APP_SIZE)
-#define FLASH_MAX_PARTITION_SIZE        ((FLASH_S_PARTITION_SIZE >   \
-					FLASH_NS_PARTITION_SIZE) ? \
-					FLASH_S_PARTITION_SIZE :    \
-					FLASH_NS_PARTITION_SIZE)
+#define FLASH_S_PARTITION_SIZE          (PM_TFM_SECURE_SIZE)
+#define FLASH_NS_PARTITION_SIZE         (PM_TFM_NONSECURE_SIZE)
+#define FLASH_MAX_PARTITION_SIZE        ((FLASH_S_PARTITION_SIZE > \
+					  FLASH_NS_PARTITION_SIZE) ? \
+					 FLASH_S_PARTITION_SIZE : \
+					 FLASH_NS_PARTITION_SIZE)
+
 
 /* Sector size of the embedded flash hardware (erase/program).
  * Flash memory program/erase operations have a page granularity.
@@ -47,70 +37,58 @@
 /* Flash layout info for BL2 bootloader */
 #define FLASH_BASE_ADDRESS                  (0x00000000)
 
-
-/* Offset and size definitions of the flash partitions that are handled by the
- * bootloader. The image swapping is done between IMAGE_PRIMARY and
- * IMAGE_SECONDARY, SCRATCH is used as a temporary storage during image
- * swapping.
- */
-#ifdef CONFIG_TFM_BL2
-#define FLASH_AREA_BL2_OFFSET      (PM_BL2_ADDRESS)
-#define FLASH_AREA_BL2_SIZE        (PM_BL2_SIZE)
-#endif /* BL2 */
-
+#if !defined(MCUBOOT_IMAGE_NUMBER) || (MCUBOOT_IMAGE_NUMBER == 1)
 /* Secure image primary slot */
 #define FLASH_AREA_0_ID            (1)
-#define FLASH_AREA_0_OFFSET        (PM_TFM_PRIMARY_ADDRESS)
-#define FLASH_AREA_0_SIZE          (PM_TFM_PRIMARY_SIZE)
-/* Non-secure image primary slot */
-#define FLASH_AREA_1_ID            (FLASH_AREA_0_ID + 1)
-#define FLASH_AREA_1_OFFSET        (PM_APP_PRIMARY_ADDRESS)
-#define FLASH_AREA_1_SIZE          (PM_APP_PRIMARY_SIZE)
+#define FLASH_AREA_0_OFFSET        (PM_MCUBOOT_PRIMARY_ADDRESS)
+#define FLASH_AREA_0_SIZE          (PM_MCUBOOT_PRIMARY_SIZE)
 /* Secure image secondary slot */
-#define FLASH_AREA_2_ID            (FLASH_AREA_1_ID + 1)
-#define FLASH_AREA_2_OFFSET        (PM_TFM_SECONDARY_ADDRESS)
-#define FLASH_AREA_2_SIZE          (PM_TFM_SECONDARY_SIZE)
-/* Non-secure image secondary slot */
-#define FLASH_AREA_3_ID            (FLASH_AREA_2_ID + 1)
-#define FLASH_AREA_3_OFFSET        (PM_APP_SECONDARY_ADDRESS)
-#define FLASH_AREA_3_SIZE          (PM_APP_SECONDARY_SIZE)
+#define FLASH_AREA_2_ID            (FLASH_AREA_0_ID + 1)
+#define FLASH_AREA_2_OFFSET        (PM_MCUBOOT_SECONDARY_ADDRESS)
+#define FLASH_AREA_2_SIZE          (PM_MCUBOOT_SECONDARY_SIZE)
+
 /* Not used, only the Non-swapping firmware upgrade operation
  * is supported on NRF5340 Application MCU.
  */
-#ifdef PM_TFM_EXTRA_ADDRESS
-#define FLASH_AREA_SCRATCH_ID      (FLASH_AREA_3_ID + 1)
-#define FLASH_AREA_SCRATCH_OFFSET  (PM_TFM_EXTRA_ADDRESS)
+#define FLASH_AREA_SCRATCH_ID      (FLASH_AREA_2_ID + 1)
+#define FLASH_AREA_SCRATCH_OFFSET  (FLASH_AREA_2_OFFSET + FLASH_AREA_2_SIZE)
 #define FLASH_AREA_SCRATCH_SIZE    (0)
+
 /* Maximum number of image sectors supported by the bootloader. */
-#define MCUBOOT_MAX_IMG_SECTORS    (FLASH_MAX_PARTITION_SIZE / \
+#define MCUBOOT_MAX_IMG_SECTORS    ((FLASH_S_PARTITION_SIZE + \
+				     FLASH_NS_PARTITION_SIZE) / \
 				    FLASH_AREA_IMAGE_SECTOR_SIZE)
-#endif /* PM_TFM_EXTRA_ADDRESS */
+#else
+#error "Only MCUBOOT_IMAGE_NUMBER 1 is supported!"
+#endif
 
 /* Not used, only the Non-swapping firmware upgrade operation
  * is supported on nRF5340. The maximum number of status entries
  * supported by the bootloader.
  */
-#define MCUBOOT_STATUS_MAX_ENTRIES      (0)
+#define MCUBOOT_STATUS_MAX_ENTRIES (0)
 
-#ifdef PM_TFM_EXTRA_ADDRESS
-#define FLASH_PS_AREA_OFFSET            (PM_TFM_EXTRA_ADDRESS)
-#define FLASH_PS_AREA_SIZE              (0x4000)   /* 16 KB */
+#ifdef PM_TFM_PS_ADDRESS
+#define FLASH_PS_AREA_OFFSET       (PM_TFM_PS_ADDRESS)
+#define FLASH_PS_AREA_SIZE         (PM_TFM_PS_SIZE)
+#endif
 
 /* Internal Trusted Storage (ITS) Service definitions */
-#define FLASH_ITS_AREA_OFFSET           (FLASH_PS_AREA_OFFSET + \
-					 FLASH_PS_AREA_SIZE)
-#define FLASH_ITS_AREA_SIZE             (0x2000)   /* 8 KB */
+#ifdef PM_TFM_ITS_ADDRESS
+#define FLASH_ITS_AREA_OFFSET      (PM_TFM_ITS_ADDRESS)
+#define FLASH_ITS_AREA_SIZE        (PM_TFM_ITS_SIZE)
 #endif /* PM_TFM_EXTRA_ADDRESS */
 
-/* NV Counters definitions */
-#define FLASH_NV_COUNTERS_AREA_OFFSET   (FLASH_ITS_AREA_OFFSET + \
-					 FLASH_ITS_AREA_SIZE)
-#define FLASH_NV_COUNTERS_AREA_SIZE     (FLASH_AREA_IMAGE_SECTOR_SIZE)
+#ifdef PM_TFM_OTP_NV_COUNTERS_ADDRESS
+#define FLASH_OTP_NV_COUNTERS_AREA_OFFSET (PM_TFM_OTP_NV_COUNTERS_ADDRESS)
+#define FLASH_OTP_NV_COUNTERS_AREA_SIZE   (PM_TFM_OTP_NV_COUNTERS_SIZE)
+#define FLASH_OTP_NV_COUNTERS_SECTOR_SIZE (FLASH_AREA_IMAGE_SECTOR_SIZE)
+#endif
 
 /* Non-secure storage region */
-#if defined(PM_SETTINGS_STORAGE_ADDRESS) && defined(PM_SETTINGS_STORAGE_SIZE)
-#define NRF_FLASH_NS_STORAGE_AREA_OFFSET   (PM_SETTINGS_STORAGE_ADDRESS)
-#define NRF_FLASH_NS_STORAGE_AREA_SIZE     (PM_SETTINGS_STORAGE_SIZE)
+#if defined(PM_NONSECURE_STORAGE_ADDRESS)
+#define NRF_FLASH_NS_STORAGE_AREA_OFFSET   (PM_NONSECURE_STORAGE_ADDRESS)
+#define NRF_FLASH_NS_STORAGE_AREA_SIZE     (PM_NONSECURE_STORAGE_SIZE)
 #endif
 
 /* Offset and size definition in flash area used by assemble.py */
@@ -140,11 +118,12 @@
 /* Dedicated flash area for PS */
 #define TFM_HAL_PS_FLASH_AREA_SIZE     FLASH_PS_AREA_SIZE
 #define PS_RAM_FS_SIZE                 FLASH_AREA_IMAGE_SECTOR_SIZE
+#endif /* FLASH_PS_AREA_OFFSET */
+
 /* Number of PS_SECTOR_SIZE per block */
 #define TFM_HAL_PS_SECTORS_PER_BLOCK   (0x1)
 /* Specifies the smallest flash programmable unit in bytes */
 #define TFM_HAL_PS_PROGRAM_UNIT        (0x4)
-#endif /* FLASH_PS_AREA_OFFSET */
 
 /* Internal Trusted Storage (ITS) Service definitions
  * Note: Further documentation of these definitions can be found in the
@@ -166,11 +145,12 @@
 /* Specifies the smallest flash programmable unit in bytes */
 #define TFM_HAL_ITS_PROGRAM_UNIT        (0x4)
 
-/* NV Counters definitions */
-#define TFM_NV_COUNTERS_AREA_ADDR    FLASH_NV_COUNTERS_AREA_OFFSET
-#define TFM_NV_COUNTERS_AREA_SIZE    (0x18) /* 24 Bytes */
-#define TFM_NV_COUNTERS_SECTOR_ADDR  FLASH_NV_COUNTERS_AREA_OFFSET
-#define TFM_NV_COUNTERS_SECTOR_SIZE  FLASH_AREA_IMAGE_SECTOR_SIZE
+/* OTP / NV counter definitions */
+#define TFM_OTP_NV_COUNTERS_AREA_SIZE   (FLASH_OTP_NV_COUNTERS_AREA_SIZE / 2)
+#define TFM_OTP_NV_COUNTERS_AREA_ADDR   FLASH_OTP_NV_COUNTERS_AREA_OFFSET
+#define TFM_OTP_NV_COUNTERS_SECTOR_SIZE FLASH_OTP_NV_COUNTERS_SECTOR_SIZE
+#define TFM_OTP_NV_COUNTERS_BACKUP_AREA_ADDR (TFM_OTP_NV_COUNTERS_AREA_ADDR + \
+					      TFM_OTP_NV_COUNTERS_AREA_SIZE)
 
 /* Use Flash memory to store Code data */
 #define FLASH_BASE_ADDRESS (0x00000000)

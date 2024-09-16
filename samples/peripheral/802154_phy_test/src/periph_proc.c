@@ -8,78 +8,59 @@
 #include <assert.h>
 #include <stdint.h>
 
-#include <random/rand32.h>
+#include <zephyr/random/rand32.h>
 
 #include "periph_proc.h"
 
 #include <nrfx_timer.h>
-#include <helpers/nrfx_gppi.h>
 #include <nrfx.h>
-#include <nrfx_nvmc.h>
-#include <nrfx_power.h>
 #include <hal/nrf_gpio.h>
-#include <nrfx_gpiote.h>
 #include <platform/nrf_802154_temperature.h>
 
-#include <devicetree.h>
-#include <drivers/gpio.h>
-#include <drivers/clock_control.h>
-#include <drivers/clock_control/nrf_clock_control.h>
+#include <zephyr/devicetree.h>
+#include <zephyr/drivers/gpio.h>
 
-#if defined(DPPI_PRESENT)
-#include <nrfx_dppi.h>
-#else
-#include <nrfx_ppi.h>
+#if IS_ENABLED(CONFIG_PTT_CLK_OUT)
+#include <nrfx_gpiote.h>
+#endif /* IS_ENABLED(CONFIG_PTT_CLK_OUT) */
+
+#if defined(CONFIG_PTT_CACHE_MGMT)
+#include <nrfx_nvmc.h>
 #endif
 
-#include <logging/log.h>
+#if defined(CONFIG_PTT_POWER_MGMT)
+#include <nrfx_power.h>
+#endif
+
+#if IS_ENABLED(CONFIG_PTT_CLK_OUT)
+#include <helpers/nrfx_gppi.h>
+#endif /* IS_ENABLED(CONFIG_PTT_CLK_OUT) */
+
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(periph);
 
+#if IS_ENABLED(CONFIG_PTT_CLK_OUT)
 /* Timer instance used for HFCLK output */
 #define PTT_CLK_TIMER 2
 
-static struct onoff_client hfclk_cli;
 static nrfx_timer_t clk_timer = NRFX_TIMER_INSTANCE(PTT_CLK_TIMER);
+#endif /* IS_ENABLED(CONFIG_PTT_CLK_OUT) */
 
-/* The devicetree node identifier for the "led0" alias. */
-#define LED0_NODE DT_ALIAS(led0)
-
-#if DT_NODE_HAS_STATUS(LED0_NODE, okay)
-#define LED0 DT_GPIO_LABEL(LED0_NODE, gpios)
-#define PIN DT_GPIO_PIN(LED0_NODE, gpios)
-#define FLAGS DT_GPIO_FLAGS(LED0_NODE, gpios)
-#else
-/* A build error here means your board isn't set up to blink an LED. */
-#error "Unsupported board: led0 devicetree alias is not defined"
-#define LED0 ""
-#define PIN 0
-#define FLAGS 0
-#endif
+static const struct gpio_dt_spec led0 = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 
 #define CLOCK_NODE DT_INST(0, nordic_nrf_clock)
 
-static const struct device *indication_led_dev;
-static const struct device *gpio_port0_dev;
+static const struct device *gpio_port0_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
 
 /* Check if the system has GPIO port 1 */
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(gpio1), okay)
-static const struct device *gpio_port1_dev;
-
+static const struct device *gpio_port1_dev = DEVICE_DT_GET(DT_NODELABEL(gpio1));
 #endif
 
-#if defined(DPPI_PRESENT)
+#if IS_ENABLED(CONFIG_PTT_CLK_OUT)
 uint8_t ppi_channel;
-
-#else
-nrf_ppi_channel_t ppi_channel;
-
-#endif
-
-static void hfclk_on_callback(struct onoff_manager *mgr, struct onoff_client *cli, uint32_t state,
-			      int res)
-{
-	/* do nothing */
-}
+uint8_t task_channel;
+#endif /* IS_ENABLED(CONFIG_PTT_CLK_OUT) */
 
 static void clk_timer_handler(nrf_timer_event_t event_type, void *context)
 {
@@ -91,38 +72,28 @@ void periph_init(void)
 	nrfx_err_t err_code;
 	int ret;
 
-	/* Enable HFCLK */
-	struct onoff_manager *mgr = z_nrf_clock_control_get_onoff(CLOCK_CONTROL_NRF_SUBSYS_HF);
-
-	__ASSERT_NO_MSG(mgr != NULL);
-
-	sys_notify_init_callback(&hfclk_cli.notify, hfclk_on_callback);
-
-	ret = onoff_request(mgr, &hfclk_cli);
-	__ASSERT_NO_MSG(ret >= 0);
-
-	nrfx_timer_config_t clk_timer_cfg = NRFX_TIMER_DEFAULT_CONFIG;
+#if IS_ENABLED(CONFIG_PTT_CLK_OUT)
+	uint32_t base_frequency = NRF_TIMER_BASE_FREQUENCY_GET(clk_timer.p_reg);
+	nrfx_timer_config_t clk_timer_cfg = NRFX_TIMER_DEFAULT_CONFIG(base_frequency);
 
 	err_code = nrfx_timer_init(&clk_timer, &clk_timer_cfg, clk_timer_handler);
 	NRFX_ASSERT(err_code);
 
 	err_code = nrfx_gpiote_init(0);
 	NRFX_ASSERT(err_code);
+#endif
 
-	indication_led_dev = device_get_binding(LED0);
-	assert(indication_led_dev);
+	assert(device_is_ready(led0.port));
 
-	ret = gpio_pin_configure(indication_led_dev, PIN, GPIO_OUTPUT_ACTIVE | FLAGS);
-
+	ret = gpio_pin_configure_dt(&led0, GPIO_OUTPUT_INACTIVE);
 	assert(ret == 0);
-	gpio_pin_set(indication_led_dev, PIN, false);
 
-	gpio_port0_dev = device_get_binding(DT_LABEL(DT_NODELABEL(gpio0)));
-	assert(gpio_port0_dev);
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(gpio0), okay)
+	assert(device_is_ready(gpio_port0_dev));
+#endif
 
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(gpio1), okay)
-	gpio_port1_dev = device_get_binding(DT_LABEL(DT_NODELABEL(gpio1)));
-	assert(gpio_port1_dev);
+	assert(device_is_ready(gpio_port1_dev));
 #endif
 }
 
@@ -133,6 +104,7 @@ uint32_t ptt_random_get_ext(void)
 
 bool ptt_clk_out_ext(uint8_t pin, bool mode)
 {
+#if IS_ENABLED(CONFIG_PTT_CLK_OUT)
 	uint32_t compare_evt_addr;
 	nrfx_err_t err;
 
@@ -144,18 +116,25 @@ bool ptt_clk_out_ext(uint8_t pin, bool mode)
 		nrfx_timer_extended_compare(&clk_timer, (nrf_timer_cc_channel_t)0, 1,
 					    NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK, false);
 
-		nrfx_gpiote_out_config_t const out_config = {
-			.action = NRF_GPIOTE_POLARITY_TOGGLE,
-			.init_state = 0,
-			.task_pin = true,
+		err = nrfx_gpiote_channel_alloc(&task_channel);
+		if (err != NRFX_SUCCESS) {
+			LOG_ERR("nrfx_gpiote_channel_alloc error: %08x", err);
+			return false;
+		}
+
+		nrfx_gpiote_output_config_t config = NRFX_GPIOTE_DEFAULT_OUTPUT_CONFIG;
+		nrfx_gpiote_task_config_t const out_config = {
+			.task_ch = task_channel,
+			.polarity = NRF_GPIOTE_POLARITY_TOGGLE,
+			.init_val = NRF_GPIOTE_INITIAL_VALUE_LOW
 		};
 
 		/* Initialize output pin. SET task will turn the LED on,
 		 * CLR will turn it off and OUT will toggle it.
 		 */
-		err = nrfx_gpiote_out_init(pin, &out_config);
+		err = nrfx_gpiote_output_configure(pin, &config, &out_config);
 		if (err != NRFX_SUCCESS) {
-			LOG_ERR("nrfx_gpiote_out_init error: %08x", err);
+			LOG_ERR("nrfx_gpiote_output_configure error: %08x", err);
 			return false;
 		}
 
@@ -165,11 +144,8 @@ bool ptt_clk_out_ext(uint8_t pin, bool mode)
 		nrfx_gpiote_out_task_enable(pin);
 
 		/* Allocate a (D)PPI channel. */
-#if defined(DPPI_PRESENT)
-		err = nrfx_dppi_channel_alloc(&ppi_channel);
-#else
-		err = nrfx_ppi_channel_alloc(&ppi_channel);
-#endif
+		err = nrfx_gppi_channel_alloc(&ppi_channel);
+
 		if (err != NRFX_SUCCESS) {
 			LOG_ERR("(D)PPI channel allocation error: %08x", err);
 			return false;
@@ -180,31 +156,27 @@ bool ptt_clk_out_ext(uint8_t pin, bool mode)
 			nrf_gpiote_task_address_get(NRF_GPIOTE, nrfx_gpiote_in_event_get(pin)));
 
 		/* Enable (D)PPI channel. */
-#if defined(DPPI_PRESENT)
-		err = nrfx_dppi_channel_enable(ppi_channel);
-#else
-		err = nrfx_ppi_channel_enable(ppi_channel);
-#endif
-		if (err != NRFX_SUCCESS) {
-			LOG_ERR("Failed to enable (D)PPI channel, error: %08x", err);
-			return false;
-		}
+		nrfx_gppi_channels_enable(BIT(ppi_channel));
 
 		nrfx_timer_enable(&clk_timer);
 	} else {
 		nrfx_timer_disable(&clk_timer);
 		nrfx_gpiote_out_task_disable(pin);
-#if defined(DPPI_PRESENT)
-		err = nrfx_dppi_channel_free(ppi_channel);
-#else
-		err = nrfx_ppi_channel_free(ppi_channel);
-#endif
+		err = nrfx_gppi_channel_free(ppi_channel);
+
 		if (err != NRFX_SUCCESS) {
 			LOG_ERR("Failed to disable (D)PPI channel, error: %08x", err);
 			return false;
 		}
-		nrfx_gpiote_out_uninit(pin);
+		nrfx_gpiote_pin_uninit(pin);
+		err = nrfx_gpiote_channel_free(task_channel);
+
+		if (err != NRFX_SUCCESS) {
+			LOG_ERR("Failed to disable GPIOTE channel, error: %08x", err);
+			return false;
+		}
 	}
+#endif /* IS_ENABLED(CONFIG_PTT_CLK_OUT) */
 
 	return true;
 }
@@ -212,13 +184,13 @@ bool ptt_clk_out_ext(uint8_t pin, bool mode)
 static const struct device *get_pin_port(uint32_t *pin)
 {
 	switch (nrf_gpio_pin_port_number_extract(pin)) {
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(gpio0), okay)
 	case 0:
 		return gpio_port0_dev;
-
+#endif
 #if DT_NODE_HAS_STATUS(DT_NODELABEL(gpio1), okay)
 	case 1:
 		return gpio_port1_dev;
-
 #endif
 	default:
 		return NULL;
@@ -275,6 +247,7 @@ bool ptt_get_gpio_ext(uint8_t pin, uint8_t *value)
 
 void ptt_set_dcdc_ext(bool enable)
 {
+#if IS_ENABLED(CONFIG_PTT_POWER_MGMT)
 #if NRF_POWER_HAS_DCDCEN
 	nrf_power_dcdcen_set(NRF_POWER, enable);
 #endif
@@ -286,6 +259,7 @@ void ptt_set_dcdc_ext(bool enable)
 #if !NRF_POWER_HAS_DCDCEN && !NRF_POWER_HAS_DCDCEN_VDDH
 #pragma message "DC-DC related commands have no effect!"
 #endif
+#endif /* IS_ENABLED(CONFIG_PTT_POWER_MGMT) */
 }
 
 bool ptt_get_dcdc_ext(void)
@@ -303,20 +277,18 @@ bool ptt_get_dcdc_ext(void)
 
 void ptt_set_icache_ext(bool enable)
 {
-#if defined(NVMC_FEATURE_CACHE_PRESENT)
+#if defined(CONFIG_PTT_CACHE_MGMT)
 	if (enable) {
 		nrfx_nvmc_icache_enable();
 	} else {
 		nrfx_nvmc_icache_disable();
 	}
-#else
-#pragma message "ICACHE related command have no effect"
 #endif
 }
 
 bool ptt_get_icache_ext(void)
 {
-#if defined(NVMC_FEATURE_CACHE_PRESENT)
+#if defined(CONFIG_PTT_CACHE_MGMT)
 	return nrf_nvmc_icache_enable_check(NRF_NVMC);
 #else
 	return false;
@@ -336,10 +308,10 @@ bool ptt_get_temp_ext(int32_t *temp)
 
 void ptt_ctrl_led_indication_on_ext(void)
 {
-	gpio_pin_set(indication_led_dev, PIN, true);
+	gpio_pin_set_dt(&led0, 1);
 }
 
 void ptt_ctrl_led_indication_off_ext(void)
 {
-	gpio_pin_set(indication_led_dev, PIN, false);
+	gpio_pin_set_dt(&led0, 0);
 }

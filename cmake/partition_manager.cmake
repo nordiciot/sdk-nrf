@@ -5,7 +5,7 @@
 #
 
 macro(add_region)
-  set(oneValueArgs NAME SIZE BASE PLACEMENT DEVICE DYNAMIC_PARTITION)
+  set(oneValueArgs NAME SIZE BASE PLACEMENT DEVICE DEFAULT_DRIVER_KCONFIG DYNAMIC_PARTITION)
   cmake_parse_arguments(REGION "" "${oneValueArgs}" "" ${ARGN})
   list(APPEND regions ${REGION_NAME})
   list(APPEND region_arguments "--${REGION_NAME}-size;${REGION_SIZE}")
@@ -14,6 +14,8 @@ macro(add_region)
     "--${REGION_NAME}-placement-strategy;${REGION_PLACEMENT}")
   if (REGION_DEVICE)
     list(APPEND region_arguments "--${REGION_NAME}-device;${REGION_DEVICE}")
+  list(APPEND region_arguments
+       "--${REGION_NAME}-default-driver-kconfig;${REGION_DEFAULT_DRIVER_KCONFIG}")
   endif()
   if (REGION_DYNAMIC_PARTITION)
     list(APPEND region_arguments
@@ -22,35 +24,40 @@ macro(add_region)
 endmacro()
 
 # Load static configuration if found.
-set(user_def_pm_static ${PM_STATIC_YML_FILE})
-set(nodomain_pm_static ${APPLICATION_CONFIG_DIR}/pm_static.yml)
-set(domain_pm_static ${APPLICATION_CONFIG_DIR}/pm_static_${DOMAIN}.yml)
+# Try user defined file first, then file found in configuration directory,
+# finally file from board directory.
+if(DEFINED PM_STATIC_YML_FILE)
+  string(CONFIGURE "${PM_STATIC_YML_FILE}" user_def_pm_static)
+endif()
 
 ncs_file(CONF_FILES ${APPLICATION_CONFIG_DIR}
-         PM board_pm_static
+         PM conf_dir_pm_static
          DOMAIN ${DOMAIN}
          BUILD ${CONF_FILE_BUILD_TYPE}
 )
 
 ncs_file(CONF_FILES ${BOARD_DIR}
-         PM board_def_pm_static
+         PM board_dir_pm_static
          DOMAIN ${DOMAIN}
          BUILD ${CONF_FILE_BUILD_TYPE}
 )
 
+ncs_file(CONF_FILES ${BOARD_DIR}
+         PM board_dir_pm_static_common
+         DOMAIN ${DOMAIN}
+)
+
 if(EXISTS "${user_def_pm_static}" AND NOT IS_DIRECTORY "${user_def_pm_static}")
   set(static_configuration_file ${user_def_pm_static})
-elseif (EXISTS ${board_pm_static})
-  set(static_configuration_file ${board_pm_static})
-elseif (EXISTS ${domain_pm_static})
-  set(static_configuration_file ${domain_pm_static})
-elseif (EXISTS ${nodomain_pm_static})
-  set(static_configuration_file ${nodomain_pm_static})
-elseif (EXISTS ${board_def_pm_static})
-  set(static_configuration_file ${board_def_pm_static})
+elseif (EXISTS ${conf_dir_pm_static})
+  set(static_configuration_file ${conf_dir_pm_static})
+elseif (EXISTS ${board_dir_pm_static})
+  set(static_configuration_file ${board_dir_pm_static})
+elseif (EXISTS ${board_dir_pm_static_common})
+  set(static_configuration_file ${board_dir_pm_static_common})
 endif()
 
-if (EXISTS ${static_configuration_file})
+if (EXISTS "${static_configuration_file}" AND NOT SYSBUILD)
   message(STATUS "Found partition manager static configuration: "
                  "${static_configuration_file}"
   )
@@ -100,7 +107,9 @@ if (NOT (
   (NOT IMAGE_NAME AND PM_IMAGES) OR
   (NOT IMAGE_NAME AND PM_DOMAINS) OR
   (PM_SUBSYS_PREPROCESSED AND CONFIG_PM_SINGLE_IMAGE)
-  ))
+  )
+  OR SYSBUILD
+  )
   return()
 endif()
 
@@ -118,16 +127,27 @@ else()
     )
 endif()
 
-# Add the dynamic partition as an image partition.
-set_property(GLOBAL PROPERTY
+# Check if the dynamic partition image hex has already been defined
+get_property(DYNAMIC_PARTITION_HEX GLOBAL PROPERTY
   ${dynamic_partition}_PM_HEX_FILE
-  ${PROJECT_BINARY_DIR}/${KERNEL_HEX_NAME}
   )
+if (NOT DYNAMIC_PARTITION_HEX)
+  # Add the dynamic partition as an image partition.
+  set_property(GLOBAL PROPERTY
+    ${dynamic_partition}_PM_HEX_FILE
+    ${PROJECT_BINARY_DIR}/${KERNEL_HEX_NAME}
+    )
+endif()
 
-set_property(GLOBAL PROPERTY
+get_property(DYNAMIC_PARTITION_TARGET GLOBAL PROPERTY
   ${dynamic_partition}_PM_TARGET
-  ${logical_target_for_zephyr_elf}
   )
+if (NOT DYNAMIC_PARTITION_TARGET)
+  set_property(GLOBAL PROPERTY
+    ${dynamic_partition}_PM_TARGET
+    ${logical_target_for_zephyr_elf}
+    )
+endif()
 
 # Prepare the input_files, header_files, and images lists
 set(generated_path include/generated)
@@ -160,8 +180,8 @@ list(APPEND header_files ${ZEPHYR_BINARY_DIR}/${generated_path}/pm_config.h)
 # Add subsys defined pm.yml to the input_files
 list(APPEND input_files ${PM_SUBSYS_PREPROCESSED})
 
-if (DEFINED CONFIG_SOC_NRF9160)
-  # See nRF9160 Product Specification, chapter "UICR"
+if (DEFINED CONFIG_SOC_SERIES_NRF91X)
+  # See nRF91 Product Specification, chapter "UICR"
   set(otp_start_addr "0xff8108")
   set(otp_size 756) # 189 * 4
 elseif (DEFINED CONFIG_SOC_NRF5340_CPUAPP)
@@ -180,7 +200,7 @@ add_region(
 
 math(EXPR flash_size "${CONFIG_FLASH_SIZE} * 1024" OUTPUT_FORMAT HEXADECIMAL)
 
-if (CONFIG_SOC_NRF9160 OR CONFIG_SOC_NRF5340_CPUAPP)
+if (CONFIG_SOC_SERIES_NRF91X OR CONFIG_SOC_NRF5340_CPUAPP)
   add_region(
     NAME otp
     SIZE ${otp_size}
@@ -193,37 +213,24 @@ add_region(
   SIZE ${flash_size}
   BASE ${CONFIG_FLASH_BASE_ADDRESS}
   PLACEMENT complex
-  DEVICE NRF_FLASH_DRV_NAME
+  DEVICE flash_controller
+  DEFAULT_DRIVER_KCONFIG CONFIG_SOC_FLASH_NRF
   )
 
 dt_chosen(ext_flash_dev PROPERTY nordic,pm-ext-flash)
 if (DEFINED ext_flash_dev)
-  dt_prop(dev_name PATH ${ext_flash_dev} PROPERTY label)
   dt_prop(num_bits PATH ${ext_flash_dev} PROPERTY size)
   math(EXPR num_bytes "${num_bits} / 8")
+
+  set(external_flash_driver_kconfig CONFIG_PM_EXTERNAL_FLASH_HAS_DRIVER)
 
   add_region(
     NAME external_flash
     SIZE ${num_bytes}
     BASE ${CONFIG_PM_EXTERNAL_FLASH_BASE}
     PLACEMENT start_to_end
-    DEVICE ${dev_name}
-    )
-elseif(CONFIG_PM_EXTERNAL_FLASH)
-  if (NOT CONFIG_PM_EXTERNAL_FLASH_SUPPORT_LEGACY)
-    message(WARNING "\
-External flash for partition manager is configured through Kconfig. This \
-should now be done through devicetree instead. See 'Using external flash \
-memory partitions' chapter in the documentation for instructions on how to \
-fix this, or enable `CONFIG_PM_EXTERNAL_FLASH_SUPPORT_LEGACY` in Kconfig.")
-  endif()
-
-  add_region(
-    NAME external_flash
-    SIZE ${CONFIG_PM_EXTERNAL_FLASH_SIZE}
-    BASE ${CONFIG_PM_EXTERNAL_FLASH_BASE}
-    PLACEMENT start_to_end
-    DEVICE ${CONFIG_PM_EXTERNAL_FLASH_DEV_NAME}
+    DEVICE "DT_CHOSEN(nordic_pm_ext_flash)"
+    DEFAULT_DRIVER_KCONFIG ${external_flash_driver_kconfig}
     )
 endif()
 
@@ -238,7 +245,13 @@ get_shared(
   PROPERTY NRF53_MULTI_IMAGE_UPDATE
   )
 
-if (DEFINED mcuboot_NRF53_MULTI_IMAGE_UPDATE)
+get_shared(
+  mcuboot_NRF53_RECOVERY_NETWORK_CORE
+  IMAGE mcuboot
+  PROPERTY NRF53_RECOVERY_NETWORK_CORE
+  )
+
+if ((DEFINED mcuboot_NRF53_MULTI_IMAGE_UPDATE) OR (DEFINED mcuboot_NRF53_RECOVERY_NETWORK_CORE))
   # This region will contain the 'mcuboot_secondary' partition, and the banked
   # updates for the network core will be stored here.
   get_shared(ram_flash_label IMAGE mcuboot PROPERTY RAM_FLASH_LABEL)
@@ -251,6 +264,7 @@ if (DEFINED mcuboot_NRF53_MULTI_IMAGE_UPDATE)
     BASE ${ram_flash_addr}
     PLACEMENT start_to_end
     DEVICE ${ram_flash_label}
+    DEFAULT_DRIVER_KCONFIG CONFIG_FLASH_SIMULATOR
     )
 endif()
 
@@ -393,7 +407,7 @@ foreach(container ${containers} ${merged})
     OUTPUT ${PROJECT_BINARY_DIR}/${container}.hex
     COMMAND
     ${PYTHON_EXECUTABLE}
-    ${ZEPHYR_BASE}/scripts/mergehex.py
+    ${ZEPHYR_BASE}/scripts/build/mergehex.py
     -o ${PROJECT_BINARY_DIR}/${container}.hex
     ${${container}overlap_arg}
     ${${container}hex_files}
@@ -499,7 +513,7 @@ else()
   endforeach()
 
   if (CONFIG_BOOTLOADER_MCUBOOT)
-    if (CONFIG_PM_EXTERNAL_FLASH_MCUBOOT_SECONDARY)
+    if (CONFIG_PM_EXTERNAL_FLASH_MCUBOOT_SECONDARY AND CONFIG_HAS_HW_NRF_QSPI)
       # First we see if an ext flash dev has been chosen, if not, then we look
       # up the 'qspi' node and assume that this has the required address.
       if (DEFINED ext_flash_dev)
@@ -641,14 +655,15 @@ to the external flash")
   if (PM_DOMAINS)
     # For convenience, generate global hex file containing all domains' hex
     # files.
-    set(final_merged ${ZEPHYR_BINARY_DIR}/merged_domains.hex)
+    set(merged_domains  merged_domains)
+    set(final_merged ${ZEPHYR_BINARY_DIR}/${merged_domains}.hex)
 
     # Add command to merge files.
     add_custom_command(
       OUTPUT ${final_merged}
       COMMAND
       ${PYTHON_EXECUTABLE}
-      ${ZEPHYR_BASE}/scripts/mergehex.py
+      ${ZEPHYR_BASE}/scripts/build/mergehex.py
       -o ${final_merged}
       ${domain_hex_files}
       DEPENDS
@@ -673,21 +688,20 @@ endif()
 # set that variable. Hence we must operate on the 'yaml_contents' property,
 # which is evaluated in a generator expression.
 
-if (final_merged)
+if (merged_domains)
   # Multiple domains are included in the build, point to the result of
   # merging the merged hex file for all domains.
-  set(merged_hex_to_flash ${final_merged})
+  set(merged_hex_to_flash ${merged_domains}.hex)
 else()
-  set(merged_hex_to_flash ${PROJECT_BINARY_DIR}/${merged}.hex)
+  set(merged_hex_to_flash ${merged}.hex)
 endif()
 
 get_target_property(runners_content runners_yaml_props_target yaml_contents)
 
 string(REGEX REPLACE "hex_file:[^\n]*"
-  "hex_file: ${merged_hex_to_flash}" new  ${runners_content})
+  "hex_file: ${merged_hex_to_flash}" runners_content_updated_hex_file ${runners_content})
 
 set_property(
   TARGET         runners_yaml_props_target
-  PROPERTY       yaml_contents
-  ${new}
+  PROPERTY       yaml_contents ${runners_content_updated_hex_file}
   )

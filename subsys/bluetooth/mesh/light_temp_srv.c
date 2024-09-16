@@ -5,33 +5,35 @@
  */
 
 #include <stdlib.h>
-#include <sys/byteorder.h>
+#include <zephyr/sys/byteorder.h>
 #include <bluetooth/mesh/light_temp_srv.h>
 #include <bluetooth/mesh/gen_dtt_srv.h>
 #include "light_ctl_internal.h"
 #include "model_utils.h"
 
-#define BT_DBG_ENABLED IS_ENABLED(CONFIG_BT_MESH_DEBUG_MODEL)
-#define LOG_MODULE_NAME bt_mesh_light_temp_srv
-#include "common/log.h"
+#define LOG_LEVEL CONFIG_BT_MESH_MODEL_LOG_LEVEL
+#include "zephyr/logging/log.h"
+LOG_MODULE_REGISTER(bt_mesh_light_temp_srv);
 
 struct settings_data {
 	struct bt_mesh_light_temp dflt;
 	struct bt_mesh_light_temp_range range;
+#if !IS_ENABLED(CONFIG_EMDS)
 	struct bt_mesh_light_temp last;
+#endif
 } __packed;
 
 #if CONFIG_BT_SETTINGS
-static void store_timeout(struct k_work *work)
+static void bt_mesh_light_temp_srv_pending_store(struct bt_mesh_model *model)
 {
-	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-	struct bt_mesh_light_temp_srv *srv = CONTAINER_OF(
-		dwork, struct bt_mesh_light_temp_srv, store_timer);
+	struct bt_mesh_light_temp_srv *srv = model->user_data;
 
 	struct settings_data data = {
 		.dflt = srv->dflt,
 		.range = srv->range,
-		.last = srv->last,
+#if !IS_ENABLED(CONFIG_EMDS)
+		.last = srv->transient.last,
+#endif
 	};
 
 	(void)bt_mesh_model_data_store(srv->model, false, NULL, &data,
@@ -43,9 +45,7 @@ static void store_timeout(struct k_work *work)
 static void store_state(struct bt_mesh_light_temp_srv *srv)
 {
 #if CONFIG_BT_SETTINGS
-	k_work_schedule(
-		&srv->store_timer,
-		K_SECONDS(CONFIG_BT_MESH_MODEL_SRV_STORE_TIMEOUT));
+	bt_mesh_model_data_store_schedule(srv->model);
 #endif
 }
 
@@ -181,7 +181,7 @@ static void lvl_set(struct bt_mesh_lvl_srv *lvl_srv,
 	struct bt_mesh_light_temp_set set = {
 		.params = {
 			.temp = lvl_to_temp(srv, lvl_set->lvl),
-			.delta_uv = srv->last.delta_uv,
+			.delta_uv = srv->transient.last.delta_uv,
 		},
 		.transition = lvl_set->transition,
 	};
@@ -208,7 +208,7 @@ static void lvl_delta_set(struct bt_mesh_lvl_srv *lvl_srv,
 		CONTAINER_OF(lvl_srv, struct bt_mesh_light_temp_srv, lvl);
 	struct bt_mesh_light_temp_status status = { 0 };
 	struct bt_mesh_light_temp_set set = {
-		.params = srv->last,
+		.params = srv->transient.last,
 		.transition = delta_set->transition,
 	};
 	int16_t start_lvl, target_lvl;
@@ -217,7 +217,7 @@ static void lvl_delta_set(struct bt_mesh_lvl_srv *lvl_srv,
 		srv->handlers->get(srv, NULL, &status);
 		start_lvl = temp_to_lvl(srv, status.current.temp);
 	} else {
-		start_lvl = temp_to_lvl(srv, srv->last.temp);
+		start_lvl = temp_to_lvl(srv, srv->corrective_delta);
 	}
 
 	/* Clamp to int16_t range before storing the value in a 16 bit integer
@@ -230,12 +230,10 @@ static void lvl_delta_set(struct bt_mesh_lvl_srv *lvl_srv,
 
 	bt_mesh_light_temp_srv_set(srv, ctx, &set, &status);
 
-	/* Override last temp value to be able to make corrective deltas when
-	 * new_transaction is false. Note that the last temp value in
-	 * persistent storage will still be the target value, allowing us to
-	 * recover correctly on power loss.
+	/* Copy start level to be able to make corrective deltas when
+	 * new_transaction is false.
 	 */
-	srv->last.temp = lvl_to_temp(srv, start_lvl);
+	srv->corrective_delta = lvl_to_temp(srv, start_lvl);
 
 	(void)bt_mesh_light_temp_srv_pub(srv, NULL, &status);
 
@@ -256,7 +254,7 @@ static void lvl_move_set(struct bt_mesh_lvl_srv *lvl_srv,
 	struct bt_mesh_light_temp_status status = { 0 };
 	struct bt_mesh_model_transition transition;
 	struct bt_mesh_light_temp_set set = {
-		.params = srv->last,
+		.params = srv->transient.last,
 		.transition = NULL,
 	};
 
@@ -273,7 +271,7 @@ static void lvl_move_set(struct bt_mesh_lvl_srv *lvl_srv,
 	if (move_set->delta != 0 && move_set->transition) {
 		/* Calculate the transition time to edge in the Generic Level space: */
 		int32_t lvl_target = (move_set->delta > 0 ? INT16_MAX : INT16_MIN);
-		int32_t lvl_delta = lvl_target - temp_to_lvl(srv, status.current.temp);
+		int64_t lvl_delta = lvl_target - temp_to_lvl(srv, status.current.temp);
 		uint32_t time_to_edge = (move_set->transition->time * lvl_delta) / move_set->delta;
 
 		if (time_to_edge > 0) {
@@ -330,8 +328,10 @@ static void temp_srv_set(struct bt_mesh_light_temp_srv *srv,
 {
 	set->params.temp = MIN(MAX(set->params.temp, srv->range.min), srv->range.max);
 
-	srv->last = set->params;
-	store_state(srv);
+	srv->transient.last = set->params;
+	if (!IS_ENABLED(CONFIG_EMDS)) {
+		store_state(srv);
+	}
 
 	srv->handlers->set(srv, ctx, set, status);
 }
@@ -376,8 +376,8 @@ static void light_temp_srv_reset(struct bt_mesh_light_temp_srv *srv)
 {
 	srv->dflt.delta_uv = 0;
 	srv->dflt.temp = BT_MESH_LIGHT_TEMP_MIN;
-	srv->last.delta_uv = 0;
-	srv->last.temp = BT_MESH_LIGHT_TEMP_MIN;
+	srv->transient.last.delta_uv = 0;
+	srv->transient.last.temp = BT_MESH_LIGHT_TEMP_MIN;
 	srv->range.min = BT_MESH_LIGHT_TEMP_MIN;
 	srv->range.max = BT_MESH_LIGHT_TEMP_MAX;
 }
@@ -390,8 +390,15 @@ static int bt_mesh_light_temp_srv_init(struct bt_mesh_model *model)
 	light_temp_srv_reset(srv);
 	net_buf_simple_init(srv->pub.msg, 0);
 
-#if CONFIG_BT_SETTINGS
-	k_work_init_delayable(&srv->store_timer, store_timeout);
+#if IS_ENABLED(CONFIG_BT_SETTINGS) && IS_ENABLED(CONFIG_EMDS)
+	srv->emds_entry.entry.id = EMDS_MODEL_ID(model);
+	srv->emds_entry.entry.data = (uint8_t *)&srv->transient;
+	srv->emds_entry.entry.len = sizeof(srv->transient);
+	int err = emds_entry_add(&srv->emds_entry);
+
+	if (err) {
+		return err;
+	}
 #endif
 
 	return bt_mesh_model_extend(model, srv->lvl.model);
@@ -411,9 +418,11 @@ static int bt_mesh_light_temp_srv_settings_set(struct bt_mesh_model *model,
 		return -EINVAL;
 	}
 
-	srv->last = data.last;
 	srv->dflt = data.dflt;
 	srv->range = data.range;
+#if !IS_ENABLED(CONFIG_EMDS)
+	srv->transient.last = data.last;
+#endif
 
 	return 0;
 }
@@ -434,6 +443,9 @@ const struct bt_mesh_model_cb _bt_mesh_light_temp_srv_cb = {
 	.init = bt_mesh_light_temp_srv_init,
 	.reset = bt_mesh_light_temp_srv_reset,
 	.settings_set = bt_mesh_light_temp_srv_settings_set,
+#if CONFIG_BT_SETTINGS
+	.pending_store = bt_mesh_light_temp_srv_pending_store,
+#endif
 };
 
 void bt_mesh_light_temp_srv_set(struct bt_mesh_light_temp_srv *srv,
@@ -506,5 +518,5 @@ int bt_mesh_light_temp_srv_pub(struct bt_mesh_light_temp_srv *srv,
 	BT_MESH_MODEL_BUF_DEFINE(msg, BT_MESH_LIGHT_TEMP_STATUS,
 				 BT_MESH_LIGHT_CTL_MSG_MAXLEN_TEMP_STATUS);
 	encode_status(&msg, status);
-	return model_send(srv->model, ctx, &msg);
+	return bt_mesh_msg_send(srv->model, ctx, &msg);
 }

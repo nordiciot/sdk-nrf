@@ -5,10 +5,12 @@
  */
 
 #include <stdlib.h>
-#include <kernel.h>
-#include <sys/reboot.h>
-#include <logging/log.h>
-#include <init.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/reboot.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
+#include <zephyr/init.h>
+#include <ram_pwrdn.h>
 
 #include <hal/nrf_power.h>
 #if !NRF_POWER_HAS_RESETREAS
@@ -16,7 +18,7 @@
 #endif
 
 #ifdef CONFIG_ZIGBEE_SHELL
-#include <zigbee_cli.h>
+#include <zigbee/zigbee_shell.h>
 #endif
 #include <zboss_api.h>
 #include "zb_nrf_platform.h"
@@ -106,14 +108,14 @@ bool zigbee_debug_zboss_thread_is_created(void)
 	return false;
 }
 
-/**@brief Function for suspending zboss thread.
+/**@brief Function for suspending ZBOSS thread.
  */
 void zigbee_debug_suspend_zboss_thread(void)
 {
 	k_thread_suspend(zboss_tid);
 }
 
-/**@brief Function for resuming zboss thread.
+/**@brief Function for resuming ZBOSS thread.
  */
 void zigbee_debug_resume_zboss_thread(void)
 {
@@ -149,7 +151,7 @@ static void zb_app_cb_process(zb_bufid_t bufid)
 	zb_ret_t ret_code = RET_OK;
 	zb_app_cb_t new_app_cb;
 
-	/* Mark te processing callback as non-scheduled. */
+	/* Mark the processing callback as non-scheduled. */
 	(void)atomic_set((atomic_t *)&zb_app_cb_process_scheduled, 0);
 
 	/**
@@ -246,7 +248,7 @@ static void zb_app_cb_process_schedule(struct k_work *item)
 		return;
 	}
 
-	/* Check if processing callback is altready scheduled. */
+	/* Check if processing callback is already scheduled. */
 	if (atomic_set((atomic_t *)&zb_app_cb_process_scheduled, 1) == 1) {
 		return;
 	}
@@ -296,6 +298,10 @@ int zigbee_init(void)
 	 */
 	zb_set_nvram_erase_at_start(ZB_FALSE);
 
+	if (IS_ENABLED(CONFIG_ZIGBEE_TC_REJOIN_ENABLED)) {
+		zb_secur_set_tc_rejoin_enabled((zb_bool_t)CONFIG_ZIGBEE_TC_REJOIN_ENABLED);
+	}
+
 	/* Don't set zigbee role for NCP device */
 #ifndef CONFIG_ZIGBEE_LIBRARY_NCP_DEV
 
@@ -315,6 +321,12 @@ int zigbee_init(void)
 	zb_set_network_coordinator_role(channel_mask);
 #elif defined(CONFIG_ZIGBEE_ROLE_ROUTER)
 	zb_set_network_router_role(channel_mask);
+
+/* Enable full distributed network operability. */
+#if (ZBOSS_MAJOR == 3U) && (ZBOSS_MINOR == 11U)
+	zb_enable_distributed();
+#endif
+
 #elif defined(CONFIG_ZIGBEE_ROLE_END_DEVICE)
 	zb_set_network_ed_role(channel_mask);
 #else
@@ -337,7 +349,7 @@ static void zboss_thread(void *arg1, void *arg2, void *arg3)
 
 	stack_is_started = true;
 #ifdef CONFIG_ZIGBEE_SHELL
-	zb_cli_configure_endpoint();
+	zb_shell_configure_endpoint();
 #endif /* defined(CONFIG_ZIGBEE_SHELL) */
 
 	while (1) {
@@ -345,8 +357,31 @@ static void zboss_thread(void *arg1, void *arg2, void *arg3)
 	}
 }
 
+zb_bool_t zb_osif_is_inside_isr(void)
+{
+	return (zb_bool_t)(__get_IPSR() != 0);
+}
+
+void zb_osif_enable_all_inter(void)
+{
+	__ASSERT(zb_osif_is_inside_isr() == 0,
+		 "Unable to unlock mutex from interrupt context");
+	k_mutex_unlock(&zigbee_mutex);
+}
+
+void zb_osif_disable_all_inter(void)
+{
+	__ASSERT(zb_osif_is_inside_isr() == 0,
+		 "Unable to lock mutex from interrupt context");
+	k_mutex_lock(&zigbee_mutex, K_FOREVER);
+}
+
 zb_ret_t zigbee_schedule_callback(zb_callback_t func, zb_uint8_t param)
 {
+	if ((zboss_tid) && (k_current_get() == zboss_tid) && (!zb_osif_is_inside_isr())) {
+		return zb_schedule_app_callback(func, param);
+	}
+
 	zb_app_cb_t new_app_cb = {
 		.type = ZB_CALLBACK_TYPE_SINGLE_PARAM,
 		.func = func,
@@ -365,6 +400,10 @@ zb_ret_t zigbee_schedule_callback2(zb_callback2_t func,
 				   zb_uint8_t param,
 				   zb_uint16_t user_param)
 {
+	if ((zboss_tid) && (k_current_get() == zboss_tid) && (!zb_osif_is_inside_isr())) {
+		return zb_schedule_app_callback2(func, param, user_param);
+	}
+
 	zb_app_cb_t new_app_cb = {
 		.type = ZB_CALLBACK_TYPE_TWO_PARAMS,
 		.func2 = func,
@@ -384,6 +423,10 @@ zb_ret_t zigbee_schedule_alarm(zb_callback_t func,
 			       zb_uint8_t param,
 			       zb_time_t run_after)
 {
+	if ((zboss_tid) && (k_current_get() == zboss_tid) && (!zb_osif_is_inside_isr())) {
+		return zb_schedule_app_alarm(func, param, run_after);
+	}
+
 	zb_app_cb_t new_app_cb = {
 		.type = ZB_CALLBACK_TYPE_ALARM_SET,
 		.func = func,
@@ -402,6 +445,10 @@ zb_ret_t zigbee_schedule_alarm(zb_callback_t func,
 
 zb_ret_t zigbee_schedule_alarm_cancel(zb_callback_t func, zb_uint8_t param)
 {
+	if ((zboss_tid) && (k_current_get() == zboss_tid) && (!zb_osif_is_inside_isr())) {
+		return zb_schedule_alarm_cancel(func, param, NULL);
+	}
+
 	zb_app_cb_t new_app_cb = {
 		.type = ZB_CALLBACK_TYPE_ALARM_CANCEL,
 		.func = func,
@@ -418,6 +465,10 @@ zb_ret_t zigbee_schedule_alarm_cancel(zb_callback_t func, zb_uint8_t param)
 
 zb_ret_t zigbee_get_out_buf_delayed(zb_callback_t func)
 {
+	if ((zboss_tid) && (k_current_get() == zboss_tid) && (!zb_osif_is_inside_isr())) {
+		return zb_buf_get_out_delayed_func(func);
+	}
+
 	zb_app_cb_t new_app_cb = {
 		.type = ZB_GET_OUT_BUF_DELAYED,
 		.func = func,
@@ -433,6 +484,10 @@ zb_ret_t zigbee_get_out_buf_delayed(zb_callback_t func)
 
 zb_ret_t zigbee_get_in_buf_delayed(zb_callback_t func)
 {
+	if ((zboss_tid) && (k_current_get() == zboss_tid) && (!zb_osif_is_inside_isr())) {
+		return zb_buf_get_in_delayed_func(func);
+	}
+
 	zb_app_cb_t new_app_cb = {
 		.type = ZB_GET_IN_BUF_DELAYED,
 		.func = func,
@@ -449,6 +504,10 @@ zb_ret_t zigbee_get_in_buf_delayed(zb_callback_t func)
 zb_ret_t zigbee_get_out_buf_delayed_ext(zb_callback2_t func, zb_uint16_t param,
 					zb_uint16_t max_size)
 {
+	if ((zboss_tid) && (k_current_get() == zboss_tid) && (!zb_osif_is_inside_isr())) {
+		return zb_buf_get_out_delayed_ext_func(func, param, max_size);
+	}
+
 	zb_app_cb_t new_app_cb = {
 		.type = ZB_GET_OUT_BUF_DELAYED_EXT,
 		.func2 = func,
@@ -467,6 +526,10 @@ zb_ret_t zigbee_get_out_buf_delayed_ext(zb_callback2_t func, zb_uint16_t param,
 zb_ret_t zigbee_get_in_buf_delayed_ext(zb_callback2_t func, zb_uint16_t param,
 					zb_uint16_t max_size)
 {
+	if ((zboss_tid) && (k_current_get() == zboss_tid) && (!zb_osif_is_inside_isr())) {
+		return zb_buf_get_in_delayed_ext_func(func, param, max_size);
+	}
+
 	zb_app_cb_t new_app_cb = {
 		.type = ZB_GET_IN_BUF_DELAYED_EXT,
 		.func2 = func,
@@ -511,10 +574,20 @@ void zb_osif_init(void)
 
 void zb_osif_abort(void)
 {
-	LOG_ERR("Fatal error occurred");
+	/* Log ZBOSS error message and flush logs. */
+	LOG_ERR("ZBOSS fatal error occurred");
+	LOG_PANIC();
+
+	/* Flush ZBOSS trace logs. */
 	ZB_OSIF_SERIAL_FLUSH();
 
-	k_fatal_halt(K_ERR_KERNEL_PANIC);
+	/* By default reset device or halt if so configured. */
+	if (IS_ENABLED(CONFIG_ZBOSS_RESET_ON_ASSERT)) {
+		zb_reset(0);
+	}
+	if (IS_ENABLED(CONFIG_ZBOSS_HALT_ON_ASSERT)) {
+		k_fatal_halt(K_ERR_KERNEL_PANIC);
+	}
 }
 
 void zb_reset(zb_uint8_t param)
@@ -534,26 +607,12 @@ void zb_reset(zb_uint8_t param)
 	nrf_power_gpregret_set(NRF_POWER, reas);
 #endif /* CONFIG_SOC_NRF5340_CPUAPP */
 
+	/* Power on unused sections of RAM to allow MCUboot to use it. */
+	if (IS_ENABLED(CONFIG_RAM_POWER_DOWN_LIBRARY)) {
+		power_up_unused_ram();
+	}
+
 	sys_reboot(reas);
-}
-
-zb_bool_t zb_osif_is_inside_isr(void)
-{
-	return (zb_bool_t)(__get_IPSR() != 0);
-}
-
-void zb_osif_enable_all_inter(void)
-{
-	__ASSERT(zb_osif_is_inside_isr() == 0,
-		 "Unable to unlock mutex from interrupt context");
-	k_mutex_unlock(&zigbee_mutex);
-}
-
-void zb_osif_disable_all_inter(void)
-{
-	__ASSERT(zb_osif_is_inside_isr() == 0,
-		 "Unable to lock mutex from interrupt context");
-	k_mutex_lock(&zigbee_mutex, K_FOREVER);
 }
 
 void zb_osif_busy_loop_delay(zb_uint32_t count)

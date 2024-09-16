@@ -7,13 +7,18 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-#include <kernel.h>
+#include <zephyr/kernel.h>
 #include <modem/modem_jwt.h>
-#include <mock_nrf_modem_at.h>
 
+#include "cmock_nrf_modem_at.h"
+
+
+/* Return value to be returned by the stub for nrf_modem_at_cmd. */
+static int at_cmd_stub_ret_val;
 
 void setUp(void)
 {
+	at_cmd_stub_ret_val = 0;
 }
 
 void tearDown(void)
@@ -39,14 +44,9 @@ static const char jwt_token[] =
 
 int cmd_cb(void *buf, size_t len, const char *fmt, int cmock_num_calls)
 {
-	if (cmock_num_calls == 0) {
-		/* Fail first call */
-		return -1;
-	}
-
 	strncpy(buf, jwt_token, len - 1);
 	((char *)buf)[len-1] = 0;
-	return 0;
+	return at_cmd_stub_ret_val;
 }
 
 void test_modem_jwt_generate(void)
@@ -55,7 +55,6 @@ void test_modem_jwt_generate(void)
 	int rc;
 
 	/* Few failure cases */
-
 	rc = modem_jwt_generate(NULL);
 	TEST_ASSERT_EQUAL_INT(-EINVAL, rc);
 
@@ -66,13 +65,17 @@ void test_modem_jwt_generate(void)
 
 	jwt.jwt_buf = NULL;
 
-	__wrap_nrf_modem_at_cmd_Stub(cmd_cb);
+	__cmock_nrf_modem_at_cmd_Stub(cmd_cb);
 
 	/* First call should fail, pass through the error code */
+	at_cmd_stub_ret_val = -1;
+
 	rc = modem_jwt_generate(&jwt);
 	TEST_ASSERT_EQUAL_INT(-1, rc);
 
 	/* Success case, default parameters */
+	at_cmd_stub_ret_val = 0;
+
 	rc = modem_jwt_generate(&jwt);
 	TEST_ASSERT_EQUAL_INT(0, rc);
 
@@ -95,15 +98,24 @@ void test_modem_jwt_get_uuids(void)
 	struct nrf_modem_fw_uuid mfw = {0};
 	int rc;
 
+	at_cmd_stub_ret_val = 0;
+	__cmock_nrf_modem_at_cmd_Stub(cmd_cb);
+
 	rc = modem_jwt_get_uuids(&dev, &mfw);
 	TEST_ASSERT_EQUAL_INT(0, rc);
 	TEST_ASSERT_EQUAL_STRING("50363154-3930-4d96-80f9-13121cf35adc", dev.str);
 	TEST_ASSERT_EQUAL_STRING("f72d9789-2e73-4780-9248-b3952f89b872", mfw.str);
 }
 
+/* It is required to be added to each test. That is because unity's
+ * main may return nonzero, while zephyr's main currently must
+ * return 0 in all cases (other values are reserved).
+ */
 extern int unity_main(void);
 
-void main(void)
+int main(void)
 {
 	(void)unity_main();
+
+	return 0;
 }

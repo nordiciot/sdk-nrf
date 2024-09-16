@@ -6,9 +6,8 @@
 
 #include <bluetooth/mesh/time_srv.h>
 #include <time.h>
-#include "model_utils.h"
 #include <zephyr/types.h>
-#include <sys/util.h>
+#include <zephyr/sys/util.h>
 #include "time_util.h"
 
 static const uint8_t month_cfg[12] = { 31, 28, 31, 30, 31, 30,
@@ -16,7 +15,7 @@ static const uint8_t month_cfg[12] = { 31, 28, 31, 30, 31, 30,
 static const uint8_t month_leap_cfg[12] = { 31, 29, 31, 30, 31, 30,
 					 31, 31, 30, 31, 30, 31 };
 
-int ts_to_tai(struct bt_mesh_time_tai *tai, struct tm *timeptr)
+int ts_to_tai(struct bt_mesh_time_tai *tai, const struct tm *timeptr)
 {
 	uint32_t current_year = timeptr->tm_year + TM_START_YEAR;
 	uint32_t days = 0;

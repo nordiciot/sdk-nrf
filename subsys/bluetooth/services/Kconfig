@@ -12,6 +12,7 @@ config BT_NRF_SERVICES
 	  Common Bluetooth GATT Services support modules, required by all Nordic
 	  Services.
 
+rsource "Kconfig.ams_client"
 rsource "Kconfig.ancs_client"
 rsource "Kconfig.bas_client"
 rsource "Kconfig.bms"
@@ -21,12 +22,18 @@ rsource "Kconfig.gattp"
 rsource "Kconfig.hids"
 rsource "Kconfig.hogp"
 rsource "Kconfig.lbs"
+rsource "Kconfig.nsms"
 rsource "Kconfig.nus"
 rsource "Kconfig.nus_client"
 rsource "Kconfig.rscs"
 rsource "Kconfig.throughput"
 rsource "Kconfig.latency"
 rsource "Kconfig.latency_c"
-rsource "alexa_gadgets/Kconfig.gadgets"
+rsource "Kconfig.hrs_client"
+rsource "Kconfig.ddfs"
+rsource "Kconfig.mds"
+rsource "cgms/Kconfig.cgms"
+rsource "fast_pair/Kconfig.fast_pair"
+rsource "wifi_prov/Kconfig.wifi_prov"
 
 endmenu

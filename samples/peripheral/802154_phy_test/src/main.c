@@ -1,17 +1,21 @@
 /*
- * Copyright (c) 2021 Nordic Semiconductor ASA
+ * Copyright (c) 2021-2023 Nordic Semiconductor ASA
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <init.h>
-#include <zephyr.h>
+#include <zephyr/init.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/reboot.h>
 
 #include "rf_proc.h"
 #include "timer_proc.h"
 #include "comm_proc.h"
 #include "periph_proc.h"
+#if defined(CONFIG_APP_RPC)
+#include "app_rpc.h"
+#endif
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 	LOG_MODULE_REGISTER(phy_tt);
 
 /* size of stack area used by each thread */
@@ -24,25 +28,27 @@
 
 void ptt_do_reset_ext(void)
 {
-	NVIC_SystemReset();
+#if defined(CONFIG_APP_RPC)
+	app_system_reboot();
+#else
+	sys_reboot(SYS_REBOOT_COLD);
+#endif
 }
 
-static int rf_setup(const struct device *dev)
+static int rf_setup(void)
 {
 	LOG_INF("RF setup started");
 
-	ARG_UNUSED(dev);
 
 	rf_init();
 
 	return 0;
 }
 
-static int setup(const struct device *dev)
+static int setup(void)
 {
 	LOG_INF("Setup started");
 
-	ARG_UNUSED(dev);
 
 	periph_init();
 
@@ -54,11 +60,8 @@ static int setup(const struct device *dev)
 	return 0;
 }
 
-SYS_INIT(rf_setup, POST_KERNEL, PTT_RF_INIT_PRIORITY);
+SYS_INIT(rf_setup, POST_KERNEL, CONFIG_PTT_RF_INIT_PRIORITY);
 
 SYS_INIT(setup, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
 
 K_THREAD_DEFINE(rf_id, RF_THREAD_STACKSIZE, rf_thread, NULL, NULL, NULL, RF_THREAD_PRIORITY, 0, 0);
-
-K_THREAD_DEFINE(comm_id, COMM_THREAD_STACKSIZE, comm_proc, NULL, NULL, NULL, COMM_THREAD_PRIORITY,
-		0, 0);

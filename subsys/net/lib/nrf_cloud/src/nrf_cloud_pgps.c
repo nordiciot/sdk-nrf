@@ -4,34 +4,40 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <nrfx_nvmc.h>
-#include <device.h>
-#include <storage/stream_flash.h>
+#include <zephyr/device.h>
+#include <zephyr/storage/stream_flash.h>
+#include <zephyr/storage/flash_map.h>
 
 #include <cJSON.h>
-#include <cJSON_os.h>
 #include <modem/modem_info.h>
 #include <date_time.h>
 #include <net/nrf_cloud_agps.h>
 #include <net/nrf_cloud_pgps.h>
-#include <settings/settings.h>
-#include <power/reboot.h>
-#include <logging/log_ctrl.h>
+#include <net/nrf_cloud_codec.h>
+#include <zephyr/logging/log_ctrl.h>
+#include <pm_config.h>
+#include <flash_map_pm.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(nrf_cloud_pgps, CONFIG_NRF_CLOUD_GPS_LOG_LEVEL);
 
 #include "nrf_cloud_transport.h"
+#include "nrf_cloud_fsm.h"
 #include "nrf_cloud_pgps_schema_v1.h"
 #include "nrf_cloud_pgps_utils.h"
-#include "nrf_cloud_codec.h"
+#include "nrf_cloud_codec_internal.h"
 
 #define FORCE_HTTP_DL			0 /* set to 1 to force HTTP instead of HTTPS */
 #define PGPS_DEBUG			0 /* set to 1 for extra logging */
 
-#define PREDICTION_PERIOD		CONFIG_NRF_CLOUD_PGPS_PREDICTION_PERIOD
+#if defined(CONFIG_NRF_CLOUD_PGPS_PREDICTION_PERIOD_120_MIN)
+#define PREDICTION_PERIOD		120
+#else
+#define PREDICTION_PERIOD		240
+#endif
 #define REPLACEMENT_THRESHOLD		CONFIG_NRF_CLOUD_PGPS_REPLACEMENT_THRESHOLD
 #define SEC_TAG				CONFIG_NRF_CLOUD_SEC_TAG
 #define FRAGMENT_SIZE			CONFIG_NRF_CLOUD_PGPS_DOWNLOAD_FRAGMENT_SIZE
@@ -39,6 +45,13 @@ LOG_MODULE_REGISTER(nrf_cloud_pgps, CONFIG_NRF_CLOUD_GPS_LOG_LEVEL);
 #define LOCATION_UNC_SEMIMAJOR_K	89U
 #define LOCATION_UNC_SEMIMINOR_K	89U
 #define LOCATION_CONFIDENCE_PERCENT	68U
+
+BUILD_ASSERT(((NUM_PREDICTIONS & 1) == 0),
+	 "NUM_PREDICTIONS must be even");
+BUILD_ASSERT(((REPLACEMENT_THRESHOLD & 1) == 0),
+	 "REPLACEMENT_THRESHOLD must be even");
+BUILD_ASSERT((NUM_PREDICTIONS != REPLACEMENT_THRESHOLD),
+	 "NUM_PREDICTIONS and REPLACEMENT_THRESHOLD cannot be equal");
 
 enum pgps_state {
 	PGPS_NONE,
@@ -68,22 +81,35 @@ struct pgps_index {
 	uint32_t storage_extent;
 	int store_block;
 
-	/* array of pointers to predictions, in sorted time order */
+	/* Array of memory offsets to predictions, in sorted time order.
+	 * If flash device is external, this must be passed
+	 * to read_prediction() to read a copy to a local buffer.
+	 * If flash device is internal, it can be converted directly to
+	 * a pointer.
+	 */
 	struct nrf_cloud_pgps_prediction *predictions[NUM_PREDICTIONS];
 };
 
 static struct pgps_index index;
 
-static pgps_event_handler_t evt_handler;
-/* array of potentially out-of-time-order predictions */
-static uint8_t *storage;
-static uint32_t storage_size;
 static struct stream_flash_ctx stream;
-static uint8_t *write_buf;
+static const struct flash_area *prediction_flash_area;
+static uint8_t flash_area_id;
+static const struct device *prediction_flash_dev;
 static uint32_t flash_page_size;
+static uint32_t storage_addr;
+static uint32_t storage_size;
+
+static pgps_event_handler_t evt_handler;
+static uint8_t *write_buf;
+
+#if defined(CONFIG_PM_PARTITION_REGION_PGPS_EXTERNAL)
+static off_t prediction_cache_flash_offset = UINT32_MAX;
+static uint8_t prediction_cache[PGPS_PREDICTION_STORAGE_SIZE];
+#endif
 
 static uint8_t prediction_buf[PGPS_PREDICTION_STORAGE_SIZE];
-static bool ignore_packets;
+static atomic_t accept_packets;
 static atomic_t pgps_need_assistance;
 
 static int validate_stored_predictions(uint16_t *bad_day, uint32_t *bad_time);
@@ -101,6 +127,77 @@ static int pgps_request_all(void);
 
 K_WORK_DEFINE(prediction_work, prediction_work_handler);
 K_TIMER_DEFINE(prediction_timer, prediction_timer_handler, NULL);
+
+
+static void discard_prediction_buffer(void)
+{
+#if defined(CONFIG_PM_PARTITION_REGION_PGPS_EXTERNAL)
+	prediction_cache_flash_offset = UINT32_MAX;
+#endif
+}
+
+static int get_prediction_block(int pnum)
+{
+	return npgps_pointer_to_block((uint8_t *)index.predictions[pnum]);
+}
+
+/**
+ * @brief When using external flash, ensure the prediction at the requested flash device offset
+ * is available via the prediction cache.  When using internal flash, just the flash device offset
+ * as a direct pointer to the location of the prediction in flash.
+ *
+ * @param off Offset from the start of the flash device, when using external flash, or offset from
+ * the start of application processor memory space when using internal flash.
+ *
+ * @return struct nrf_cloud_pgps_prediction* Pointer to a cached copy of the prediction when
+ * using external flash, or a direct pointer the prediction when using internal flash.
+ */
+static struct nrf_cloud_pgps_prediction *get_cached_prediction(off_t off)
+{
+#if defined(CONFIG_PM_PARTITION_REGION_PGPS_EXTERNAL)
+	/* Check if the cached prediction is the one we want; if not, read it now */
+	if (prediction_cache_flash_offset != off) {
+		int err;
+
+		/* Subtract fa_off from off to convert from flash device address space
+		 * to partition address space.
+		 */
+		err = flash_area_read(prediction_flash_area, off - prediction_flash_area->fa_off,
+				      prediction_cache, sizeof(prediction_cache));
+
+		if (err) {
+			LOG_ERR("Error %d reading prediction from flash offset 0x%lx",
+				err, off);
+			return NULL;
+		}
+		prediction_cache_flash_offset = off;
+		LOG_DBG("Caching offset 0x%X", (uint32_t)(off - prediction_flash_area->fa_off));
+	}
+
+	return (struct nrf_cloud_pgps_prediction *)prediction_cache;
+#else
+	/* The parameter off is really the address in built-in flash for the prediction */
+	return (struct nrf_cloud_pgps_prediction *)off;
+#endif
+}
+
+static struct nrf_cloud_pgps_prediction *get_prediction(int pnum)
+{
+	off_t off = (off_t)index.predictions[pnum];
+
+	return get_cached_prediction(off);
+}
+
+static struct nrf_cloud_pgps_prediction *get_prediction_slot(int slot, off_t *flash_off)
+{
+	off_t off = storage_addr + slot * PGPS_PREDICTION_STORAGE_SIZE;
+
+	if (flash_off) {
+		*flash_off = off;
+	}
+
+	return get_cached_prediction(off);
+}
 
 static int determine_prediction_num(struct nrf_cloud_pgps_header *header,
 				    struct nrf_cloud_pgps_prediction *p)
@@ -214,11 +311,9 @@ static int validate_prediction(const struct nrf_cloud_pgps_prediction *p,
 			err = -EINVAL;
 		}
 	}
-#if IS_ENABLED(CONFIG_NRF_CLOUD_LOG_LEVEL_DBG)
 	if (!err) {
 		print_time_details("prediction:", pred_sec, p->time.date_day, p->time.time_full_s);
 	}
-#endif
 	return err;
 }
 
@@ -227,17 +322,18 @@ static int validate_stored_predictions(uint16_t *first_bad_day,
 {
 	int err;
 	int i;
+	int pnum;
 	uint16_t count = index.header.prediction_count;
 	uint16_t period_min = index.header.prediction_period_min;
 	uint16_t gps_day = index.header.gps_day;
 	uint32_t gps_time_of_day = index.header.gps_time_of_day;
-	uint8_t *p = storage;
 	struct nrf_cloud_pgps_prediction *pred;
 	int64_t start_gps_sec = index.start_sec;
+	off_t off;
 	int64_t gps_sec;
-	int pnum;
 
 	/* reset catalog of predictions */
+	discard_prediction_buffer();
 	for (pnum = 0; pnum < count; pnum++) {
 		index.predictions[pnum] = NULL;
 	}
@@ -246,20 +342,24 @@ static int validate_stored_predictions(uint16_t *first_bad_day,
 
 	/* build catalog of predictions by block */
 	for (i = 0; i < count; i++) {
-		pred = (struct nrf_cloud_pgps_prediction *)p;
+		pred = (struct nrf_cloud_pgps_prediction *)get_prediction_slot(i, &off);
+		if (pred == NULL) {
+			LOG_ERR("Prediction at idx:%d not accessible", i);
+			continue;
+		}
 
 		pnum = determine_prediction_num(&index.header, pred);
 		if (pnum < 0) {
 			LOG_ERR("prediction idx:%u, ofs:%p, out of expected time range;"
-				" day:%u, time:%u", i, p, pred->time.date_day,
+				" day:%u, time:%u", i, (void *)pred, pred->time.date_day,
 				pred->time.time_full_s);
 		} else if (index.predictions[pnum] == NULL) {
-			index.predictions[pnum] = pred;
-			LOG_DBG("Prediction num:%u stored at idx:%d", pnum, i);
+			index.predictions[pnum] = (struct nrf_cloud_pgps_prediction *)off;
+			LOG_DBG("Prediction num:%u stored at idx:%d, off:0x%lX",
+				pnum, i, (unsigned long) off);
 		} else {
 			LOG_WRN("Prediction num:%u stored more than once!", pnum);
 		}
-		p += PGPS_PREDICTION_STORAGE_SIZE;
 	}
 
 	/* validate predictions in time order, independent of storage order */
@@ -269,7 +369,7 @@ static int validate_stored_predictions(uint16_t *first_bad_day,
 		gps_sec = start_gps_sec + pnum * period_min * SEC_PER_MIN;
 		npgps_gps_sec_to_day_time(gps_sec, &gps_day, &gps_time_of_day);
 
-		pred = index.predictions[pnum];
+		pred = get_prediction(pnum);
 		if (pred == NULL) {
 			LOG_WRN("Prediction num:%u missing", pnum);
 			/* request partial data; download interrupted? */
@@ -290,9 +390,9 @@ static int validate_stored_predictions(uint16_t *first_bad_day,
 			break;
 		}
 
-		i = npgps_pointer_to_block((uint8_t *)pred);
+		i = get_prediction_block(pnum);
 		LOG_DBG("Prediction num:%u, loc:%p, blk:%d", pnum, pred, i);
-		__ASSERT(i != -1, "unexpected pointer value %p", pred);
+		__ASSERT(i != NO_BLOCK, "unexpected pointer value %p", pred);
 		npgps_mark_block_used(i, true);
 	}
 
@@ -317,7 +417,7 @@ static int validate_stored_predictions(uint16_t *first_bad_day,
 static void get_prediction_day_time(int pnum, int64_t *gps_sec, uint16_t *gps_day,
 				    uint32_t *gps_time_of_day)
 {
-	int64_t psec = index.start_sec + (uint32_t)pnum * index.period_sec;
+	int64_t psec = index.start_sec + (int64_t)pnum * index.period_sec;
 
 	if (gps_sec) {
 		*gps_sec = psec;
@@ -334,14 +434,17 @@ static void discard_oldest_predictions(int num)
 	int block;
 	int last = MIN(num, index.header.prediction_count);
 
+	/* assume cache is no longer valid */
+	discard_prediction_buffer();
+
 	/* ensure 'last' oldest predictions are free; we can already
 	 * have some free, if a previous attempt to replace expired
 	 * predictions failed (e.g., due to lack of LTE connection)
 	 */
-	LOG_INF("discarding %d", last);
+	LOG_DBG("Discarding %d", last);
 
 	for (pnum = 0; pnum < last; pnum++) {
-		block = npgps_pointer_to_block((uint8_t *)index.predictions[pnum]);
+		block = get_prediction_block(pnum);
 		__ASSERT((block != -1), "unexpected ptr:%p for Prediction num:%d",
 			 index.predictions[pnum], pnum);
 		npgps_free_block(block);
@@ -363,9 +466,19 @@ static void discard_oldest_predictions(int num)
 	npgps_print_blocks();
 
 	/* update index and header for new first stored prediction */
+	uint16_t gps_day;
+	uint32_t gps_time_of_day;
+
 	get_prediction_day_time(last, &index.start_sec,
-				&index.header.gps_day,
-				&index.header.gps_time_of_day);
+				&gps_day,
+				&gps_time_of_day);
+
+	/* gps_day and time_of_day are packed members of a struct. To
+	 * avoid an unaligned pointer we use intermediate variables.
+	 */
+	index.header.gps_day = gps_day;
+	index.header.gps_time_of_day = gps_time_of_day;
+
 	LOG_DBG("updated index to gps_sec:%d, day:%u, time:%u",
 		(int32_t)index.start_sec, index.header.gps_day,
 		index.header.gps_time_of_day);
@@ -409,7 +522,7 @@ int nrf_cloud_pgps_notify_prediction(void)
 	} else if ((err >= 0) && (err < NUM_PREDICTIONS)) {
 		pnum = err;
 		err = 0;
-		LOG_INF("Found P-GPS prediction %d", pnum);
+		LOG_DBG("Found P-GPS prediction %d", pnum);
 		pgps_need_assistance = false;
 		/* the application should now send data to modem with
 		 * nrf_cloud_pgps_inject()
@@ -427,7 +540,7 @@ static void prediction_work_handler(struct k_work *work)
 	struct nrf_cloud_pgps_prediction *p;
 	int ret;
 
-	LOG_INF("prediction is expiring; finding next");
+	LOG_DBG("Prediction is expiring; finding next");
 	ret = nrf_cloud_pgps_find_prediction(&p);
 	if (ret >= 0) {
 		LOG_DBG("found prediction %d; injecting to modem", ret);
@@ -435,7 +548,7 @@ static void prediction_work_handler(struct k_work *work)
 		if (ret) {
 			LOG_ERR("Error injecting prediction:%d", ret);
 		} else {
-			LOG_INF("Next prediction injected successfully.");
+			LOG_DBG("Next prediction injected successfully.");
 		}
 	}
 }
@@ -462,9 +575,9 @@ static void start_expiration_timer(int pnum, int64_t cur_gps_sec)
 	 */
 	if (delta > 0) {
 		k_timer_start(&prediction_timer, K_SECONDS(delta), K_NO_WAIT);
-		LOG_INF("injecting next prediction in %d seconds", (int32_t)delta);
+		LOG_DBG("Injecting next prediction in %d seconds", (int32_t)delta);
 	} else {
-		LOG_ERR("cannot start prediction expiration timer; delta = %d", (int32_t)delta);
+		LOG_ERR("Cannot start prediction expiration timer; delta = %d", (int32_t)delta);
 	}
 }
 
@@ -473,10 +586,11 @@ static void print_time_details(const char *info,
 {
 	uint32_t tow = (day % DAYS_PER_WEEK) * SEC_PER_DAY + time_of_day;
 
-	LOG_INF("%s GPS sec:%llu, day:%u, time of day:%u, week:%lu, "
-		"day of week:%lu, time of week:%u, toe:%u",
-		info ? info : "", sec, day, time_of_day,
-		day / DAYS_PER_WEEK, day % DAYS_PER_WEEK, tow, tow / 16);
+	LOG_DBG("%s GPS sec:%u, day:%u, time of day:%u, week:%u, "
+		"day of week:%u, time of week:%u, toe:%u",
+		info ? info : "", (uint32_t)sec, day, time_of_day,
+		(uint32_t)(day / DAYS_PER_WEEK), (uint32_t)(day % DAYS_PER_WEEK),
+		tow, tow / 16);
 }
 
 int nrf_cloud_pgps_find_prediction(struct nrf_cloud_pgps_prediction **prediction)
@@ -512,29 +626,32 @@ int nrf_cloud_pgps_find_prediction(struct nrf_cloud_pgps_prediction **prediction
 		return -ENODATA;
 	}
 
-	err = npgps_get_shifted_time(&cur_gps_sec, &cur_gps_day,
-				     &cur_gps_time_of_day, PREDICTION_MIDPOINT_SHIFT_SEC);
-	if (err < 0) {
-		LOG_INF("Unknown current time");
-		cur_gps_sec = 0;
-	}
-
-	print_time_details("Looking for prediction for:",
-			   cur_gps_sec, cur_gps_day, cur_gps_time_of_day);
-
 	if ((start_day == 0) && (start_time == 0)) {
 		if (nrf_cloud_pgps_loading()) {
 			LOG_WRN("Predictions not loaded yet");
 			return -ELOADING;
 		}
+		index.cur_pnum = 0xff;
+		state = PGPS_EXPIRED;
+		pgps_need_assistance = false; /* make sure we request it */
 		LOG_WRN("No data stored");
 		return -ENODATA;
 	}
 
+	err = npgps_get_shifted_time(&cur_gps_sec, &cur_gps_day,
+				     &cur_gps_time_of_day, PREDICTION_MIDPOINT_SHIFT_SEC);
+	if (err < 0) {
+		LOG_INF("Unknown current time");
+		return err;
+	}
+
+	print_time_details("Looking for prediction for:",
+			   cur_gps_sec, cur_gps_day, cur_gps_time_of_day);
+
 	offset_sec = cur_gps_sec - start_sec;
 
 	print_time_details("First stored prediction:", start_sec, start_day, start_time);
-	LOG_INF("current offset into prediction set, sec:%d", (int32_t)offset_sec);
+	LOG_DBG("Current offset into prediction set, sec:%d", (int32_t)offset_sec);
 
 	if (offset_sec < 0) {
 		/* current time must be unknown or very inaccurate; it
@@ -559,9 +676,9 @@ int nrf_cloud_pgps_find_prediction(struct nrf_cloud_pgps_prediction **prediction
 		}
 	}
 
-	LOG_INF("Selected prediction num:%d", pnum);
+	LOG_DBG("Selected prediction num:%d", pnum);
 	index.cur_pnum = pnum;
-	*prediction = index.predictions[pnum];
+	*prediction = get_prediction(pnum);
 	if (*prediction) {
 		err = validate_prediction(*prediction,
 					  cur_gps_day, cur_gps_time_of_day,
@@ -582,30 +699,43 @@ int nrf_cloud_pgps_find_prediction(struct nrf_cloud_pgps_prediction **prediction
 
 bool nrf_cloud_pgps_loading(void)
 {
-	return ((state == PGPS_REQUESTING) || (state == PGPS_LOADING));
+	LOG_DBG("Checking state:%d", state);
+	return ((state == PGPS_REQUEST_NEEDED) ||
+		(state == PGPS_REQUESTING) ||
+		(state == PGPS_LOADING));
 }
 
-#if defined(CONFIG_NRF_CLOUD_MQTT)
 int nrf_cloud_pgps_request(const struct gps_pgps_request *request)
 {
-	return pgps_request(request);
+	if (IS_ENABLED(CONFIG_NRF_CLOUD_MQTT)) {
+		if (nfsm_get_current_state() != STATE_DC_CONNECTED) {
+			return -EACCES;
+		}
+
+		return pgps_request(request);
+	} else {
+		return -ENOTSUP;
+	}
 }
 
 int nrf_cloud_pgps_request_all(void)
 {
-	return pgps_request_all();
-}
-#endif /* CONFIG_NRF_CLOUD_MQTT */
-
-#if defined(CONFIG_NRF_CLOUD_PGPS_TRANSPORT_NONE)
-void nrf_cloud_pgps_request_reset(void)
-{
-	if (state == PGPS_REQUESTING) {
-		LOG_INF("Allowing another request");
-		state = PGPS_REQUEST_NEEDED;
+	if (IS_ENABLED(CONFIG_NRF_CLOUD_MQTT)) {
+		return pgps_request_all();
+	} else {
+		return -ENOTSUP;
 	}
 }
-#endif
+
+void nrf_cloud_pgps_request_reset(void)
+{
+	if (IS_ENABLED(CONFIG_NRF_CLOUD_PGPS_TRANSPORT_NONE)) {
+		if (state == PGPS_REQUESTING) {
+			LOG_DBG("Allowing another request");
+			state = PGPS_REQUEST_NEEDED;
+		}
+	}
+}
 
 static int pgps_request(const struct gps_pgps_request *request)
 {
@@ -615,10 +745,14 @@ static int pgps_request(const struct gps_pgps_request *request)
 	}
 
 	if (nrf_cloud_pgps_loading()) {
+		LOG_DBG("Already loading; skipping request");
 		return 0;
 	}
 
-	if (request->prediction_count < index.header.prediction_count) {
+	if (!request->prediction_count) {
+		LOG_DBG("No request needed.");
+		return 0;
+	} else if (request->prediction_count < index.header.prediction_count) {
 		index.partial_request = true;
 		index.pnum_offset = index.header.prediction_count -
 				    request->prediction_count;
@@ -628,7 +762,7 @@ static int pgps_request(const struct gps_pgps_request *request)
 	}
 
 	index.expected_count = request->prediction_count;
-	ignore_packets = false;
+	accept_packets = true;
 
 #if defined(CONFIG_NRF_CLOUD_PGPS_TRANSPORT_NONE)
 	struct nrf_cloud_pgps_event evt = {
@@ -648,69 +782,22 @@ static int pgps_request(const struct gps_pgps_request *request)
 
 	return 0;
 #elif defined(CONFIG_NRF_CLOUD_PGPS_TRANSPORT_MQTT)
-	int err = 0;
-	cJSON *data_obj;
-	cJSON *pgps_req_obj;
-	cJSON *ret;
+	NRF_CLOUD_OBJ_JSON_DEFINE(pgps_req_obj);
+	int err = nrf_cloud_obj_pgps_request_create(&pgps_req_obj, request);
 
-	LOG_INF("Requesting %u predictions...", request->prediction_count);
-
-	/* Create request JSON containing a data object */
-	pgps_req_obj = json_create_req_obj(NRF_CLOUD_JSON_APPID_VAL_PGPS,
-					   NRF_CLOUD_JSON_MSG_TYPE_VAL_DATA);
-	data_obj = cJSON_AddObjectToObject(pgps_req_obj, NRF_CLOUD_JSON_DATA_KEY);
-
-	if (!pgps_req_obj || !data_obj) {
-		err = -ENOMEM;
-		goto cleanup;
-	}
-
-#if defined(CONFIG_PGPS_INCLUDE_MODEM_INFO)
-	/* Add modem info and P-GPS types to the data object */
-	err = json_add_modem_info(data_obj);
-	if (err) {
-		LOG_ERR("Failed to add modem info to P-GPS request:%d", err);
-		goto cleanup;
-	}
-#endif
-
-	ret = cJSON_AddNumberToObject(data_obj, NRF_CLOUD_JSON_PGPS_PRED_COUNT,
-				      request->prediction_count);
-	if (ret == NULL) {
-		LOG_ERR("Failed to add pred count to P-GPS request:%d", err);
-		err = -ENOMEM;
-		goto cleanup;
-	}
-	ret = cJSON_AddNumberToObject(data_obj, NRF_CLOUD_JSON_PGPS_INT_MIN,
-				      request->prediction_period_min);
-	if (ret == NULL) {
-		LOG_ERR("Failed to add pred int min to P-GPS request:%d", err);
-		err = -ENOMEM;
-		goto cleanup;
-	}
-	ret = cJSON_AddNumberToObject(data_obj, NRF_CLOUD_JSON_PGPS_GPS_DAY,
-				      request->gps_day);
-	if (ret == NULL) {
-		LOG_ERR("Failed to add gps day to P-GPS request:%d", err);
-		err = -ENOMEM;
-		goto cleanup;
-	}
-	ret = cJSON_AddNumberToObject(data_obj, NRF_CLOUD_JSON_PGPS_GPS_TIME,
-				      request->gps_time_of_day);
-	if (ret == NULL) {
-		LOG_ERR("Failed to add gps time to P-GPS request:%d", err);
-		err = -ENOMEM;
-		goto cleanup;
-	}
-
-	/* @TODO: if device is offline, we need to defer this to later */
-	err = json_send_to_cloud(pgps_req_obj);
 	if (!err) {
+		/* @TODO: if device is offline, we need to defer this to later */
+		err = json_send_to_cloud(pgps_req_obj.json);
+	} else {
+		LOG_ERR("Failed to create P-GPS request: %d", err);
+	}
+
+	if (!err) {
+		LOG_INF("Requesting %u predictions...", request->prediction_count);
 		state = PGPS_REQUESTING;
 	}
 
-cleanup:
-	cJSON_Delete(pgps_req_obj);
+	(void)nrf_cloud_obj_free(&pgps_req_obj);
 
 	return err;
 #endif /* defined(CONFIG_NRF_CLOUD_PGPS_TRANSPORT_MQTT) */
@@ -752,6 +839,65 @@ static int pgps_request_all(void)
 	return pgps_request(&request);
 }
 
+#if defined(CONFIG_NRF_CLOUD_PGPS_DOWNLOAD_TRANSPORT_HTTP)
+/* handle incoming P-GPS response packets */
+int nrf_cloud_pgps_process(const char *buf, size_t buf_len)
+{
+	static char host[CONFIG_DOWNLOAD_CLIENT_MAX_HOSTNAME_SIZE];
+	static char path[CONFIG_DOWNLOAD_CLIENT_MAX_FILENAME_SIZE];
+	int err;
+	struct nrf_cloud_pgps_result pgps_dl = {
+		.host = host,
+		.host_sz = sizeof(host),
+		.path = path,
+		.path_sz = sizeof(path)
+	};
+
+	if (state == PGPS_NONE) {
+		LOG_ERR("P-GPS subsystem is not initialized.");
+		return -EINVAL;
+	}
+#if defined(CONFIG_NRF_CLOUD_MQTT)
+	LOG_HEXDUMP_DBG(buf, buf_len, "MQTT packet");
+#endif
+	if (!buf_len) {
+		LOG_ERR("Zero length packet received");
+		state = PGPS_NONE;
+		return -EINVAL;
+	}
+
+	if (!accept_packets) {
+		LOG_ERR("Ignoring packet; P-GPS response already received.");
+		LOG_HEXDUMP_INF(buf, buf_len, "Unexpected packet");
+		return -EINVAL;
+	}
+
+	err = nrf_cloud_pgps_response_decode(buf, &pgps_dl);
+	if (err) {
+		return err;
+	}
+
+	err = nrf_cloud_pgps_begin_update();
+	if (err) {
+		return err;
+	}
+
+	int sec_tag = SEC_TAG;
+
+	if (FORCE_HTTP_DL && (strncmp(pgps_dl.host, "https", 5) == 0)) {
+		memmove(&pgps_dl.host[4], &pgps_dl.host[5], strlen(&pgps_dl.host[4]));
+		sec_tag = -1;
+	}
+
+	err =  npgps_download_start(pgps_dl.host, pgps_dl.path, sec_tag, 0, FRAGMENT_SIZE);
+	if (err) {
+		state = PGPS_NONE;
+	}
+
+	return err;
+}
+#endif /* CONFIG_NRF_CLOUD_PGPS_DOWNLOAD_TRANSPORT_HTTP */
+
 int nrf_cloud_pgps_preemptive_updates(void)
 {
 	/* keep unexpired, read newer subsequent to last */
@@ -765,6 +911,9 @@ int nrf_cloud_pgps_preemptive_updates(void)
 	if (state == PGPS_NONE) {
 		LOG_ERR("P-GPS subsystem is not initialized.");
 		return -EINVAL;
+	} else if (nrf_cloud_pgps_loading()) {
+		LOG_DBG("Still loading; no need to preemptively update");
+		return 0;
 	}
 
 	if (current == 0xff) {
@@ -785,7 +934,7 @@ int nrf_cloud_pgps_preemptive_updates(void)
 		evt_handler(&evt);
 	}
 
-	LOG_INF("Replacing %d oldest predictions; %d already free",
+	LOG_DBG("Replacing %d oldest predictions; %d already free",
 		current, npgps_num_free());
 
 	if (current >= n) {
@@ -867,7 +1016,7 @@ int nrf_cloud_pgps_inject(struct nrf_cloud_pgps_prediction *p,
 			/* send time */
 			err = nrf_cloud_agps_process((const char *)&sys_time,
 						     sizeof(sys_time) -
-						     sizeof(sys_time.time.sv_tow));
+						     sizeof(sys_time.time.sv_tow) + 4);
 			if (err) {
 				LOG_ERR("Error injecting P-GPS sys_time (%u, %u): %d",
 					sys_time.time.date_day, sys_time.time.time_full_s,
@@ -879,7 +1028,7 @@ int nrf_cloud_pgps_inject(struct nrf_cloud_pgps_prediction *p,
 		}
 		/* it is ok to ignore this err in the function return below */
 	} else {
-		LOG_INF("GPS unit does not need time assistance.");
+		LOG_DBG("GPS unit does not need time assistance.");
 	}
 
 	const struct gps_location *saved_location = npgps_get_saved_location();
@@ -915,7 +1064,7 @@ int nrf_cloud_pgps_inject(struct nrf_cloud_pgps_prediction *p,
 	} else if (remainder.data_flags & NRF_MODEM_GNSS_AGPS_POSITION_REQUEST) {
 		LOG_WRN("GPS unit needs location, but it is unknown!");
 	} else {
-		LOG_INF("GPS unit does not need location assistance.");
+		LOG_DBG("GPS unit does not need location assistance.");
 	}
 
 	if (remainder.sv_mask_ephe) {
@@ -932,7 +1081,7 @@ int nrf_cloud_pgps_inject(struct nrf_cloud_pgps_prediction *p,
 			ret = err;
 		}
 	} else {
-		LOG_INF("GPS unit does not need ephemerides.");
+		LOG_DBG("GPS unit does not need ephemerides.");
 	}
 	return ret; /* just return last non-zero error, if any */
 }
@@ -955,7 +1104,7 @@ static int flash_callback(uint8_t *buf, size_t len, size_t offset)
 		LOG_HEXDUMP_ERR(buf, len, "block dump");
 		err = -ENODATA;
 	} else {
-		LOG_INF("Block at offset:0x%zX len %zu: written", offset, len);
+		LOG_DBG("Block at offset:0x%zX len %zu: written", offset, len);
 		err = 0;
 	}
 	return err;
@@ -964,30 +1113,59 @@ static int flash_callback(uint8_t *buf, size_t len, size_t offset)
 void *flash_callback;
 #endif
 
+static int open_flash(void)
+{
+	int err;
+
+#if defined(CONFIG_NRF_CLOUD_PGPS_STORAGE_PARTITION)
+	prediction_flash_dev = FLASH_AREA_DEVICE(PGPS);
+	flash_area_id = FLASH_AREA_ID(PGPS);
+#elif defined(CONFIG_NRF_CLOUD_PGPS_STORAGE_MCUBOOT_SECONDARY)
+	prediction_flash_dev = FLASH_AREA_DEVICE(MCUBOOT_SECONDARY);
+	flash_area_id = FLASH_AREA_ID(MCUBOOT_SECONDARY);
+#else
+	prediction_flash_dev = FLASH_AREA_DEVICE(APP);
+	flash_area_id = FLASH_AREA_ID(APP);
+#endif
+
+	err = flash_area_open(flash_area_id, &prediction_flash_area);
+	if (err) {
+		prediction_flash_area = NULL;
+		LOG_ERR("Cannot access predictions using flash_area: %d", err);
+		return err;
+	}
+
+	const char *name = "N/A";
+
+	if (prediction_flash_area->fa_dev && prediction_flash_area->fa_dev->name) {
+		name = prediction_flash_area->fa_dev->name;
+	}
+
+	LOG_DBG("Opened flash_area: fa_id:%u, "
+		"fa_off:%ld, fa_size:%zu, prediction_flash_area device name:%s",
+		prediction_flash_area->fa_id,
+		prediction_flash_area->fa_off, prediction_flash_area->fa_size, name);
+	return err;
+}
+
 static int open_storage(uint32_t offset, bool preserve)
 {
 	int err;
-	const struct device *flash_dev;
-	uint32_t block_offset = 0;
-	const char *name = DT_PROP(DT_NODELABEL(flash_controller), label);
+	uint32_t block_offset = offset % flash_page_size;
 
-	LOG_DBG("storage name:%s", name);
-	flash_dev = device_get_binding(name);
-	if (flash_dev == NULL) {
-		LOG_ERR("Failed to get device:'%s'", name);
-		return -EFAULT;
-	}
+	/* assume cache is no longer valid */
+	discard_prediction_buffer();
 
-	block_offset = offset % flash_page_size;
 #if PGPS_DEBUG
 	LOG_DBG("flash_page_size:%u, block_offset:%u, offset:%u, preserve:%d",
 		flash_page_size, block_offset, offset, preserve);
 #endif
 	offset -= block_offset;
 
-	err = stream_flash_init(&stream, flash_dev,
+	LOG_DBG("Initializing stream_flash for device: %s", prediction_flash_dev->name);
+	err = stream_flash_init(&stream, prediction_flash_dev,
 				write_buf, flash_page_size,
-				((uint32_t)storage) + offset,
+				storage_addr + offset,
 				storage_size - offset, flash_callback);
 	if (err) {
 		LOG_ERR("Failed to init flash stream for offset %u: %d",
@@ -997,18 +1175,26 @@ static int open_storage(uint32_t offset, bool preserve)
 	}
 
 	if (preserve && (block_offset != 0) && (block_offset < flash_page_size)) {
-		uint8_t *p = storage + offset;
+		int slot = offset / PGPS_PREDICTION_STORAGE_SIZE;
+		uint8_t *buf = (uint8_t *)get_prediction_slot(slot, NULL);
+		if (buf == NULL) {
+			LOG_ERR("Slot %d cannot be accessed, so it cannot be preserved", slot);
+			err = -EINVAL;
+			return err;
+		}
 
 #if PGPS_DEBUG
 		LOG_DBG("preserving %u bytes", block_offset);
-		LOG_HEXDUMP_DBG(p, MIN(32, block_offset), "start of preserved data");
+		LOG_HEXDUMP_DBG(buf, MIN(32, block_offset), "start of preserved data");
 #endif
-		err = stream_flash_buffered_write(&stream, p, block_offset, false);
+		err = stream_flash_buffered_write(&stream, buf, block_offset, false);
 		if (err) {
 			LOG_ERR("Error writing back %u original bytes", block_offset);
+			return err;
 		}
 	}
-	return err;
+
+	return 0;
 }
 
 static int store_prediction(uint8_t *p, size_t len, uint32_t sentinel, bool last)
@@ -1058,11 +1244,15 @@ static int flush_storage(void)
 	return stream_flash_buffered_write(&stream, NULL, 0, true);
 }
 
-static int process_buffer(uint8_t *buf, size_t len)
+int nrf_cloud_pgps_process_update(uint8_t *buf, size_t len)
 {
 	int err;
 	size_t need;
 	int64_t gps_sec;
+
+	if (buf == NULL) {
+		return -EINVAL;
+	}
 
 	if (index.dl_offset == 0) {
 		struct nrf_cloud_pgps_header *header;
@@ -1075,7 +1265,7 @@ static int process_buffer(uint8_t *buf, size_t len)
 		if (err) {
 			return err;
 		}
-		LOG_INF("Storing P-GPS header");
+		LOG_DBG("Storing P-GPS header");
 		header = (struct nrf_cloud_pgps_header *)buf;
 		cache_pgps_header(header);
 
@@ -1084,7 +1274,7 @@ static int process_buffer(uint8_t *buf, size_t len)
 		if (!err) {
 			if ((index.start_sec <= gps_sec) &&
 			    (gps_sec <= index.end_sec)) {
-				LOG_INF("Received data covers good timeframe");
+				LOG_DBG("Received data covers good timeframe");
 			} else {
 				if (index.start_sec > gps_sec) {
 					LOG_ERR("Received data is not within required "
@@ -1115,10 +1305,14 @@ static int process_buffer(uint8_t *buf, size_t len)
 		index.pred_offset = 0;
 	}
 
+	/* assume cache is no longer valid */
+	discard_prediction_buffer();
+
 	need = MIN((PGPS_PREDICTION_DL_SIZE - index.pred_offset), len);
 	memcpy(&prediction_buf[index.pred_offset], buf, need);
 	LOG_DBG("need:%zd bytes; pred_offset:%u, fragment len:%zd, dl_ofs:%zd",
 		need, index.pred_offset, len, index.dl_offset);
+
 	len -= need;
 	buf += need;
 	index.pred_offset += need;
@@ -1152,7 +1346,7 @@ static int consume_pgps_header(const char *buf, size_t buf_len)
 	}
 
 	if (index.partial_request) {
-		LOG_INF("Partial request; starting at prediction num:%u", index.pnum_offset);
+		LOG_DBG("Partial request; starting at prediction num:%u", index.pnum_offset);
 
 		/* fix up header with full set info */
 		header->prediction_count = index.header.prediction_count;
@@ -1171,7 +1365,7 @@ static void cache_pgps_header(const struct nrf_cloud_pgps_header *header)
 						    index.header.gps_time_of_day);
 	index.period_sec = index.header.prediction_period_min * SEC_PER_MIN;
 	index.end_sec = index.start_sec +
-			index.period_sec * index.header.prediction_count;
+			(int64_t)index.period_sec * index.header.prediction_count;
 }
 
 static size_t get_next_pgps_element(struct nrf_cloud_apgs_element *element,
@@ -1229,6 +1423,7 @@ static int consume_pgps_data(uint8_t pnum, const char *buf, size_t buf_len)
 	size_t parsed_len = 0;
 	int64_t gps_sec;
 	bool finished = false;
+	int err = 0;
 
 	gps_sec = 0;
 
@@ -1240,7 +1435,7 @@ static int consume_pgps_data(uint8_t pnum, const char *buf, size_t buf_len)
 		size_t element_size = get_next_pgps_element(&element, element_ptr);
 
 		if (element_size == 0) {
-			LOG_INF("  End of element");
+			LOG_DBG("  End of element");
 			break;
 		}
 		switch (element.type) {
@@ -1258,7 +1453,7 @@ static int consume_pgps_data(uint8_t pnum, const char *buf, size_t buf_len)
 				}
 			}
 			if (empty) {
-				LOG_INF("Marking ephemeris:%u as empty",
+				LOG_DBG("Marking ephemeris:%u as empty",
 					element.ephemeris->sv_id);
 				element.ephemeris->health = NRF_CLOUD_PGPS_EMPTY_EPHEM_HEALTH;
 			}
@@ -1280,8 +1475,6 @@ static int consume_pgps_data(uint8_t pnum, const char *buf, size_t buf_len)
 			LOG_ERR("Prediction did not include GPS day and time of day; ignoring");
 			LOG_HEXDUMP_DBG(prediction_ptr, buf_len, "bad data");
 		} else {
-			int err;
-
 			LOG_INF("Storing prediction num:%u idx:%u for gps sec:%d",
 				pnum, index.loading_count, (int32_t)gps_sec);
 
@@ -1291,12 +1484,11 @@ static int consume_pgps_data(uint8_t pnum, const char *buf, size_t buf_len)
 					 finished || (index.storage_extent == 1));
 			index.predictions[pnum] = npgps_block_to_pointer(index.store_block);
 
-			if (pgps_need_assistance &&
-			    (finished || (index.loading_count > 1))) {
-				nrf_cloud_pgps_notify_prediction();
-			}
-
 			if (!finished) {
+				if (pgps_need_assistance && (index.loading_count > 1)) {
+					nrf_cloud_pgps_notify_prediction();
+				}
+
 				if (evt_handler) {
 					struct nrf_cloud_pgps_event evt = {
 						.type = PGPS_EVT_LOADING,
@@ -1305,11 +1497,16 @@ static int consume_pgps_data(uint8_t pnum, const char *buf, size_t buf_len)
 					evt_handler(&evt);
 				}
 			} else {
+				if (pgps_need_assistance) {
+					nrf_cloud_pgps_notify_prediction();
+				}
+
 				LOG_INF("All P-GPS data received. Done.");
 				state = PGPS_READY;
 				if (evt_handler) {
 					struct nrf_cloud_pgps_event evt = {
 						.type = PGPS_EVT_READY,
+						.prediction = NULL
 					};
 
 					evt_handler(&evt);
@@ -1321,71 +1518,54 @@ static int consume_pgps_data(uint8_t pnum, const char *buf, size_t buf_len)
 			index.store_block = npgps_alloc_block();
 			if (index.store_block == NO_BLOCK) {
 				LOG_ERR("No more free blocks!");
-				return -ENOMEM;
+				err = -ENOMEM;
+				goto fail;
 			}
 			index.storage_extent--;
 			if (index.storage_extent == 0) {
 				index.storage_extent = npgps_get_block_extent(index.store_block);
-				LOG_INF("Moving to new flash region:%d, len:%d",
+				LOG_DBG("Moving to new flash region:%d, len:%d",
 					index.store_block, index.storage_extent);
 				err = flush_storage();
 				if (err) {
 					LOG_ERR("Error flushing storage:%d", err);
-					return err;
+					goto fail;
 				}
 				err = open_storage(npgps_block_to_offset(index.store_block),
 						   false);
 				if (err) {
 					LOG_ERR("Error opening storage again:%d", err);
-					return err;
+					goto fail;
 				}
 			}
 		}
 	} else {
 		LOG_ERR("Parsing incomplete; aborting.");
-		state = PGPS_NONE;
-		return -EINVAL;
+		err = -EINVAL;
+		goto fail;
 	}
 
 	return 0;
+
+fail:
+	state = PGPS_NONE;
+	return err;
 }
 
-/* handle incoming P-GPS packets */
-int nrf_cloud_pgps_process(const char *buf, size_t buf_len)
+int nrf_cloud_pgps_begin_update(void)
 {
-	static char host[CONFIG_DOWNLOAD_CLIENT_MAX_HOSTNAME_SIZE];
-	static char path[CONFIG_DOWNLOAD_CLIENT_MAX_FILENAME_SIZE];
-	static uint8_t prev_pnum;
-	uint8_t pnum;
 	int err;
-	struct nrf_cloud_pgps_result pgps_dl = {
-		.host = host,
-		.host_sz = sizeof(host),
-		.path = path,
-		.path_sz = sizeof(path)
-	};
 
-	if (state == PGPS_NONE) {
-		LOG_ERR("P-GPS subsystem is not initialized.");
-		return -EINVAL;
-	}
-#if defined(CONFIG_NRF_CLOUD_MQTT)
-	LOG_HEXDUMP_DBG(buf, buf_len, "MQTT packet");
-#endif
-	if (!buf_len) {
-		LOG_ERR("Zero length packet received");
-		state = PGPS_NONE;
-		return -EINVAL;
+	err = npgps_download_lock();
+	if (err) {
+		LOG_ERR("PGPS download already active.");
+		return err;
 	}
 
-	if (ignore_packets) {
-		LOG_ERR("IGNORING PACKETS");
-		LOG_HEXDUMP_INF(buf, buf_len, "Unexpected packet");
-		return -EINVAL;
-	}
+	/* assume cache is no longer valid */
+	discard_prediction_buffer();
 
 	state = PGPS_LOADING;
-	prev_pnum = 0xff;
 	if (!index.partial_request) {
 		index.header.prediction_count = NUM_PREDICTIONS;
 		index.header.prediction_period_min = PREDICTION_PERIOD;
@@ -1393,7 +1573,7 @@ int nrf_cloud_pgps_process(const char *buf, size_t buf_len)
 			index.header.prediction_period_min * SEC_PER_MIN;
 		memset(index.predictions, 0, sizeof(index.predictions));
 	} else {
-		for (pnum = index.pnum_offset;
+		for (uint8_t pnum = index.pnum_offset;
 		     pnum < index.expected_count + index.pnum_offset; pnum++) {
 			index.predictions[pnum] = NULL;
 		}
@@ -1402,39 +1582,45 @@ int nrf_cloud_pgps_process(const char *buf, size_t buf_len)
 	index.store_block = npgps_alloc_block();
 	if (index.store_block == NO_BLOCK) {
 		LOG_ERR("No free flash space!");
+		state = PGPS_NONE;
+		npgps_download_unlock();
 		return -ENOMEM;
 	}
 	index.storage_extent = npgps_get_block_extent(index.store_block);
-	LOG_INF("opening storage at block:%d, len:%d", index.store_block,
+	LOG_DBG("Opening storage at block:%d, len:%d", index.store_block,
 		index.storage_extent);
 	err = open_storage(npgps_block_to_offset(index.store_block),
 			   index.partial_request);
 	if (err) {
 		state = PGPS_NONE;
+		npgps_download_unlock();
 		return err;
 	}
 
-	err = nrf_cloud_parse_pgps_response(buf, &pgps_dl);
-	if (err) {
-		return err;
-	}
 	index.dl_offset = 0;
-	ignore_packets = true;
-	int sec_tag = SEC_TAG;
+	accept_packets = false;
+	LOG_DBG("Ready for updated P-GPS data");
 
-	if (FORCE_HTTP_DL && (strncmp(pgps_dl.host, "https", 5) == 0)) {
-		int i;
-		int len = strlen(pgps_dl.host);
-
-		for (i = 4; i < len; i++) {
-			pgps_dl.host[i] = pgps_dl.host[i + 1];
-		}
-		sec_tag = -1;
-	}
-
-	return npgps_download_start(pgps_dl.host, pgps_dl.path, sec_tag,
-				    NULL, FRAGMENT_SIZE);
+	return 0;
 }
+
+int nrf_cloud_pgps_finish_update(void)
+{
+	npgps_download_unlock();
+	return 0;
+}
+
+#if defined(CONFIG_NRF_CLOUD_PGPS_DOWNLOAD_TRANSPORT_HTTP)
+static void end_transfer_handler(int transfer_result)
+{
+	if (transfer_result == 0) {
+		LOG_DBG("Download completed without error.");
+	} else {
+		LOG_ERR("Download failed: %d", transfer_result);
+	}
+	nrf_cloud_pgps_finish_update();
+}
+#endif /* CONFIG_NRF_CLOUD_PGPS_DOWNLOAD_TRANSPORT_HTTP */
 
 int nrf_cloud_pgps_init(struct nrf_cloud_pgps_init_param *param)
 {
@@ -1443,13 +1629,29 @@ int nrf_cloud_pgps_init(struct nrf_cloud_pgps_init_param *param)
 		.type = PGPS_EVT_INIT,
 	};
 
-	__ASSERT(((REPLACEMENT_THRESHOLD & 1) == 0),
-		 "REPLACEMENT_THRESHOLD must be even");
+#if defined(CONFIG_NRF_CLOUD_PGPS_STORAGE_PARTITION)
+	BUILD_ASSERT(CONFIG_NRF_CLOUD_PGPS_PARTITION_SIZE >=
+		 (CONFIG_NRF_CLOUD_PGPS_NUM_PREDICTIONS * BLOCK_SIZE),
+		 "P-GPS partition size is too small");
+	if (param->storage_base || param->storage_size) {
+		LOG_WRN("Overriding P-GPS storage with P-GPS partition");
+	}
+	param->storage_base = PM_PGPS_ADDRESS;
+	param->storage_size = PM_PGPS_SIZE;
+#elif defined(CONFIG_NRF_CLOUD_PGPS_STORAGE_MCUBOOT_SECONDARY)
+	if (param->storage_base || param->storage_size) {
+		LOG_WRN("Overriding P-GPS storage with MCUboot secondary partition");
+	}
+	param->storage_base = PM_MCUBOOT_SECONDARY_ADDRESS;
+	param->storage_size = PM_MCUBOOT_SECONDARY_SIZE;
+#endif
+
 	__ASSERT(param != NULL, "param must be provided");
-	__ASSERT(param->storage_base != 0, "storage must be provided");
 	__ASSERT((param->storage_size >= (NUM_BLOCKS * BLOCK_SIZE)),
 		 "insufficient storage provided; need at least %u bytes",
 		 (NUM_BLOCKS * BLOCK_SIZE));
+
+	LOG_INF("Storage base:0x%X, size:%u", param->storage_base, param->storage_size);
 
 	evt_handler = param->event_handler;
 	if (evt_handler) {
@@ -1459,6 +1661,11 @@ int nrf_cloud_pgps_init(struct nrf_cloud_pgps_init_param *param)
 	flash_page_size = nrfx_nvmc_flash_page_size_get();
 	if (!flash_page_size) {
 		flash_page_size = 4096;
+	}
+
+	err = open_flash();
+	if (err) {
+		return err;
 	}
 
 	if (nrf_cloud_pgps_loading()) {
@@ -1484,18 +1691,20 @@ int nrf_cloud_pgps_init(struct nrf_cloud_pgps_init_param *param)
 #endif
 	}
 
-	storage = (uint8_t *)param->storage_base;
+	storage_addr = param->storage_base;
 	storage_size = param->storage_size;
 	(void)ngps_block_pool_init(param->storage_base, NUM_PREDICTIONS);
 
 	memset(&index, 0, sizeof(index));
 	(void)npgps_settings_init();
 
-	err = npgps_download_init(process_buffer);
+#if defined(CONFIG_NRF_CLOUD_PGPS_DOWNLOAD_TRANSPORT_HTTP)
+	err = npgps_download_init(nrf_cloud_pgps_process_update, end_transfer_handler);
 	if (err) {
 		LOG_ERR("Error initializing download client:%d", err);
 		return err;
 	}
+#endif
 
 	state = PGPS_INITIALIZING;
 
@@ -1523,20 +1732,20 @@ int nrf_cloud_pgps_init(struct nrf_cloud_pgps_init_param *param)
 		num_valid = validate_stored_predictions(&gps_day, &gps_time_of_day);
 	}
 
-	struct nrf_cloud_pgps_prediction *test_prediction;
+	struct nrf_cloud_pgps_prediction *found_prediction = NULL;
 	int pnum = -1;
 
 	LOG_DBG("num_valid:%u, count:%u", num_valid, count);
 	if (num_valid) {
 		LOG_INF("Checking if P-GPS data is expired...");
-		err = nrf_cloud_pgps_find_prediction(&test_prediction);
+		err = nrf_cloud_pgps_find_prediction(&found_prediction);
 		if (err == -ETIMEDOUT) {
 			LOG_WRN("Predictions expired. Requesting predictions...");
 			num_valid = 0;
 		} else if (err >= 0) {
 			LOG_INF("Found valid prediction, day:%u, time:%u",
-				test_prediction->time.date_day,
-				test_prediction->time.time_full_s);
+				found_prediction->time.date_day,
+				found_prediction->time.time_full_s);
 			pnum = err;
 		}
 	}
@@ -1549,10 +1758,14 @@ int nrf_cloud_pgps_init(struct nrf_cloud_pgps_init_param *param)
 			evt_handler(&evt);
 		}
 
-		if (IS_ENABLED(CONFIG_NRF_CLOUD_PGPS_REQUEST_ALL_UPON_INIT)) {
-			err = pgps_request_all();
+		if (!IS_ENABLED(CONFIG_NRF_CLOUD_PGPS_REQUEST_UPON_INIT)) {
+			return 0;
 		}
+		err = pgps_request_all();
 	} else if (num_valid < count) {
+		if (!IS_ENABLED(CONFIG_NRF_CLOUD_PGPS_REQUEST_UPON_INIT)) {
+			return 0;
+		}
 		/* read missing predictions at end */
 		struct gps_pgps_request request;
 
@@ -1568,6 +1781,9 @@ int nrf_cloud_pgps_init(struct nrf_cloud_pgps_init_param *param)
 
 		err = pgps_request(&request);
 	} else if ((count - (pnum + 1)) < REPLACEMENT_THRESHOLD) {
+		if (!IS_ENABLED(CONFIG_NRF_CLOUD_PGPS_REQUEST_UPON_INIT)) {
+			return 0;
+		}
 		/* Replace expired predictions with newer.
 		 * The function will emit the request as a PGPS_EVT_REQUEST if
 		 * auto-request is disabled.
@@ -1577,8 +1793,8 @@ int nrf_cloud_pgps_init(struct nrf_cloud_pgps_init_param *param)
 		state = PGPS_READY;
 		LOG_INF("P-GPS data is up to date.");
 		if (evt_handler) {
-			evt.type = PGPS_EVT_READY;
-
+			evt.type = PGPS_EVT_AVAILABLE;
+			evt.prediction = found_prediction;
 			evt_handler(&evt);
 		}
 		err = 0;

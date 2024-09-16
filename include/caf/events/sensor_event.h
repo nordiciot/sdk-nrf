@@ -14,11 +14,15 @@
  * @brief CAF Sensor Event.
  */
 
-#include "event_manager.h"
+#include <app_event_manager.h>
+#include <app_event_manager_profiler_tracer.h>
+#include <zephyr/drivers/sensor.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
 
 /** @brief Sensor states. */
 enum sensor_state {
@@ -37,7 +41,10 @@ enum sensor_state {
 	SENSOR_STATE_ERROR,
 
 	/** Number of sensor states. */
-	SENSOR_STATE_COUNT
+	SENSOR_STATE_COUNT,
+
+	/** Unused in code, required for inter-core compatibility. */
+	APP_EM_ENFORCE_ENUM_SIZE(SENSOR_STATE)
 };
 
 /** @brief Sensor state event.
@@ -48,17 +55,17 @@ enum sensor_state {
  * application. The Common Application Framework does not impose any standard way of describing
  * sensors. Format and content of the sensor description is defined by the application.
  *
- * @warning The sensor state event related to the given sensor must use the same description as
- *          #sensor_event related to the sensor.
+ * @note The sensor state event related to the given sensor must use the same description as
+ *       #sensor_event related to the sensor.
  */
 struct sensor_state_event {
-	struct event_header header; /**< Event header. */
+	struct app_event_header header; /**< Event header. */
 
 	const char *descr; /**< Description of the sensor. */
 	enum sensor_state state; /**< New state of the sensor. */
 };
 
-EVENT_TYPE_DECLARE(sensor_state_event);
+APP_EVENT_TYPE_DECLARE(sensor_state_event);
 
 /** @brief Sensor event.
  *
@@ -68,32 +75,55 @@ EVENT_TYPE_DECLARE(sensor_state_event);
  * application. The Common Application Framework does not impose any standard way of describing
  * sensors. Format and content of the sensor description is defined by the application.
  *
- * The dyndata contains sensor readouts represented as array of floating-point values. Content of
+ * The dyndata contains sensor readouts represented as array of fixed-point values. Content of
  * the array depends only on selected sensor. For example an accelerometer may report acceleration
- * in X, Y and Z axis as three floating-point values. @ref sensor_event_get_data_cnt and @ref
+ * in X, Y and Z axis as three fixed-point values. @ref sensor_event_get_data_cnt and @ref
  * sensor_event_get_data_ptr can be used to access the sensor data provided by a given sensor event.
  *
- * @warning The sensor event related to the given sensor must use the same description as
- *          #sensor_state_event related to the sensor.
+ * @note The sensor event related to the given sensor must use the same description as
+ *       #sensor_state_event related to the sensor.
  */
 struct sensor_event {
-	struct event_header header; /**< Event header. */
+	struct app_event_header header; /**< Event header. */
 
 	const char *descr; /**< Description of the sensor. */
-	struct event_dyndata dyndata; /**< Sensor data. Provided as floating-point values. */
+	struct event_dyndata dyndata; /**< Sensor data. Provided as fixed-point values. */
 };
+
+/** @brief Set sensor period event.
+ *
+ * The set sensor period event can be submitted by user to change sensor sampling period.
+ *
+ * The description field is a pointer to a string that is used to identify the sensor by the
+ * application. The Common Application Framework does not impose any standard way of describing
+ * sensors. Format and content of the sensor description are defined by the application.
+ *
+ * @note The set sensor period event related to the given sensor must use the same description as
+ *       #sensor_event related to the sensor.
+ */
+struct set_sensor_period_event {
+	/** Event header. */
+	struct app_event_header header;
+
+	/** Description of the sensor. */
+	const char *descr;
+	/** Sensors new sampling period in ms. */
+	int sampling_period;
+};
+
+APP_EVENT_TYPE_DECLARE(set_sensor_period_event);
 
 /** @brief Get size of sensor data.
  *
  * @param[in] event       Pointer to the sensor_event.
  *
- * @return Size of the sensor data, expressed as a number of floating-point values.
+ * @return Size of the sensor data, expressed as a number of struct sensor_value.
  */
 static inline size_t sensor_event_get_data_cnt(const struct sensor_event *event)
 {
-	__ASSERT_NO_MSG((event->dyndata.size % sizeof(float)) == 0);
+	__ASSERT_NO_MSG((event->dyndata.size % sizeof(struct sensor_value)) == 0);
 
-	return (event->dyndata.size / sizeof(float));
+	return (event->dyndata.size / sizeof(struct sensor_value));
 }
 
 /** @brief Get pointer to the sensor data.
@@ -102,9 +132,9 @@ static inline size_t sensor_event_get_data_cnt(const struct sensor_event *event)
  *
  * @return Pointer to the sensor data.
  */
-static inline float *sensor_event_get_data_ptr(const struct sensor_event *event)
+static inline struct sensor_value *sensor_event_get_data_ptr(const struct sensor_event *event)
 {
-	return (float *)event->dyndata.data;
+	return (struct sensor_value *)event->dyndata.data;
 }
 
 #ifdef __cplusplus
@@ -119,7 +149,7 @@ static inline float *sensor_event_get_data_ptr(const struct sensor_event *event)
 extern "C" {
 #endif
 
-EVENT_TYPE_DYNDATA_DECLARE(sensor_event);
+APP_EVENT_TYPE_DYNDATA_DECLARE(sensor_event);
 
 #ifdef __cplusplus
 }

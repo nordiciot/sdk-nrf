@@ -19,7 +19,7 @@ The Time Server model adds the following new model instances in the composition 
 Operation
 =========
 
-The Time Server model builds an ad-hoc time synchronization hierarchy through the mesh network, that propagates the current wall-clock time as TAI timestamps.
+The Time Server model builds an ad-hoc time synchronization hierarchy through the mesh network that propagates the current wall-clock time as TAI timestamps.
 
 To ensure consistent synchronization, the Time Server model should be configured to publish its Time Status with regular intervals using a :ref:`zephyr:bluetooth_mesh_models_cfg_cli` model.
 
@@ -27,7 +27,7 @@ To ensure consistent synchronization, the Time Server model should be configured
 
    To ensure a high level of accuracy, Time Status messages are always transmitted one hop at a time if it is sent as an unsolicited message.
    Every mesh node without access to the Time Authority that needs access to the common time reference must be within the radio range of at least one other node with the Time Server model.
-   Time Server nodes that have no neighboring Time Servers need to get this information in some other way (e.g. getting time from the Time Authority).
+   Time Server nodes that have no neighboring Time Servers need to get this information in some other way (for example, getting time from the Time Authority).
 
 Roles
 *****
@@ -57,14 +57,14 @@ The Time Server's time synchronization mechanism is not perfect, and every times
 The clock uncertainty is measured in milliseconds, and can come from various sources, like inaccuracies in the original clock source, internal clock drift or uncertainty in the mesh stack itself.
 The Time Server inherits the uncertainty of the node it got its Time Status from, and the clock uncertainty of each mesh node increases for every hop the Time Status had to make from the Time Authority.
 
-The expected uncertainty in the mesh stack comes from the fluctuation in time to encrypt a message and broadcast it, and can be configured through the :kconfig:`CONFIG_BT_MESH_TIME_MESH_HOP_UNCERTAINTY`.
+The expected uncertainty in the mesh stack comes from the fluctuation in time to encrypt a message and broadcast it, and can be configured through the :kconfig:option:`CONFIG_BT_MESH_TIME_MESH_HOP_UNCERTAINTY`.
 
 In addition to the uncertainty added by the mesh stack itself, the internal clock of each device will increase the uncertainty of the timestamp over time.
 As crystal hardware is not perfectly accurate, it will gradually drift away from the correct time.
 The potential range of this clock drift is generally a known property of the onboard hardware, even if the actual drift fluctuates.
-As it's impossible to measure the actual clock drift at any given moment, the Time Server will instead gradually increase the uncertainty of its timestamp based on the known clock accuracy.
+As it is impossible to measure the actual clock drift at any given moment, the Time Server gradually increases the uncertainty of its timestamp based on the known clock accuracy.
 
-The Time Server's notion of the local clock accuracy can be configured with :kconfig:`CONFIG_BT_MESH_TIME_SRV_CLOCK_ACCURACY`.
+The Time Server's notion of the local clock accuracy can be configured with :kconfig:option:`CONFIG_BT_MESH_TIME_SRV_CLOCK_ACCURACY`.
 By default, it uses the configured kernel clock control accuracy.
 
 Leap seconds and time zones
@@ -73,7 +73,7 @@ Leap seconds and time zones
 As described in the section on :ref:`bt_mesh_time_tai_readme`, the Time Server measures time as TAI seconds, and adds the UTC leap second offset and local time zone as additional information.
 
 Both leap seconds and time zone changes are irregular events that are scheduled by governing boards ahead of time.
-Because of this, it's impossible to algorithmically determine the time zone and UTC offset for future dates, as there's no way to tell when and how many changes will be scheduled in the future.
+Because of this, it is impossible to algorithmically determine the time zone and UTC offset for future dates, as there is no way to tell when and how many changes will be scheduled.
 
 .. note::
    The time zone of the device not only changes with its location on the globe, but also with Daylight Saving Time.
@@ -87,7 +87,7 @@ The application can then reschedule any timeouts that happen after the change to
 Timestamp conversion
 ********************
 
-To convert between human readable time and device time, the Time Server model API includes three functions with signatures similar to the C standard library's time.h API:
+To convert between human-readable time and device time, the Time Server model API includes three functions with signatures similar to the C standard library's :file:`time.h` API:
 
 * :cpp:func:`bt_mesh_time_srv_mktime`: Get the uptime at a specific date/time.
 * :cpp:func:`bt_mesh_time_srv_localtime`: Get the local date/time at a specific uptime.
@@ -112,7 +112,7 @@ For example, if you want to schedule your mesh device to send up fireworks exact
 
       int64_t uptime = bt_mesh_time_srv_mktime(&time_srv, &new_years_eve);
       if (uptime < 0) {
-         /* Time Server doesn't know */
+         /* Time Server does not know */
          return;
       }
 
@@ -127,7 +127,7 @@ And, to print the current date and time, you can use ``localtime``:
    {
       struct tm *today = bt_mesh_time_srv_localtime(&time_srv, k_uptime_get());
       if (!today) {
-         /* Time Server doesn't know */
+         /* Time Server does not know */
          return;
       }
 
@@ -161,8 +161,8 @@ Configuration
 
 The clock uncertainty of the Time Server model can be configured with the following configuration options:
 
-* :kconfig:`CONFIG_BT_MESH_TIME_MESH_HOP_UNCERTAINTY`: The amount of uncertainty introduced in the mesh stack through sending a single message, in milliseconds.
-* :kconfig:`CONFIG_BT_MESH_TIME_SRV_CLOCK_ACCURACY`: The largest possible clock drift introduced by the kernel clock's hardware, in parts per million.
+* :kconfig:option:`CONFIG_BT_MESH_TIME_MESH_HOP_UNCERTAINTY`: The amount of uncertainty introduced in the mesh stack through sending a single message, in milliseconds.
+* :kconfig:option:`CONFIG_BT_MESH_TIME_SRV_CLOCK_ACCURACY`: The largest possible clock drift introduced by the kernel clock's hardware, in parts per million.
 
 States
 ======

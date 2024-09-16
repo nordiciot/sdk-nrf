@@ -13,6 +13,18 @@ It also displays results of the machine learning model on LEDs.
 The Edge Impulse platform collects data from sensors, trains machine learning model, and deploys the model to your Nordic Semiconductor's device.
 To learn more about Edge Impulse support in the |NCS| see :ref:`ug_edge_impulse`.
 
+Requirements
+************
+
+The application supports the following development kits:
+
+.. table-from-sample-yaml::
+
+The available configurations use only built-in sensors or the simulated sensor signal.
+You do not need to connect any additional components to the board.
+
+.. include:: /includes/tfm.txt
+
 Overview
 ********
 
@@ -22,18 +34,17 @@ It also uses the `Edge Impulse's data forwarder`_ protocol.
 Sampling sensors
 ================
 
-The application handles the sensor sampling using the :ref:`caf_sensor_sampler`.
+The application handles the sensor sampling using the :ref:`caf_sensor_manager`.
 This module uses Zephyr's :ref:`zephyr:sensor_api` to handle the sampling.
 This approach allows to use any sensor available in Zephyr.
 
 By default, the following sensors are used by the application:
 
-* Thingy:52 - built-in accelerometer (``LIS2DH``).
-* Thingy:53 - built-in accelerometer (``ADXL362``).
-* nRF52840 Development Kit - simulated sensor (:ref:`sensor_sim`).
+* Thingy:53 - Built-in accelerometer (``ADXL362``).
+* nRF52840 Development Kit - Simulated sensor (:ref:`sensor_sim`).
   The simulated sensor generates predefined waves as acceleration.
   This development kit does not have a built-in accelerometer.
-* nRF5340 Development Kit - simulated sensor (:ref:`sensor_sim`).
+* nRF5340 Development Kit - Simulated sensor (:ref:`sensor_sim`).
   The simulated sensor generates predefined waves as acceleration.
   This development kit does not have a built-in accelerometer.
 
@@ -43,7 +54,6 @@ Forwarding data
 The application uses `Edge Impulse's data forwarder`_ protocol to forward data to `Edge Impulse studio`_.
 By default, the following transports are used:
 
-* Thingy:52 uses :ref:`nus_service_readme`.
 * Thingy:53 uses :ref:`nus_service_readme`.
 * nRF52840 Development Kit uses :ref:`zephyr:uart_api`.
 * nRF5340 Development Kit uses :ref:`zephyr:uart_api`.
@@ -57,16 +67,16 @@ The labels that are assigned by the machine learning model are specific to the g
 
 By default, the application uses pretrained machine leaning models deployed in `Edge Impulse studio`_:
 
-* Both Thingy:52 and Thingy:53 use the `NCS hardware accelerometer machine learning model`_.
+* Thingy:53 uses the `nRF Connect SDK hardware accelerometer machine learning model`_.
   The model uses the data from the built-in accelerometer to recognize the following gestures:
 
-  * ``idle`` - the device is placed on a flat surface.
-  * ``updown`` - the device is moved in updown direction.
-  * ``rotate`` - the device is rotated.
-  * ``tap`` - the device is tapped while placed on a flat surface.
+  * ``idle`` - The device is placed on a flat surface.
+  * ``updown`` - The device is moved in updown direction.
+  * ``rotate`` - The device is rotated.
+  * ``tap`` - The device is tapped while placed on a flat surface.
 
   Unknown gestures, such as shaking the device, are recognized as anomaly.
-* Both the nRF52840 Development Kit and nRF5340 Development Kit use the `NCS simulated sensor machine learning model`_.
+* Both the nRF52840 Development Kit and nRF5340 Development Kit use the `nRF Connect SDK simulated sensor machine learning model`_.
   The model uses simulated sensor data to recognize the following simulated wave types:
 
   * ``sine``
@@ -79,16 +89,41 @@ By default, the application uses pretrained machine leaning models deployed in `
 The application displays LED effects that correspond to the machine learning results.
 For more detailed information, see the `User interface`_ section.
 
+Power management
+================
+
+Reducing power consumption is important for every battery-powered device.
+
+In the nRF Machine Learning application, application modules are automatically suspended or turned off if the device is not in use for a predefined period.
+The application uses :ref:`caf_power_manager` for this purpose.
+This means that Zephyr power management is forced to the :c:enumerator:`PM_STATE_ACTIVE` state when the device is in either the Power management active or the Power management suspended state, but the power off state is forced directly by :ref:`caf_power_manager` as Zephyr's :c:enumerator:`PM_STATE_SOFT_OFF` state.
+
+* In the :c:enumerator:`POWER_MANAGER_LEVEL_ALIVE` state, the device is in working condition, Bluetooth is advertising whenever required and all the connections are maintained.
+* In the :c:enumerator:`POWER_MANAGER_LEVEL_SUSPENDED` state, the device maintains the active Bluetooth connection.
+* In the :c:enumerator:`POWER_MANAGER_LEVEL_OFF` state, the CPU is switched to the off mode.
+
+In the suspended and OFF states, most of the functionalities are disabled.
+For example, LEDs and sensors are turned off and Bluetooth advertising is stopped.
+
+Any button press can wake up the device.
+
+For the Thingy:53, the sensor supports a trigger that can be used for active power management.
+As long as the device detects acceleration, the board is kept in the active state.
+When the board is in the :c:enumerator:`POWER_MANAGER_LEVEL_SUSPENDED` state, it can be woken up by acceleration threshold by moving the device.
+
+You can define the time interval after which the peripherals are suspended or powered off in the :kconfig:option:`CONFIG_CAF_POWER_MANAGER_TIMEOUT` option.
+By default, this period is set to 120 seconds.
+
 .. _nrf_machine_learning_app_architecture:
 
 Firmware architecture
 =====================
 
 The nRF Machine Learning application has a modular structure, where each module has a defined scope of responsibility.
-The application uses the :ref:`event_manager` to distribute events between modules in the system.
+The application uses the :ref:`app_event_manager` to distribute events between modules in the system.
 
 The following figure shows the application architecture.
-The figure visualizes relations between Event Manager, modules, drivers, and libraries.
+The figure visualizes relations between Application Event Manager, modules, drivers, and libraries.
 
 .. figure:: /images/ml_app_architecture.svg
    :alt: nRF Machine Learning application architecture
@@ -100,25 +135,6 @@ In other words, not all of the modules need to be enabled for a given reference 
 For example, the :ref:`caf_ble_state` and :ref:`caf_ble_adv` modules are not enabled if the configuration does not use Bluetooth®.
 
 See :ref:`nrf_machine_learning_app_internal_modules` for detailed information about every module used by the nRF Machine Learning application.
-
-Requirements
-************
-
-The application supports the following development kits:
-
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: thingy52_nrf52832, thingy53_nrf5340_cpuapp_and_cpuapp_ns, nrf52840dk_nrf52840, nrf5340dk_nrf5340_cpuapp
-
-The available configurations use only built-in sensors or the simulated sensor signal.
-There is no need to connect any additional components to the board.
-
-Programming Thingy:52
-=====================
-
-The Thingy:52 does not have the J-Link debug IC and the application configuration does not use a bootloader.
-Use an external debugger to program the firmware.
-See :ref:`zephyr:thingy52_nrf52832` documentation for details.
 
 Programming Thingy:53
 =====================
@@ -132,12 +148,12 @@ If you build this application for the nRF53 DK, it enables additional features s
 
 * MCUboot bootloader with serial recovery and multi-image update.
 * Static configuration of :ref:`partition_manager`.
-* DFU over-the-air via Simple Management Protocol over Bluetooth.
+* DFU over-the-air using Simple Management Protocol over Bluetooth.
 
 See :ref:`ug_thingy53` for detailed information about the mentioned features.
 
 The nRF53 DK has a J-Link debug IC that can be used to program the firmware.
-Alternatively, firmware can be updated over MCUBoot serial recovery or DFU over-ther-air via Simple Management Protocol over Bluetooth.
+Alternatively, firmware can be updated over MCUBoot serial recovery or DFU over-the-air using Simple Management Protocol over Bluetooth.
 Keep in mind that if you use bootloader to update firmware, the new firmware must be compatible with used bootloader and partition map.
 
 The nRF53 Development Kit uses RTT as logger's backend.
@@ -162,7 +178,7 @@ Nordic UART Service requirements
 If you want to forward data over Nordic UART Service (NUS), you need an additional development kit that is able to run the :ref:`central_uart` sample.
 Check the sample Requirements section for the list of supported development kits.
 The sample is used to receive data over NUS and forward it to the host computer over UART.
-See `Testing with Thingy devices`_ for how to test this solution.
+See `Testing with Thingy:53`_ for how to test this solution.
 
 .. _nrf_machine_learning_app_requirements_build_types:
 
@@ -172,23 +188,28 @@ nRF Machine Learning build types
 The nRF Machine Learning application does not use a single :file:`prj.conf` file.
 Configuration files are provided for different build types for each supported board.
 
-.. include:: /gs_modifying.rst
+Each board has its own :file:`prj.conf` file, which represents a ``debug`` build type.
+Other build types are covered by dedicated files with the build type added as a suffix to the ``prj`` part, as per the following list.
+For example, the ``release`` build type file name is :file:`prj_release.conf`.
+If a board has other configuration files, for example associated with partition layout or child image configuration, these follow the same pattern.
+
+.. include:: /config_and_build/modifying.rst
    :start-after: build_types_overview_start
    :end-before: build_types_overview_end
 
 Before you start testing the application, you can select one of the build types supported by nRF Machine Learning application, depending on your development kit and the building method.
 The application supports the following build types:
 
-* ``ZDebug`` -- Debug version of the application - can be used to verify if the application works correctly.
-* ``ZRelease`` -- Release version of the application - can be used to achieve better performance and reduce memory consumption.
+* ``debug`` -- Debug version of the application - can be used to verify if the application works correctly.
+* ``release`` -- Release version of the application - can be used to achieve better performance and reduce memory consumption.
 
 Not every board supports both mentioned build types.
 The given board can also support some additional configurations of the nRF Machine Learning application.
-For example, the nRF52840 Development Kit supports ``ZDebugNUS`` configuration that uses :ref:`nus_service_readme` instead of :ref:`zephyr:uart_api` for data forwarding.
+For example, the nRF52840 Development Kit supports ``nus`` configuration that uses :ref:`nus_service_readme` instead of :ref:`zephyr:uart_api` for data forwarding.
 
 .. note::
     `Selecting a build type`_ is optional.
-    The ``ZDebug`` build type is used by default if no build type is explicitly selected.
+    The ``debug`` build type is used by default if no build type is explicitly selected.
 
 User interface
 **************
@@ -202,14 +223,13 @@ Buttons
 The application supports a button that is used to switch between data forwarding and running the machine learning model.
 You can trigger the change by pressing and holding the button for longer than 5 seconds.
 
+.. note::
+   If a given configuration supports Bluetooth, then two sequences of the button press and release in a short time interval, shortly after application boot, removes the Bluetooth bonds.
+
 If the application uses the simulated sensor signal, you can use another button to change signal generated by the simulated sensor.
 The change is triggered by any press of the button.
 
 By default, the following buttons are used by the application:
-
-* Thingy:52:
-
-  * The **SW2** button switches between data forwarding and running the machine learning model.
 
 * Thingy:53:
 
@@ -232,15 +252,14 @@ The application defines common LED effects for both the machine learning results
 
 By default, the application uses the following LED effects:
 
-* Thingy:52 and Thingy:53 display the application state in the RGB scale.
-  Thingy:52 uses the Lightwell LEDs and Thingy:53 uses the **LED1**.
+* Thingy:53 displays the application state in the RGB scale using **LED1**.
 
   * If the device is returning the machine learning prediction results, the LED uses following predefined colors:
 
-    * ``rotate`` - red
-    * ``updown`` - green
-    * ``tap`` - blue
-    * Anomaly - purple
+    * ``rotate`` - Red
+    * ``updown`` - Green
+    * ``tap`` - Blue
+    * Anomaly - Purple
 
     If the machine learning model is running, but it has not detected anything yet or the ``idle`` state is detected, the LED is blinking.
     After a successful detection, the LED is set to the predefined color.
@@ -275,7 +294,7 @@ By default, the application uses the following LED effects:
 Configuration
 *************
 
-The nRF Machine Learning application is modular and event-driven.
+The nRF Machine Learning application is modular and event driven.
 You can enable and configure the modules separately for selected board and build type.
 See the documentation page of selected module for information about functionalities provided by the module and its configuration.
 See :ref:`nrf_machine_learning_app_internal_modules` for list of modules available in the application.
@@ -293,18 +312,27 @@ The nRF Machine Learning application uses the following files as configuration s
   The :file:`_def` files are used by the nRF Machine Learning application modules and :ref:`lib_caf` modules.
 
 The application configuration files for a given board must be defined in a board-specific directory in the :file:`applications/machine_learning/configuration/` directory.
-For example, the configuration files for the Thingy:52 are defined in the :file:`applications/machine_learning/configuration/thingy52_nrf52832` directory.
+For example, the configuration files for the Thingy:53 are defined in the :file:`applications/machine_learning/configuration/thingy53_nrf5340_cpuapp` directory.
 
 The following configuration files can be defined for any supported board:
 
-* :file:`app_build_type.conf` - Kconfig configuration file for a build type.
+* :file:`prj_build_type.conf` - Kconfig configuration file for a build type.
   To support a given build type for the selected board, you must define the configuration file with a proper name.
-  For example, the :file:`app_ZDebug.conf` defines configuration for ``ZDebug`` build type.
-* :file:`dts.overlay` - DTS overlay file specific for the board.
+  For example, the :file:`prj_release.conf` defines configuration for ``release`` build type.
+  The :file:`prj.conf` without any suffix defines the ``debug`` build type.
+* :file:`app.overlay` - DTS overlay file specific for the board.
   Defining the DTS overlay file for a given board is optional.
 * :file:`_def` files - These files are defined separately for modules used by the application.
   You must define a :file:`_def` file for every module that requires it and enable it in the configuration for the given board.
   The :file:`_def` files that are common for all the boards and build types are located in the :file:`applications/machine_learning/configuration/common` directory.
+
+Advertising configuration
+-------------------------
+
+If a given build type enables Bluetooth, the :ref:`caf_ble_adv` is used to control the Bluetooth advertising.
+This CAF module relies on :ref:`bt_le_adv_prov_readme` to manage advertising data and scan response data.
+The nRF Machine Learning application configures the data providers in :file:`src/util/Kconfig`.
+By default, the application enables a set of data providers available in the |NCS| and adds a custom provider that appends UUID128 of Nordic UART Service (NUS) to the scan response data if the NUS is enabled in the configuration and the Bluetooth local identity in use has no bond.
 
 Multi-image builds
 ------------------
@@ -315,8 +343,8 @@ The Thingy:53 and nRF53 Development Kit use multi-image build with the following
 * Bluetooth HCI RPMsg
 
 You can define the application-specific configuration for the mentioned child images in the board-specific directory in the :file:`applications/machine_learning/configuration/` directory.
-The Kconfig configuration file names contain the name of the child image and the build type.
-For example, the :file:`applications/machine_learning/configuration/thingy53_nrf5340_cpuapp/hci_rpmsg_ZDebug.conf` file defines configuration of Bluetooth HCI RPMsg for ``ZDebug`` build type on ``thingy53_nrf5340_cpuapp`` board.
+The Kconfig configuration file should be located in subdirectory :file:`child_image/child_image_name` and its name should match the application Kconfig file name, that is contain the build type if necessary
+For example, the :file:`applications/machine_learning/configuration/thingy53_nrf5340_cpuapp/child_image/hci_rpmsg/prj.conf` file defines configuration of Bluetooth HCI RPMsg for ``debug`` build type on ``thingy53_nrf5340_cpuapp`` board, while the :file:`applications/machine_learning/configuration/thingy53_nrf5340_cpuapp/child_image/hci_rpmsg/prj_release.conf` file defines configuration of Bluetooth HCI RPMsg for ``release`` build type.
 See :ref:`ug_multi_image` for detailed information about multi-image builds and child image configuration.
 
 .. _nrf_machine_learning_app_configuration_build_types:
@@ -329,34 +357,34 @@ Building and running
 The nRF machine learning application is built the same way to any other |NCS| application or sample.
 Building the default configurations requires an Internet connection, because the machine learning model source files are downloaded from web during the application build.
 
-.. include:: /includes/build_and_run.txt
+.. include:: /includes/build_and_run_ns.txt
 
 Selecting a build type
 ======================
 
 Before you start testing the application, you can select one of the :ref:`nrf_machine_learning_app_requirements_build_types`, depending on your development kit and building method.
 
-Selecting a build type in SES
------------------------------
+Selecting a build type in |VSC|
+-------------------------------
 
-.. include:: /gs_modifying.rst
-   :start-after: build_types_selection_ses_start
-   :end-before: build_types_selection_ses_end
+.. include:: /config_and_build/modifying.rst
+   :start-after: build_types_selection_vsc_start
+   :end-before: build_types_selection_vsc_end
 
 Selecting a build type from command line
 ----------------------------------------
 
-.. include:: /gs_modifying.rst
+.. include:: /config_and_build/modifying.rst
    :start-after: build_types_selection_cmd_start
    :end-before: build_types_selection_cmd_end
 
 .. note::
    If the selected board does not support the selected build type, the build is interrupted.
-   For example, if the ``ZDebugNUS`` build type is not supported by the selected board, the following notification appears:
+   For example, if the ``nus`` build type is not supported by the selected board, the following notification appears:
 
    .. code-block:: console
 
-      Configuration file for build type ZDebugNUS is missing.
+      Configuration file for build type ``nus`` is missing.
 
 Providing API key
 =================
@@ -367,14 +395,14 @@ For more detailed information about building the machine learning model in the |
 
 .. tip::
    The nRF Machine Learning application configurations available in the |NCS| do not require providing an API key to download the model.
-   The model is download from web, but no authentication is required.
+   The model is downloaded from the web, but no authentication is required.
 
 Testing
 =======
 
 After programming the application to your development kit, you can test the nRF Machine Learning application.
 You can test running the machine learning model on an embedded device and forwarding data to `Edge Impulse studio`_.
-The detailed test steps for the Development Kits, the Thingy:52, and the Thingy:53 are described in the following subsections.
+The detailed test steps for the Development Kits and the Thingy:53 are described in the following subsections.
 
 Application logs
 ----------------
@@ -383,13 +411,13 @@ In most of the provided debug configurations, the application provides logs thro
 See :ref:`testing_rtt_connect` for detailed instructions about accessing the logs.
 
 .. note::
-   The Thingy:53 in the ``ZDebug`` configuration provides logs through the USB CDC ACM serial.
+   The Thingy:53 in the ``debug`` configuration provides logs through the USB CDC ACM serial.
    See :ref:`ug_thingy53` for detailed information about working with the Thingy:53.
 
-   You can also use ``ZDebugRTT`` configuration to have the Thingy:53 use RTT for logs.
+   You can also use ``rtt`` configuration to have the Thingy:53 use RTT for logs.
 
-Testing with Thingy devices
----------------------------
+Testing with Thingy:53
+----------------------
 
 After programming the application, perform the following steps to test the nRF Machine Learning application on the Thingy:
 
@@ -412,7 +440,7 @@ After programming the application, perform the following steps to test the nRF M
    After the mode is switched, the LED color changes to red and the LED starts blinking very slowly.
 #. Program the :ref:`central_uart` sample to a compatible development kit, for example the nRF52840 Development Kit.
 #. Turn on the programmed device.
-   After a brief delay the Bluetooth® connection between the sample and the Thingy is established.
+   After a brief delay, the Bluetooth® connection between the sample and the Thingy is established.
    The Thingy forwards the sensor readouts over NUS.
    The LED on the Thingy starts to blink rapidly.
 #. Connect to the Bluetooth® Central UART sample with a terminal emulator (for example, PuTTY).
@@ -462,10 +490,10 @@ To start forwarding data to Edge Impulse studio:
 #. Run the ``edge-impulse-data-forwarder`` Edge Impulse command line tool.
 #. Log in to `Edge Impulse studio`_ and perform the following steps:
 
-   a. Go to the :guilabel:`Data acquisition` tab.
-   #. In the :guilabel:`Record new data` panel, set the desired values and click :guilabel:`Start sampling`.
+   a. Select the :guilabel:`Data acquisition` tab.
+   #. In the **Record new data** panel, set the desired values and click :guilabel:`Start sampling`.
 
-      .. figure:: ../../doc/nrf/images/ei_data_acquisition.png
+      .. figure:: /images/ei_data_acquisition.png
          :scale: 50%
          :alt: Sampling under Data acquisition in Edge Impulse studio
 
@@ -474,7 +502,7 @@ To start forwarding data to Edge Impulse studio:
    #. Observe the received sample data on the raw data graph under the panel.
       The observed signal depends on the acceleration readouts.
 
-      .. figure:: ../../doc/nrf/images/ei_start_sampling.png
+      .. figure:: /images/ei_start_sampling.png
          :scale: 50%
          :alt: Sampling example
 
@@ -492,18 +520,20 @@ See the :ref:`nrf_machine_learning_app_configuration` for detailed information a
 Application internal modules
 ****************************
 
-The nRF Machine Learning application uses modules available in :ref:`lib_caf` (CAF), a set of generic modules based on Event Manager and available to all applications and a set of dedicated internal modules.
+The nRF Machine Learning application uses modules available in :ref:`lib_caf` (CAF), a set of generic modules based on Application Event Manager and available to all applications and a set of dedicated internal modules.
 See `Firmware architecture`_ for more information.
 
 The nRF Machine Learning application uses the following modules available in CAF:
 
 * :ref:`caf_ble_adv`
+* :ref:`caf_ble_bond`
 * :ref:`caf_ble_smp`
 * :ref:`caf_ble_state`
 * :ref:`caf_buttons`
 * :ref:`caf_click_detector`
 * :ref:`caf_leds`
-* :ref:`caf_sensor_sampler`
+* :ref:`caf_power_manager`
+* :ref:`caf_sensor_manager`
 
 See the module pages for more information about the modules and their configuration.
 
@@ -511,7 +541,7 @@ The nRF Machine Learning application also uses the following dedicated applicati
 
 ``ei_data_forwarder_bt_nus``
   The module forwards the sensor readouts over NUS to the connected Bluetooth Central.
-  The sensor data is forwarded only if the connection is secured and connection interval is within the limit defined by :kconfig:`CONFIG_BT_PERIPHERAL_PREF_MAX_INT` and :kconfig:`CONFIG_BT_PERIPHERAL_PREF_MAX_INT`.
+  The sensor data is forwarded only if the connection is secured and connection interval is within the limit defined by :kconfig:option:`CONFIG_BT_PERIPHERAL_PREF_MAX_INT` and :kconfig:option:`CONFIG_BT_PERIPHERAL_PREF_MAX_INT`.
 
 ``ei_data_forwarder_uart``
   The module forwards the sensor readouts over UART.
@@ -524,11 +554,9 @@ The nRF Machine Learning application also uses the following dedicated applicati
 ``ml_runner``
   The module uses :ref:`ei_wrapper` API to control running the machine learning model.
   It provides the prediction results using :c:struct:`ml_result_event`.
-  The module runs the machine learning model and provides results only if there is an active subsriber.
-  An application module can inform that it is actively listening for results using :c:struct:`ml_result_signin_event`.
 
-``ml_state``
-  The module controls switching between running the machine learning model and forwarding the data.
+``ml_app_mode``
+  The module controls Application mode. It switches between running the machine learning model and forwarding the data.
   The change is triggered by a long press of the button defined in the module's configuration.
 
 ``sensor_sim_ctrl``
@@ -556,10 +584,59 @@ The application uses the following Zephyr drivers and libraries:
 
 The application uses the following |NCS| libraries and drivers:
 
-* :ref:`event_manager`
+* :ref:`app_event_manager`
 * :ref:`lib_caf`
 * :ref:`ei_wrapper`
 * :ref:`nus_service_readme`
 
+The sample also uses the following secure firmware component:
+
+* :ref:`Trusted Firmware-M <ug_tfm>`
+
 In addition, you can use the :ref:`central_uart` sample together with the application.
 The sample is used to receive data over NUS and forward it to the host over UART.
+
+API documentation
+*****************
+
+Following are the API elements used by the application.
+
+Edge Impulse Data Forwarder Event
+=================================
+
+| Header file: :file:`applications/machine_learning/src/events/ei_data_forwarder_event.h`
+| Source file: :file:`applications/machine_learning/src/events/ei_data_forwarder_event.c`
+
+.. doxygengroup:: ei_data_forwarder_event
+   :project: nrf
+   :members:
+
+Machine Learning Application Mode Event
+=======================================
+
+| Header file: :file:`applications/machine_learning/src/events/ml_app_mode_event.h`
+| Source file: :file:`applications/machine_learning/src/events/ml_app_mode_event.c`
+
+.. doxygengroup:: ml_app_mode_event
+   :project: nrf
+   :members:
+
+Machine Learning Result Event
+=============================
+
+| Header file: :file:`applications/machine_learning/src/events/ml_result_event.h`
+| Source file: :file:`applications/machine_learning/src/events/ml_result_event.c`
+
+.. doxygengroup:: ml_result_event
+   :project: nrf
+   :members:
+
+Sensor Simulator Event
+======================
+
+| Header file: :file:`applications/machine_learning/src/events/sensor_sim_event.h`
+| Source file: :file:`applications/machine_learning/src/events/sensor_sim_event.c`
+
+.. doxygengroup:: sensor_sim_event
+   :project: nrf
+   :members:

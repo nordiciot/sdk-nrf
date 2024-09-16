@@ -14,7 +14,10 @@
  * @{
  */
 
-#include <zephyr.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+#include <zephyr/device.h>
 
 /* Definition of VBUS current limit values. */
 #define ADP536X_VBUS_ILIM_50mA		0x00
@@ -46,15 +49,27 @@
 #define ADP536X_OC_CHG_THRESHOLD_300mA	0x06
 #define ADP536X_OC_CHG_THRESHOLD_400mA	0x07
 
+/** Fuel gauge state */
+enum adp536x_fg_enabled {
+	ADP566X_FG_DISABLED = 0,        /**< Disable fuel gauge */
+	ADP566X_FG_ENABLED = 1          /**< Enable fuel gauge */
+};
+
+/** Fuel gauge mode */
+enum adp536x_fg_mode {
+	ADP566X_FG_MODE_ACTIVE = 0,     /** Fuel gauge is in active mode */
+	ADP566X_FG_MODE_SLEEP = 1       /** Fuel gauge is in sleep mode */
+};
+
 /**
  * @brief Initialize ADP536X.
  *
- * @param[in] dev_name Pointer to the device name.
+ * @param[in] dev Pointer to the I2C bus device.
  *
  * @retval 0 If the operation was successful.
  *           Otherwise, a (negative) error code is returned.
  */
-int adp536x_init(const char *dev_name);
+int adp536x_init(const struct device *dev);
 
 /**
  * @brief Set the VBUS current limit.
@@ -140,32 +155,6 @@ int adp536x_oc_chg_hiccup_set(bool enable);
 int adp536x_oc_dis_hiccup_set(bool enable);
 
 /**
- * @brief Enable the buck/boost regulator.
- *
- * @param[in] enable The requested regulator operation state.
- *
- * @retval 0 If the operation was successful.
- *           Otherwise, a (negative) error code is returned.
- */
-int adp536x_buckbst_enable(bool enable);
-
-/**
- * @brief Set the buck regulator to 1.8 V.
- *
- * @retval 0 If the operation was successful.
- *           Otherwise, a (negative) error code is returned.
- */
-int adp536x_buck_1v8_set(void);
-
-/**
- * @brief Set the buck/boost regulator to 3.3 V.
- *
- * @retval 0 If the operation was successful.
- *           Otherwise, a (negative) error code is returned.
- */
-int adp536x_buckbst_3v3_set(void);
-
-/**
  * @brief Reset the device to its default values.
  *
  * @retval 0 If the operation was successful.
@@ -184,14 +173,32 @@ int adp536x_factory_reset(void);
 int adp536x_oc_chg_current_set(uint8_t value);
 
 /**
- * @brief Set the buck discharge resistor status.
+ * @brief Set Fuel Gauge operating mode
  *
- * @param[in] enable Boolean value to enable or disable the discharge resistor.
- *
+ * @param[in] en Enable or disable the fuel gauge.
+ * @param[in] mode Active or sleep mode.
  * @retval 0 If the operation was successful.
  *           Otherwise, a (negative) error code is returned.
  */
-int adp536x_buck_discharge_set(bool enable);
+int adp536x_fg_set_mode(enum adp536x_fg_enabled en, enum adp536x_fg_mode mode);
+
+/**
+ * @brief Read battery state of charge
+ *
+ * @param[out] percentage Percentage of battery remaining
+ * @retval 0 If the operation was successful.
+ *           Otherwise, a (negative) error code is returned.
+ */
+int adp536x_fg_soc(uint8_t *percentage);
+
+/**
+ * @brief Read battery voltage
+ *
+ * @param[out] millivolts Battery voltage in millivolts
+ * @retval 0 If the operation was successful.
+ *           Otherwise, a (negative) error code is returned.
+ */
+int adp536x_fg_volts(uint16_t *millivolts);
 
 /** @} */
 

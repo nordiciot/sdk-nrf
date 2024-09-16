@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <helpers/nrfx_reset_reason.h>
-#include <storage/flash_map.h>
+#include <zephyr/storage/flash_map.h>
 
 #define MODULE failsafe
 #include <caf/events/module_state_event.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_DESKTOP_FAILSAFE_LOG_LEVEL);
 
 
@@ -22,17 +22,17 @@ static bool failsafe_check(void)
 
 	uint32_t reas = nrfx_reset_reason_get();
 
-	nrfx_reset_reason_clear(reas);
-
 	return (reas & mask) != 0;
 }
 
 static void failsafe_erase(void)
 {
 	const struct flash_area *flash_area;
-	int err = flash_area_open(FLASH_AREA_ID(storage), &flash_area);
+	int err = flash_area_open(FIXED_PARTITION_ID(storage_partition),
+				  &flash_area);
 	if (!err) {
-		err = flash_area_erase(flash_area, 0, FLASH_AREA_SIZE(storage));
+		err = flash_area_erase(flash_area, 0,
+				       FIXED_PARTITION_SIZE(storage_partition));
 		flash_area_close(flash_area);
 	}
 
@@ -43,11 +43,16 @@ static void failsafe_erase(void)
 	}
 }
 
-static bool event_handler(const struct event_header *eh)
+static void failsafe_clear(void)
 {
-	if (is_module_state_event(eh)) {
+	nrfx_reset_reason_clear(nrfx_reset_reason_get());
+}
+
+static bool app_event_handler(const struct app_event_header *aeh)
+{
+	if (is_module_state_event(aeh)) {
 		const struct module_state_event *event =
-				cast_module_state_event(eh);
+				cast_module_state_event(aeh);
 
 		if (check_state(event, MODULE_ID(main), MODULE_STATE_READY)) {
 			static bool initialized;
@@ -58,6 +63,8 @@ static bool event_handler(const struct event_header *eh)
 			if (failsafe_check()) {
 				failsafe_erase();
 			}
+			failsafe_clear();
+
 			module_set_state(MODULE_STATE_READY);
 		}
 
@@ -70,5 +77,5 @@ static bool event_handler(const struct event_header *eh)
 	return false;
 }
 
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE_EARLY(MODULE, module_state_event);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE_EARLY(MODULE, module_state_event);

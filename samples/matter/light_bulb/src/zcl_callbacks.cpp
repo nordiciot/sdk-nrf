@@ -7,25 +7,34 @@
 #include <lib/support/logging/CHIPLogging.h>
 
 #include "app_task.h"
-#include "lighting_manager.h"
 
+#include <app-common/zap-generated/attributes/Accessors.h>
 #include <app-common/zap-generated/ids/Attributes.h>
 #include <app-common/zap-generated/ids/Clusters.h>
-#include <app/util/af-types.h>
-#include <app/util/af.h>
+#include <app/ConcreteAttributePath.h>
 
 using namespace ::chip;
 using namespace ::chip::app::Clusters;
+using namespace ::chip::app::Clusters::OnOff;
 
-void emberAfPostAttributeChangeCallback(EndpointId endpoint, ClusterId clusterId, AttributeId attributeId, uint8_t mask,
-					uint16_t manufacturerCode, uint8_t type, uint16_t size, uint8_t *value)
+void MatterPostAttributeChangeCallback(const chip::app::ConcreteAttributePath &attributePath, uint8_t type,
+				       uint16_t size, uint8_t *value)
 {
-	if (clusterId == OnOff::Id && attributeId == OnOff::Attributes::Ids::OnOff) {
-		ChipLogProgress(Zcl, "Cluster OnOff: attribute OnOff set to %" PRIu8, *value);
-		GetAppTask().PostEvent(AppEvent(*value ? AppEvent::On : AppEvent::Off, *value, true));
-	} else if (clusterId == LevelControl::Id && attributeId == LevelControl::Attributes::Ids::CurrentLevel) {
-		ChipLogProgress(Zcl, "Cluster LevelControl: attribute CurrentLevel set to %" PRIu8, *value);
-		GetAppTask().PostEvent(AppEvent(AppEvent::Level, *value, true));
+	ClusterId clusterId = attributePath.mClusterId;
+	AttributeId attributeId = attributePath.mAttributeId;
+
+	if (clusterId == OnOff::Id && attributeId == OnOff::Attributes::OnOff::Id) {
+		ChipLogProgress(Zcl, "Cluster OnOff: attribute OnOff set to %" PRIu8 "", *value);
+		AppTask::Instance().GetPWMDevice().InitiateAction(*value ? PWMDevice::ON_ACTION : PWMDevice::OFF_ACTION,
+								  static_cast<int32_t>(AppEventType::Lighting), value);
+	} else if (clusterId == LevelControl::Id && attributeId == LevelControl::Attributes::CurrentLevel::Id) {
+		ChipLogProgress(Zcl, "Cluster LevelControl: attribute CurrentLevel set to %" PRIu8 "", *value);
+		if (AppTask::Instance().GetPWMDevice().IsTurnedOn()) {
+			AppTask::Instance().GetPWMDevice().InitiateAction(
+				PWMDevice::LEVEL_ACTION, static_cast<int32_t>(AppEventType::Lighting), value);
+		} else {
+			ChipLogDetail(Zcl, "LED is off. Try to use move-to-level-with-on-off instead of move-to-level");
+		}
 	}
 }
 
@@ -46,5 +55,17 @@ void emberAfPostAttributeChangeCallback(EndpointId endpoint, ClusterId clusterId
  */
 void emberAfOnOffClusterInitCallback(EndpointId endpoint)
 {
-	GetAppTask().UpdateClusterState();
+	EmberAfStatus status;
+	bool storedValue;
+
+	/* Read storedValue on/off value */
+	status = Attributes::OnOff::Get(endpoint, &storedValue);
+	if (status == EMBER_ZCL_STATUS_SUCCESS) {
+		/* Set actual state to the cluster state that was last persisted */
+		AppTask::Instance().GetPWMDevice().InitiateAction(
+			storedValue ? PWMDevice::ON_ACTION : PWMDevice::OFF_ACTION,
+			static_cast<int32_t>(AppEventType::Lighting), reinterpret_cast<uint8_t *>(&storedValue));
+	}
+
+	AppTask::Instance().UpdateClusterState();
 }

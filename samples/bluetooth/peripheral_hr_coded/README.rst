@@ -10,28 +10,35 @@ Bluetooth: Peripheral Heart Rate Monitor with Coded PHY
 The Peripheral Heart Rate Monitor with Coded PHY offers similar functionality to the :ref:`zephyr:peripheral_hr` sample from Zephyr.
 However, this sample supports LE Coded PHY.
 
-Overview
-********
-
-The sample demonstrates a basic Bluetooth® Low Energy Peripheral role functionality that exposes the Heart Rate GATT Service with LE Coded PHY support, which is not available in Zephyr Bluetooth LE Controller (See :ref:`ug_ble_controller` for more information).
-Once it connects to a Central device, it generates dummy heart rate values.
-It can be used together with the :ref:`bluetooth_central_hr_coded` sample.
-
 Requirements
 ************
 
 The sample supports the following development kits:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp_and_cpuapp_ns, nrf52840dongle_nrf52840, nrf52840dk_nrf52840
+.. table-from-sample-yaml::
 
 .. include:: /includes/hci_rpmsg_overlay.txt
 
-The sample also requires:
+The sample also requires a device running a Heart Rate Server with LE Coded PHY support to connect to.
+For example, another development kit running the :ref:`bluetooth_central_hr_coded` sample.
 
-* A device running a Heart Rate Server with LE Coded PHY support to connect to.
-  For example, another development kit running the :ref:`bluetooth_central_hr_coded` sample.
+Overview
+********
+
+The sample demonstrates a basic Bluetooth® Low Energy Peripheral role functionality that exposes the Heart Rate GATT Service with LE Coded PHY support, which is not available in Zephyr Bluetooth LE Controller (See :ref:`ug_ble_controller` for more information).
+Once it connects to a Central device, it generates dummy heart rate values.
+You can use it together with the :ref:`bluetooth_central_hr_coded` sample.
+
+User interface
+**************
+
+The user interface of the sample depends on the hardware platform you are using.
+
+LED 1:
+   Blinks, toggling on/off every second, when the main loop is running and the device is advertising.
+
+LED 2:
+   Lit when the development kit is connected.
 
 Building and running
 ********************
@@ -60,22 +67,26 @@ After programming the sample to your development kit, you can test it by connect
 Dependencies
 ************
 
+This sample uses the following |NCS| library:
+
+* :ref:`dk_buttons_and_leds_readme`
+
 This sample uses the following Zephyr libraries:
 
-* ``include/zephyr/types.h``
-* ``include/errno.h``
-* ``include/zephyr.h``
-* ``include/sys/printk.h``
-* ``include/sys/byteorder.h``
+* :file:`include/zephyr/types.h`
+* :file:`include/errno.h`
+* :file:`include/zephyr.h`
+* :file:`include/sys/printk.h`
+* :file:`include/sys/byteorder.h`
 * :ref:`zephyr:kernel_api`:
 
-  * ``include/kernel.h``
+  * :file:`include/kernel.h`
 
 * :ref:`zephyr:bluetooth_api`:
 
-* ``include/bluetooth/bluetooth.h``
-* ``include/bluetooth/conn.h``
-* ``include/bluetooth/uuid.h``
-* ``include/bluetooth/gatt.h``
-* ``include/bluetooth/services/bas.h``
-* ``include/bluetooth/services/hrs.h``
+* :file:`include/bluetooth/bluetooth.h`
+* :file:`include/bluetooth/conn.h`
+* :file:`include/bluetooth/uuid.h`
+* :file:`include/bluetooth/gatt.h`
+* :file:`include/bluetooth/services/bas.h`
+* :file:`include/bluetooth/services/hrs.h`

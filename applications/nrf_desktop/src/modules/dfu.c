@@ -7,27 +7,32 @@
 #include <inttypes.h>
 
 #include <zephyr/types.h>
-#include <sys/byteorder.h>
-#include <storage/flash_map.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/storage/flash_map.h>
 #include <pm_config.h>
+#include <zephyr/sys/reboot.h>
 
-#include "event_manager.h"
+#include <app_event_manager.h>
 #include "config_event.h"
 #include "hid_event.h"
+#include "dfu_lock.h"
 #include <caf/events/ble_common_event.h>
+#include <caf/events/power_manager_event.h>
 
 #define MODULE dfu
 #include <caf/events/module_state_event.h>
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/logging/log_ctrl.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_LOG_LEVEL);
 
 
 /* DFU state values must match with values used by the host. */
-#define DFU_STATE_INACTIVE 0x00
-#define DFU_STATE_ACTIVE   0x01
-#define DFU_STATE_STORING  0x02
-#define DFU_STATE_CLEANING 0x03
+#define DFU_STATE_INACTIVE              0x00
+#define DFU_STATE_ACTIVE_CONFIG_CHANNEL 0x01
+#define DFU_STATE_STORING               0x02
+#define DFU_STATE_CLEANING              0x03
+#define DFU_STATE_ACTIVE_OTHER          0x04
 
 
 #define FLASH_PAGE_SIZE_LOG2	12
@@ -50,14 +55,24 @@ LOG_MODULE_REGISTER(MODULE, CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_LOG_LEVEL);
  #include <fw_info.h>
  #define IMAGE0_ID		PM_S0_IMAGE_ID
  #define IMAGE0_ADDRESS		PM_S0_IMAGE_ADDRESS
+ #define IMAGE0_SIZE		PM_S0_IMAGE_SIZE
  #define IMAGE1_ID		PM_S1_IMAGE_ID
  #define IMAGE1_ADDRESS		PM_S1_IMAGE_ADDRESS
+ #define IMAGE1_SIZE		PM_S1_IMAGE_SIZE
+ #define BOOTLOADER_NAME	"B0"
 #elif CONFIG_BOOTLOADER_MCUBOOT
- #include <dfu/mcuboot.h>
+ #include <zephyr/dfu/mcuboot.h>
  #define IMAGE0_ID		PM_MCUBOOT_PRIMARY_ID
  #define IMAGE0_ADDRESS		PM_MCUBOOT_PRIMARY_ADDRESS
+ #define IMAGE0_SIZE		PM_MCUBOOT_PRIMARY_SIZE
  #define IMAGE1_ID		PM_MCUBOOT_SECONDARY_ID
  #define IMAGE1_ADDRESS		PM_MCUBOOT_SECONDARY_ADDRESS
+ #define IMAGE1_SIZE		PM_MCUBOOT_SECONDARY_SIZE
+ #if CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_MCUBOOT_DIRECT_XIP
+   #define BOOTLOADER_NAME	"MCUBOOT+XIP"
+ #else
+   #define BOOTLOADER_NAME	"MCUBOOT"
+ #endif
 #else
  #error Bootloader not supported.
 #endif
@@ -78,6 +93,7 @@ static char sync_buffer[SYNC_BUFFER_SIZE] __aligned(4);
 
 static bool device_in_use;
 static bool is_flash_area_clean;
+static bool slot_was_used_by_other_transport;
 
 enum dfu_opt {
 	DFU_OPT_START,
@@ -85,6 +101,8 @@ enum dfu_opt {
 	DFU_OPT_SYNC,
 	DFU_OPT_REBOOT,
 	DFU_OPT_FWINFO,
+	DFU_OPT_VARIANT,
+	DFU_OPT_DEVINFO,
 
 	DFU_OPT_COUNT
 };
@@ -94,22 +112,47 @@ const static char * const opt_descr[] = {
 	[DFU_OPT_DATA] = "data",
 	[DFU_OPT_SYNC] = "sync",
 	[DFU_OPT_REBOOT] = "reboot",
-	[DFU_OPT_FWINFO] = "fwinfo"
+	[DFU_OPT_FWINFO] = "fwinfo",
+	[DFU_OPT_VARIANT] = OPT_DESCR_MODULE_VARIANT,
+	[DFU_OPT_DEVINFO] = "devinfo"
 };
+
+static void dfu_lock_owner_changed(const struct dfu_lock_owner *new_owner)
+{
+	LOG_DBG("Flash marked dirty due to the different DFU owner: %s", new_owner->name);
+
+	slot_was_used_by_other_transport = true;
+}
+
+const static struct dfu_lock_owner config_channel_owner = {
+	.name = "Config Channel",
+	.owner_changed = dfu_lock_owner_changed,
+};
+
+static void config_channel_dfu_lock_release(void)
+{
+	if (IS_ENABLED(CONFIG_DESKTOP_DFU_LOCK)) {
+		if (dfu_lock_release(&config_channel_owner)) {
+			/* Should not happen. */
+			__ASSERT_NO_MSG(false);
+		}
+	}
+}
 
 static uint8_t dfu_slot_id(void)
 {
-#if CONFIG_BOOTLOADER_MCUBOOT
-	/* MCUBoot always puts new image in the secondary slot. */
-	return IMAGE1_ID;
-#else
-	BUILD_ASSERT(IMAGE0_ADDRESS < IMAGE1_ADDRESS);
-	if ((uint32_t)(uintptr_t)dfu_slot_id < IMAGE1_ADDRESS) {
-		return IMAGE1_ID;
-	}
+	/* Assuming that image 0 slot is always located in internal FLASH. */
+	uint32_t cur_fun_addr = (uintptr_t)dfu_slot_id;
 
-	return IMAGE0_ID;
-#endif
+	/* Return slot ID that is currently not in use. */
+	if ((cur_fun_addr >= IMAGE0_ADDRESS) &&
+	    (cur_fun_addr < (IMAGE0_ADDRESS + IMAGE0_SIZE))) {
+		return IMAGE1_ID;
+	} else {
+		__ASSERT_NO_MSG((cur_fun_addr >= IMAGE1_ADDRESS) &&
+				(cur_fun_addr < (IMAGE1_ADDRESS + IMAGE1_SIZE)));
+		return IMAGE0_ID;
+	}
 }
 
 static bool is_page_clean(const struct flash_area *fa, off_t off, size_t len)
@@ -149,6 +192,14 @@ static void terminate_dfu(void)
 	(void)k_work_cancel_delayable(&background_store);
 	flash_area = NULL;
 	sync_offset = 0;
+
+	if (IS_ENABLED(CONFIG_CAF_POWER_MANAGER_EVENTS)) {
+		power_manager_restrict(MODULE_IDX(MODULE), POWER_MANAGER_LEVEL_MAX);
+	}
+
+	if (!k_work_delayable_is_pending(&reboot_request)) {
+		config_channel_dfu_lock_release();
+	}
 }
 
 static void dfu_timeout_handler(struct k_work *work)
@@ -168,6 +219,10 @@ static void reboot_request_handler(struct k_work *work)
 
 	LOG_PANIC();
 	sys_reboot(SYS_REBOOT_WARM);
+
+	if (!k_work_delayable_is_pending(&background_erase)) {
+		config_channel_dfu_lock_release();
+	}
 }
 
 static void background_erase_handler(struct k_work *work)
@@ -193,6 +248,11 @@ static void background_erase_handler(struct k_work *work)
 		if (err) {
 			LOG_ERR("Cannot open flash area (%d)", err);
 			flash_area = NULL;
+
+			if (!k_work_delayable_is_pending(&reboot_request)) {
+				config_channel_dfu_lock_release();
+			}
+
 			return;
 		}
 	}
@@ -205,6 +265,11 @@ static void background_erase_handler(struct k_work *work)
 			LOG_ERR("Cannot erase page (%d)", err);
 			flash_area_close(flash_area);
 			flash_area = NULL;
+
+			if (!k_work_delayable_is_pending(&reboot_request)) {
+				config_channel_dfu_lock_release();
+			}
+
 			return;
 		}
 	}
@@ -221,6 +286,10 @@ static void background_erase_handler(struct k_work *work)
 
 		flash_area_close(flash_area);
 		flash_area = NULL;
+
+		if (!k_work_delayable_is_pending(&reboot_request)) {
+			config_channel_dfu_lock_release();
+		}
 	}
 }
 
@@ -234,7 +303,7 @@ static void complete_dfu_data_store(void)
 
 	if (cur_offset == img_length) {
 		LOG_INF("DFU image written");
-#ifdef CONFIG_BOOTLOADER_MCUBOOT
+#if CONFIG_BOOTLOADER_MCUBOOT && !CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_MCUBOOT_DIRECT_XIP
 		int err = boot_request_upgrade(false);
 		if (err) {
 			LOG_ERR("Cannot request the image upgrade (err:%d)", err);
@@ -315,6 +384,12 @@ static void handle_dfu_data(const uint8_t *data, size_t size)
 		return;
 	}
 
+	if (IS_ENABLED(CONFIG_DESKTOP_DFU_LOCK) && dfu_lock_claim(&config_channel_owner)) {
+		/* The DFU lock must be owned by the Config Channel at this point. */
+		__ASSERT_NO_MSG(false);
+		return;
+	}
+
 	LOG_DBG("DFU data received cur_offset:%" PRIu32, cur_offset);
 
 	if (size == 0) {
@@ -357,6 +432,25 @@ static void handle_dfu_start(const uint8_t *data, const size_t size)
 		return;
 	}
 
+	if (IS_ENABLED(CONFIG_DESKTOP_DFU_LOCK)) {
+		if (dfu_lock_claim(&config_channel_owner)) {
+			LOG_WRN("Cannot start DFU: another DFU transport is active");
+			return;
+		}
+
+		if (slot_was_used_by_other_transport) {
+			slot_was_used_by_other_transport = false;
+
+			k_work_reschedule(&background_erase, K_NO_WAIT);
+			is_flash_area_clean = false;
+			cur_offset = 0;
+			img_length = 0;
+			img_csum = 0;
+
+			return;
+		}
+	}
+
 	if (!is_flash_area_clean) {
 		LOG_WRN("Flash is not clean yet.");
 		return;
@@ -394,6 +488,10 @@ static void handle_dfu_start(const uint8_t *data, const size_t size)
 				csum, img_csum,
 				offset, cur_offset);
 
+			if (!k_work_delayable_is_pending(&reboot_request)) {
+				config_channel_dfu_lock_release();
+			}
+
 			return;
 		} else {
 			LOG_INF("Restart DFU");
@@ -420,6 +518,10 @@ static void handle_dfu_start(const uint8_t *data, const size_t size)
 		LOG_ERR("Cannot open flash area (%d)", err);
 
 		flash_area = NULL;
+
+		if (!k_work_delayable_is_pending(&reboot_request)) {
+			config_channel_dfu_lock_release();
+		}
 	} else if (flash_area->fa_size < img_length) {
 		LOG_WRN("Insufficient space for DFU (%zu < %" PRIu32 ")",
 			flash_area->fa_size, img_length);
@@ -427,6 +529,9 @@ static void handle_dfu_start(const uint8_t *data, const size_t size)
 		terminate_dfu();
 	} else {
 		LOG_INF("DFU started");
+		if (IS_ENABLED(CONFIG_CAF_POWER_MANAGER_EVENTS)) {
+			power_manager_restrict(MODULE_IDX(MODULE), POWER_MANAGER_LEVEL_SUSPENDED);
+		}
 		k_work_reschedule(&dfu_timeout, DFU_TIMEOUT);
 	}
 }
@@ -443,14 +548,22 @@ static void handle_dfu_sync(uint8_t *data, size_t *size)
 		start_dfu_data_store();
 	}
 
+	bool can_access_flash;
 	uint8_t dfu_state;
 
-	if (!is_flash_area_clean) {
+	can_access_flash = true;
+	if (IS_ENABLED(CONFIG_DESKTOP_DFU_LOCK)) {
+		can_access_flash = !dfu_lock_claim(&config_channel_owner);
+	}
+
+	if (!can_access_flash) {
+		dfu_state = DFU_STATE_ACTIVE_OTHER;
+	} else if (!is_flash_area_clean) {
 		dfu_state = DFU_STATE_CLEANING;
 	} else if (storing_data) {
 		dfu_state = DFU_STATE_STORING;
 	} else if (dfu_active) {
-		dfu_state = DFU_STATE_ACTIVE;
+		dfu_state = DFU_STATE_ACTIVE_CONFIG_CHANNEL;
 	} else {
 		dfu_state = DFU_STATE_INACTIVE;
 	}
@@ -479,16 +592,75 @@ static void handle_dfu_sync(uint8_t *data, size_t *size)
 	pos += sizeof(sync_buffer_size);
 
 	__ASSERT_NO_MSG(pos == data_size);
+
+	if (can_access_flash &&
+	    !k_work_delayable_is_pending(&dfu_timeout) &&
+	    !k_work_delayable_is_pending(&background_erase) &&
+	    !k_work_delayable_is_pending(&reboot_request)) {
+		config_channel_dfu_lock_release();
+	}
+}
+
+static void handle_dfu_bootloader_variant(uint8_t *data, size_t *size)
+{
+	LOG_INF("System bootloader variant requested");
+
+	*size = strlen(BOOTLOADER_NAME);
+	__ASSERT_NO_MSG((*size != 0) && (*size < CONFIG_CHANNEL_FETCHED_DATA_MAX_SIZE));
+	strcpy((char *)data, BOOTLOADER_NAME);
+}
+
+static void handle_dfu_devinfo(uint8_t *data, size_t *size)
+{
+	LOG_INF("Device information requested");
+	const uint16_t vid = CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_VID;
+	const uint16_t pid = CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_PID;
+	const char *generation = CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_GENERATION;
+	size_t pos = 0;
+
+	BUILD_ASSERT(sizeof(CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_GENERATION) > 1,
+		     "CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_GENERATION cannot be an empty string");
+	BUILD_ASSERT((sizeof(vid) + sizeof(pid) +
+		      sizeof(CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_GENERATION)) <=
+		     CONFIG_CHANNEL_FETCHED_DATA_MAX_SIZE,
+		     "CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_GENERATION is too long");
+
+	sys_put_le16(vid, &data[pos]);
+	pos += sizeof(vid);
+
+	sys_put_le16(pid, &data[pos]);
+	pos += sizeof(pid);
+
+	strcpy(&data[pos], generation);
+	pos += strlen(generation);
+
+	*size = pos;
 }
 
 static void handle_reboot_request(uint8_t *data, size_t *size)
 {
 	LOG_INF("System reboot requested");
+	bool can_access_flash;
 
 	*size = sizeof(bool);
-	data[0] = true;
 
-	k_work_reschedule(&reboot_request, REBOOT_REQUEST_TIMEOUT);
+	can_access_flash = true;
+	if (IS_ENABLED(CONFIG_DESKTOP_DFU_LOCK)) {
+		can_access_flash = !dfu_lock_claim(&config_channel_owner);
+		/* Lock will be released in the reboot_request_handler context. */
+	}
+
+	if (can_access_flash) {
+		if (IS_ENABLED(CONFIG_CAF_POWER_MANAGER_EVENTS)) {
+			power_manager_restrict(MODULE_IDX(MODULE), POWER_MANAGER_LEVEL_SUSPENDED);
+		}
+
+		data[0] = true;
+
+		k_work_reschedule(&reboot_request, REBOOT_REQUEST_TIMEOUT);
+	} else {
+		data[0] = false;
+	}
 }
 
 #if CONFIG_SECURE_BOOT
@@ -640,6 +812,14 @@ static void fetch_config(const uint8_t opt_id, uint8_t *data, size_t *size)
 		handle_dfu_sync(data, size);
 		break;
 
+	case DFU_OPT_VARIANT:
+		handle_dfu_bootloader_variant(data, size);
+		break;
+
+	case DFU_OPT_DEVINFO:
+		handle_dfu_devinfo(data, size);
+		break;
+
 	default:
 		/* Ignore unknown event. */
 		LOG_WRN("Unknown DFU event");
@@ -647,9 +827,9 @@ static void fetch_config(const uint8_t opt_id, uint8_t *data, size_t *size)
 	}
 }
 
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
-	if (is_hid_report_event(eh)) {
+	if (is_hid_report_event(aeh)) {
 		device_in_use = true;
 
 		return false;
@@ -658,18 +838,18 @@ static bool event_handler(const struct event_header *eh)
 	GEN_CONFIG_EVENT_HANDLERS(STRINGIFY(MODULE), opt_descr, update_config,
 				  fetch_config);
 
-	if (is_ble_peer_event(eh)) {
+	if (IS_ENABLED(CONFIG_CAF_BLE_COMMON_EVENTS) && is_ble_peer_event(aeh)) {
 		device_in_use = true;
 
 		return false;
 	}
 
-	if (is_module_state_event(eh)) {
+	if (is_module_state_event(aeh)) {
 		const struct module_state_event *event =
-			cast_module_state_event(eh);
+			cast_module_state_event(aeh);
 
 		if (check_state(event, MODULE_ID(main), MODULE_STATE_READY)) {
-#if CONFIG_BOOTLOADER_MCUBOOT
+#if CONFIG_BOOTLOADER_MCUBOOT && !CONFIG_DESKTOP_CONFIG_CHANNEL_DFU_MCUBOOT_DIRECT_XIP
 			int err = boot_write_img_confirmed();
 
 			if (err) {
@@ -680,6 +860,17 @@ static bool event_handler(const struct event_header *eh)
 			k_work_init_delayable(&reboot_request, reboot_request_handler);
 			k_work_init_delayable(&background_erase, background_erase_handler);
 			k_work_init_delayable(&background_store, background_store_handler);
+
+			if (IS_ENABLED(CONFIG_DESKTOP_DFU_LOCK)) {
+				int ret;
+
+				/* Assume that this module will claim lock first during
+				 * the boot process.
+				 */
+				ret = dfu_lock_claim(&config_channel_owner);
+				__ASSERT_NO_MSG(!ret);
+				ARG_UNUSED(ret);
+			}
 
 			k_work_reschedule(&background_erase, K_NO_WAIT);
 		}
@@ -692,8 +883,10 @@ static bool event_handler(const struct event_header *eh)
 	return false;
 }
 
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, hid_report_event);
-EVENT_SUBSCRIBE_EARLY(MODULE, config_event);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
-EVENT_SUBSCRIBE(MODULE, ble_peer_event);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, hid_report_event);
+APP_EVENT_SUBSCRIBE_EARLY(MODULE, config_event);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
+#ifdef CONFIG_CAF_BLE_COMMON_EVENTS
+APP_EVENT_SUBSCRIBE(MODULE, ble_peer_event);
+#endif /* CONFIG_CAF_BLE_COMMON_EVENTS */

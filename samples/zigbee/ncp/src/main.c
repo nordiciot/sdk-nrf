@@ -8,29 +8,23 @@
  *  @brief Zigbee Network Co-processor sample
  */
 
-#include <drivers/uart.h>
-#include <drivers/gpio.h>
-#include <usb/usb_device.h>
-#include <logging/log.h>
+#include <zephyr/drivers/uart.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/usb/usb_device.h>
+#include <zephyr/logging/log.h>
 #include <zb_nrf_platform.h>
 #include <zb_osif_ext.h>
-#include <zephyr.h>
-#include <device.h>
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
 #include <dk_buttons_and_leds.h>
 #include <ncp/ncp_dev_api.h>
 
 
 #if CONFIG_BOOTLOADER_MCUBOOT
-#include <dfu/mcuboot.h>
+#include <zephyr/dfu/mcuboot.h>
 #endif
 
-LOG_MODULE_REGISTER(app);
-
-#if DT_NODE_EXISTS(DT_ALIAS(rst0))
-#define RST_PIN_PORT DT_GPIO_LABEL(DT_ALIAS(rst0), gpios)
-#define RST_PIN_NUMBER DT_GPIO_PIN(DT_ALIAS(rst0), gpios)
-#define RST_PIN_LVL	0
-#endif
+LOG_MODULE_REGISTER(app, LOG_LEVEL_INF);
 
 #define VENDOR_SPECIFIC_LED DK_LED2
 
@@ -53,19 +47,13 @@ zb_ret_t zb_osif_bootloader_run_after_reboot(void)
 {
 #if DT_NODE_EXISTS(DT_ALIAS(rst0))
 	int err = 0;
-	const struct device *rst_dev = device_get_binding(RST_PIN_PORT);
+	const struct gpio_dt_spec rst0 = GPIO_DT_SPEC_GET(DT_ALIAS(rst0), gpios);
 
-	if (!rst_dev) {
+	if (!device_is_ready(rst0.port)) {
 		return RET_ERROR;
 	}
 
-	err = gpio_pin_configure(rst_dev, RST_PIN_NUMBER, GPIO_OUTPUT);
-	if (err) {
-		return RET_ERROR;
-	}
-
-	/* Perform pin reset */
-	err = gpio_pin_set_raw(rst_dev, RST_PIN_NUMBER, RST_PIN_LVL);
+	err = gpio_pin_configure_dt(&rst0, GPIO_OUTPUT_ACTIVE);
 	if (err) {
 		return RET_ERROR;
 	}
@@ -159,8 +147,9 @@ static zb_uint16_t ncp_vendor_specific_req_handler(zb_uint8_t buf)
 
 	resp_args->tsn = tsn;
 	*resp_data = vendor_specific_led_state;
+	ZVUNUSED(zb_ncp_custom_response(resp_buf));
 
-	return zb_ncp_custom_response(resp_buf);
+	return NCP_RET_LATER;
 }
 
 static void ncp_vendor_specific_init(void)
@@ -177,23 +166,23 @@ int main(void)
 {
 	LOG_INF("Starting Zigbee Network Co-processor sample");
 
-#ifdef CONFIG_USB
+#ifdef CONFIG_USB_DEVICE_STACK
 	/* Enable USB device. */
 	int ret = usb_enable(NULL);
 
-	if (ret != 0) {
+	if ((ret != 0) && (ret != -EALREADY)) {
+		LOG_ERR("USB initialization failed");
 		return ret;
 	}
 
 	/* Configure line control if flow control supported by Zigbee Async serial. */
 	if (IS_ENABLED(CONFIG_ZIGBEE_UART_SUPPORTS_FLOW_CONTROL)) {
-		const struct device *uart_dev;
+		const struct device *uart_dev = DEVICE_DT_GET(DT_CHOSEN(ncs_zigbee_uart));
 		uint32_t dtr = 0U;
 
-		uart_dev = device_get_binding(CONFIG_ZIGBEE_UART_DEVICE_NAME);
-		if (uart_dev == NULL) {
-			LOG_ERR("Error during NCP serial initialization");
-			return -EIO;
+		if (!device_is_ready(uart_dev)) {
+			LOG_ERR("UART device not ready");
+			return -ENODEV;
 		}
 
 		while (true) {
@@ -217,7 +206,7 @@ int main(void)
 
 	/* Wait 1 sec for the host to do all settings */
 	k_sleep(K_SECONDS(1));
-#endif /* CONFIG_USB */
+#endif /* CONFIG_USB_DEVICE_STACK */
 
 	zb_osif_ncp_set_nvram_filter();
 

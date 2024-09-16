@@ -4,12 +4,13 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <ztest.h>
+#include <zephyr/ztest.h>
 #include <fw_info.h>
 #include <pm_config.h>
 #include <nrfx_nvmc.h>
-#include <linker/linker-defs.h>
-#include <sys/reboot.h>
+#include <zephyr/linker/linker-defs.h>
+#include <zephyr/sys/reboot.h>
+#include <zephyr/sys/util.h>
 #include <bl_storage.h>
 #include <fw_info.h>
 
@@ -24,9 +25,9 @@ extern const struct fw_info m_firmware_info;
 #define VAL_INFO_MAX_SIZE 0x1000
 uint32_t val_info_buf[VAL_INFO_MAX_SIZE];
 
-void test_validation_neg1(void)
+ZTEST(test_bl_validation_neg, test_validation_neg1)
 {
-	uint32_t copy_len = (uint32_t)_flash_used;
+	uint32_t copy_len = ROUND_UP((uint32_t)_flash_used, 4);
 
 	/* Round up to at least the next SPU region. */
 	uint32_t new_addr = ROUND_UP(PM_ADDRESS + (PM_SIZE / 2), 0x8000);
@@ -68,11 +69,11 @@ void test_validation_neg1(void)
 			zassert_equal(NRFX_SUCCESS, ret, "Erase failed.\r\n");
 		}
 		nrfx_nvmc_words_write(new_addr, (const uint32_t *)PM_ADDRESS,
-			(copy_len + 3) / 4);
+			copy_len / 4);
 
 		/* Write to S1 */
 		nrfx_nvmc_words_write(PM_S1_ADDRESS, &s1_info,
-			(sizeof(s1_info) + 3) / 4);
+			ROUND_UP(sizeof(s1_info), 4) / 4);
 
 		zassert_mem_equal(&s1_info, (void *)PM_S1_ADDRESS,
 			sizeof(s1_info), "Failed to copy S1 info.\r\n");
@@ -97,7 +98,7 @@ void test_validation_neg1(void)
 			"Could not find validation info.\r\n");
 
 		val_info->address = s1_info.address;
-		nrfx_nvmc_words_write(s1_info.address + s1_info.size, val_info,
+		nrfx_nvmc_words_write(s1_info.address + ROUND_UP(s1_info.size, 4), val_info,
 			VAL_INFO_MAX_SIZE);
 
 		/* Reboot */
@@ -108,20 +109,19 @@ void test_validation_neg1(void)
 }
 
 
-void test_validation_neg2(void)
+ZTEST(test_bl_validation_neg, test_validation_neg2)
 {
 #if PM_PROVISION_ADDRESS > 0xF00000
 	uint32_t num_public_keys = num_public_keys_read();
 	bool any_valid = false;
 
-	__aligned(4) uint8_t key_data[CONFIG_SB_PUBLIC_KEY_HASH_LEN];
+	__aligned(4) uint8_t key_data[SB_PUBLIC_KEY_HASH_LEN];
 
 	for (uint32_t key_data_idx = 0; key_data_idx < num_public_keys;
 			key_data_idx++) {
-		int retval = public_key_data_read(key_data_idx,
-				key_data, CONFIG_SB_PUBLIC_KEY_HASH_LEN);
+		int retval = public_key_data_read(key_data_idx, key_data);
 		if (retval != -EINVAL) {
-			zassert_equal(CONFIG_SB_PUBLIC_KEY_HASH_LEN, retval,
+			zassert_equal(SB_PUBLIC_KEY_HASH_LEN, retval,
 				"Unexpected public key error, %d.", retval);
 			invalidate_public_key(key_data_idx);
 			any_valid = true;
@@ -137,11 +137,4 @@ void test_validation_neg2(void)
 }
 
 
-void test_main(void)
-{
-	ztest_test_suite(test_bl_validation_neg,
-			 ztest_unit_test(test_validation_neg1),
-			 ztest_unit_test(test_validation_neg2)
-	);
-	ztest_run_test_suite(test_bl_validation_neg);
-}
+ZTEST_SUITE(test_bl_validation_neg, NULL, NULL, NULL, NULL, NULL);

@@ -12,6 +12,13 @@ if (CONFIG_PARTITION_MANAGER_ENABLED)
   zephyr_sources(flash_map_partition_manager.c)
 endif()
 
+# Hacked location, but currently we need it and child image is not used.
+
+if(SYSBUILD)
+  set_shared(IMAGE ${IMAGE_NAME} PROPERTY ZEPHYR_BINARY_DIR ${ZEPHYR_BINARY_DIR})
+endif()
+
+
 function(preprocess_pm_yml in_file out_file)
   execute_process(
     COMMAND ${CMAKE_C_COMPILER}
@@ -29,7 +36,7 @@ function(preprocess_pm_yml in_file out_file)
     message(FATAL_ERROR "command failed with return code: ${ret}")
   endif()
 
-  if (DEFINED IMAGE_NAME)
+  if (DEFINED IMAGE_NAME OR SYSBUILD)
     # Share location of original source file so that the parent image can add it
     # to the CMAKE_CONFIGURE_DEPENDS list.
     set_shared(IMAGE ${IMAGE_NAME} APPEND PROPERTY PM_YML_DEP_FILES ${in_file})
@@ -57,7 +64,7 @@ if (CONFIG_SETTINGS_FCB OR CONFIG_SETTINGS_NVS)
   ncs_add_partition_manager_config(pm.yml.settings)
 endif()
 
-if (CONFIG_FILE_SYSTEM)
+if (CONFIG_FILE_SYSTEM_LITTLEFS)
   ncs_add_partition_manager_config(pm.yml.file_system)
 endif()
 
@@ -73,12 +80,12 @@ if (CONFIG_NRF_MODEM_LIB)
   ncs_add_partition_manager_config(pm.yml.libmodem)
 endif()
 
-if (CONFIG_BT_RPMSG_NRF53)
-  ncs_add_partition_manager_config(pm.yml.bt_rpmsg_nrf53)
+if (CONFIG_IPC_SERVICE AND CONFIG_SOC_NRF5340_CPUAPP)
+  ncs_add_partition_manager_config(pm.yml.rpmsg_nrf53)
 endif()
 
-if (CONFIG_BT_RPC AND SOC_NRF5340_CPUAPP)
-  ncs_add_partition_manager_config(pm.yaml.bt_rpc_host_nrf53)
+if (CONFIG_SECURE_BOOT_STORAGE)
+  ncs_add_partition_manager_config(pm.yml.secure_boot_storage)
 endif()
 
 if (CONFIG_PCD_APP)
@@ -91,18 +98,44 @@ endif()
 
 if (CONFIG_TRUSTED_EXECUTION_NONSECURE OR CONFIG_TRUSTED_EXECUTION_SECURE)
   ncs_add_partition_manager_config(pm.yml.trustzone)
+  if (CONFIG_BOOTLOADER_MCUBOOT)
+    ncs_add_partition_manager_config(pm.yml.mcuboot)
+  endif()
 endif()
 
 if (CONFIG_MEMFAULT_NCS_INTERNAL_FLASH_BACKED_COREDUMP)
   ncs_add_partition_manager_config(pm.yml.memfault)
 endif()
 
+if(CONFIG_NRF_CLOUD_PGPS_STORAGE_PARTITION)
+  ncs_add_partition_manager_config(pm.yml.pgps)
+endif()
+
+if(CONFIG_DFU_TARGET_FULL_MODEM_USE_EXT_PARTITION)
+  ncs_add_partition_manager_config(pm.yml.fmfu)
+endif()
+
+if (CONFIG_EMDS)
+  ncs_add_partition_manager_config(pm.yml.emds)
+endif()
+
+if (CONFIG_BT_FAST_PAIR_REGISTRATION_DATA)
+  ncs_add_partition_manager_config(pm.yml.bt_fast_pair)
+endif()
+
+if (CONFIG_NRF_MODEM_LIB_TRACE_BACKEND_FLASH)
+  ncs_add_partition_manager_config(pm.yml.modem_trace)
+endif()
 
 # We are using partition manager if we are a child image or if we are
 # the root image and the 'partition_manager' target exists.
-set(using_partition_manager
-  $<OR:$<BOOL:${IMAGE_NAME}>,$<TARGET_EXISTS:partition_manager>>
+if (SYSBUILD)
+  set(using_partition_manager 1)
+else()
+  set(using_partition_manager
+    $<OR:$<BOOL:${IMAGE_NAME}>,$<TARGET_EXISTS:partition_manager>>
   )
+endif()
 zephyr_compile_definitions(
   USE_PARTITION_MANAGER=${using_partition_manager}
   )
@@ -113,7 +146,7 @@ set_property(GLOBAL APPEND PROPERTY
   -DUSE_PARTITION_MANAGER=${using_partition_manager}
   )
 
-if((EXISTS ${CMAKE_SOURCE_DIR}/pm.yml) AND IMAGE_NAME)
+if((EXISTS ${CMAKE_SOURCE_DIR}/pm.yml) AND (IMAGE_NAME OR (SYSBUILD AND NOT SYSBUILD_MAIN_APP)))
   # Only preprocess pm.yml when being built as sub image.
 
   preprocess_pm_yml(

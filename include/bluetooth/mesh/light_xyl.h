@@ -13,7 +13,7 @@
 #ifndef BT_MESH_LIGHT_XYL_H__
 #define BT_MESH_LIGHT_XYL_H__
 
-#include <bluetooth/mesh.h>
+#include <zephyr/bluetooth/mesh.h>
 #include <bluetooth/mesh/model_types.h>
 
 #ifdef __cplusplus
@@ -32,7 +32,7 @@ struct bt_mesh_light_xy {
 struct bt_mesh_light_xyl {
 	/** Lightness value */
 	uint16_t lightness;
-	/** xy parmeters */
+	/** xy parameters */
 	struct bt_mesh_light_xy xy;
 };
 

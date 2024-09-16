@@ -7,28 +7,17 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdint.h>
-#include <toolchain/common.h>
-#include <sys/util.h>
-#include <drivers/entropy.h>
+#include "common.h"
+#include <zephyr/toolchain/common.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/drivers/entropy.h>
 
 #if defined(CONFIG_ZTEST)
-#include <ztest.h>
+#include <zephyr/ztest.h>
 #endif
 
-#if defined(CONFIG_MBEDTLS)
-#if !defined(CONFIG_MBEDTLS_CFG_FILE)
-#include "mbedtls/config.h"
-#else
-#include CONFIG_MBEDTLS_CFG_FILE
-#endif /* CONFIG_MBEDTLS_CFG_FILE */
-#endif
 #include <mbedtls/platform.h>
 #include <mbedtls/cipher.h>
-#if defined(CONFIG_NRF_CC310_PLATFORM)
-#include <nrf_cc310_platform.h>
-#include <nrf_cc310_platform_abort.h>
-#include <nrf_cc310_platform_mutex.h>
-#endif /* CONFIG_NRF_CC310_PLATFORM) */
 
 /* Found in nrfxlib/nrf_security/mbedtls/mbedtls_heap.c
  * Used for reallocating the heap between suites.
@@ -62,7 +51,14 @@ int init_drbg(const unsigned char *p_optional_seed, size_t len);
  */
 size_t hex2bin_safe(const char *hex, uint8_t *buf, size_t buflen);
 
-#if defined(MBEDTLS_CTR_DRBG_C)
+#if defined(MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG)
+
+#include "psa/crypto.h"
+#include "nrf_cc3xx_platform_ctr_drbg.h"
+
+extern mbedtls_psa_external_random_context_t drbg_ctx;
+
+#elif defined(MBEDTLS_CTR_DRBG_C)
 
 #include <mbedtls/ctr_drbg.h>
 
@@ -80,7 +76,7 @@ extern mbedtls_hmac_drbg_context drbg_ctx;
 #endif
 
 #if defined(CONFIG_ENTROPY_GENERATOR)
-#include <drivers/entropy.h>
+#include <zephyr/drivers/entropy.h>
 #endif
 
 #if defined CONFIG_TV_ASSERT_USER_OVERRIDE
@@ -499,11 +495,11 @@ void stop_time_measurement(void);
 
 /**@brief   Macro for retrieving a variable from a section.
  *
- * @warning     The stored symbol can only be resolved using this macro if the
- *              type of the data is word aligned. The operation of acquiring
- *              the stored symbol relies on the size of the stored type. No
- *              padding can exist in the named section in between individual
- *              stored items or this macro will fail.
+ * @note     The stored symbol can only be resolved using this macro if the
+ *           type of the data is word aligned. The operation of acquiring
+ *           the stored symbol relies on the size of the stored type. No
+ *           padding can exist in the named section in between individual
+ *           stored items or this macro will fail.
  *
  * @param[in]   section_name    Name of the section.
  * @param[in]   data_type       Data type of the variable.

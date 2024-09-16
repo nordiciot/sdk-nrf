@@ -34,7 +34,7 @@ extern "C" {
 	#define SHA256_CTX_SIZE sizeof(nrf_cc310_bl_hash_context_sha256_t)
 	typedef nrf_cc310_bl_hash_context_sha256_t bl_sha256_ctx_t;
 #else
-	#define SHA256_CTX_SIZE 128
+	#define SHA256_CTX_SIZE 256
 	// uint32_t to make sure it is aligned equally as the other contexts.
 	typedef uint32_t bl_sha256_ctx_t[SHA256_CTX_SIZE/4];
 #endif
@@ -114,10 +114,10 @@ typedef int (*bl_sha256_init_t)(bl_sha256_ctx_t *ctx);
 /**
  * @brief Hash a portion of data.
  *
- * @warning @p ctx must be initialized before being used in this function.
- *          An uninitialized @p ctx might not be reported as an error. Also,
- *          @p ctx must not be used if it has been finalized, though this might
- *          also not be reported as an error.
+ * @note @p ctx must be initialized before being used in this function.
+ *       An uninitialized @p ctx might not be reported as an error. Also,
+ *       @p ctx must not be used if it has been finalized, though this might
+ *       also not be reported as an error.
  *
  * @param[in]  ctx       Context variable. Must have been initialized.
  * @param[in]  data      Data to hash.

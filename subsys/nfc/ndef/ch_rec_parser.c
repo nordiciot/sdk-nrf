@@ -5,9 +5,9 @@
  */
 
 #include <errno.h>
-#include <logging/log.h>
-#include <net/buf.h>
-#include <sys/byteorder.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/net/buf.h>
+#include <zephyr/sys/byteorder.h>
 
 #include <nfc/ndef/msg_parser.h>
 #include <nfc/ndef/ch_rec_parser.h>
@@ -212,7 +212,7 @@ static int ac_rec_payload_parse(struct nfc_ndef_bin_payload_desc *payload_desc,
 	}
 
 	ac_rec->aux_data_ref = (struct nfc_ndef_ch_ac_rec_ref *)
-					memory_allocate(&buf, ac_rec->aux_data_ref_cnt * sizeof(*ac_rec->aux_data_ref));
+		memory_allocate(&buf, ac_rec->aux_data_ref_cnt * sizeof(*ac_rec->aux_data_ref));
 	if (ac_rec->aux_data_ref) {
 		return -ENOMEM;
 	}

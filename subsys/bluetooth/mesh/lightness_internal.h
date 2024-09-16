@@ -23,8 +23,6 @@ extern "C" {
 #define LIGHT_USER_REPR ACTUAL
 #endif /* CONFIG_BT_MESH_LIGHTNESS_LINEAR */
 
-/** The lightness server's value is > 0 */
-#define LIGHTNESS_SRV_FLAG_IS_ON 0
 /** Power-up sequence and scene store/recall behaviors are controlled by Light LC server. */
 #define LIGHTNESS_SRV_FLAG_EXTENDED_BY_LIGHT_CTRL 1
 
@@ -95,7 +93,7 @@ static inline uint16_t actual_to_linear(uint16_t actual)
 	/* Conversion:
 	 * linear = CEIL(65535 * (actual * actual) / (65535 * 65535)))
 	 */
-	return ceiling_fraction((uint32_t)actual * (uint32_t)actual, 65535UL);
+	return DIV_ROUND_UP((uint32_t)actual * (uint32_t)actual, 65535UL);
 }
 
 /** @brief Convert light from the specified representation to the configured.
@@ -113,6 +111,36 @@ static inline uint16_t repr_to_light(uint16_t val, enum light_repr repr)
 
 	if (IS_ENABLED(CONFIG_BT_MESH_LIGHTNESS_ACTUAL) && repr == LINEAR) {
 		return linear_to_actual(val);
+	}
+
+	return val;
+}
+
+/** @brief Convert light from linear representation to the configured.
+ *
+ *  @param light Light value in linear representation.
+ *
+ *  @return The light value in the configured representation.
+ */
+static inline uint16_t from_linear(uint16_t val)
+{
+	if (IS_ENABLED(CONFIG_BT_MESH_LIGHTNESS_ACTUAL)) {
+		return linear_to_actual(val);
+	}
+
+	return val;
+}
+
+/** @brief Convert light from actual representation to the configured.
+ *
+ *  @param light Light value in actual representation.
+ *
+ *  @return The light value in the configured representation.
+ */
+static inline uint16_t from_actual(uint16_t val)
+{
+	if (IS_ENABLED(CONFIG_BT_MESH_LIGHTNESS_LINEAR)) {
+		return actual_to_linear(val);
 	}
 
 	return val;
@@ -136,6 +164,36 @@ static inline uint16_t light_to_repr(uint16_t light, enum light_repr repr)
 	}
 
 	return light;
+}
+
+/** @brief Convert light from the configured representation to linear.
+ *
+ *  @param light Light value in the configured representation.
+ *
+ *  @return The light value in linear representation.
+ */
+static inline uint16_t to_linear(uint16_t val)
+{
+	if (IS_ENABLED(CONFIG_BT_MESH_LIGHTNESS_ACTUAL)) {
+		return actual_to_linear(val);
+	}
+
+	return val;
+}
+
+/** @brief Convert light from the configured representation to actual.
+ *
+ *  @param light Light value in the configured representation.
+ *
+ *  @return The light value in actual representation.
+ */
+static inline uint16_t to_actual(uint16_t val)
+{
+	if (IS_ENABLED(CONFIG_BT_MESH_LIGHTNESS_LINEAR)) {
+		return linear_to_actual(val);
+	}
+
+	return val;
 }
 
 struct bt_mesh_lightness_srv;

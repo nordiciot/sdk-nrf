@@ -6,24 +6,29 @@
 
 menuconfig LTE_LINK_CONTROL
 	bool "nRF91 LTE Link control library"
-	select AT_CMD
 	select AT_CMD_PARSER
-	select AT_NOTIF
-	default n
+	select AT_MONITOR
 
 if LTE_LINK_CONTROL
 
 config LTE_AUTO_INIT_AND_CONNECT
-	bool "Auto Initialize and Connect for the LTE link"
-	default y if AT_CMD_SYS_INIT
+	select DEPRECATED
+	bool "Auto Initialize and Connect for the LTE link [DEPRECATED]"
+	default y if NRF_MODEM_LIB_SYS_INIT
 	help
 		Turn on to make the LTE Link Controller to
 		automatically initialize and connect the modem
-		before the application starts
+		before the application starts.
+		This Kconfig option is deprecated. Instead, the application should call
+		lte_lc_init() and lte_lc_connect().
+
+config LTE_SHELL
+	bool "Enable LTE shell commands"
+	default y
+	depends on SHELL
 
 config LTE_LOCK_BANDS
 	bool "Enable LTE bands lock"
-	default n
 	help
 		Enable LTE band locks. Bands not enabled in LTE_LOCK_BAND_MASK
 		cannot be used when this setting is enabled.
@@ -57,6 +62,14 @@ config LTE_UNLOCK_PLMN
 	help
 		Disable PLMN locks for network selection.
 
+config LTE_PSM_REQ
+	bool "Enable requesting use of PSM"
+	help
+		Enable request for use of PSM using AT+CPSMS.
+		If this option is set the link controller will automatically request PSM when
+		the modem is initialized. This will cause the modem to include a PSM request in
+		every subsequent LTE attach packet.
+
 config LTE_PSM_REQ_RPTAU
 	string "PSM setting requested periodic TAU"
 	default "00000011"
@@ -74,7 +87,7 @@ config LTE_PSM_REQ_RAT
 		And 3GPP 24.008 Ch. 10.5.7.3 for data format.
 
 config LTE_EDRX_REQ
-	bool "Enable requesting use of eDRX."
+	bool "Enable requesting use of eDRX"
 	help
 		Enable request for use of eDRX using AT+CEDRXS.
 		For reference, see 3GPP 27.007 Ch. 7.40.
@@ -127,7 +140,7 @@ config LTE_PTW_VALUE_NBIOT
 		value that is configured, and it's usually best to let the modem
 		use default PTW values.
 
-choice
+choice LTE_NETWORK_MODE
 	prompt "Select network mode"
 	default LTE_NETWORK_MODE_LTE_M
 	help

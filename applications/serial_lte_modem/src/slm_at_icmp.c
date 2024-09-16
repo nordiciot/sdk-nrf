@@ -3,11 +3,11 @@
  *
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
-#include <logging/log.h>
-#include <zephyr.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/kernel.h>
 #include <stdio.h>
 #include <string.h>
-#include <net/socket.h>
+#include <zephyr/net/socket.h>
 #include <nrf_socket.h>
 #include "slm_util.h"
 #include "slm_at_host.h"
@@ -45,7 +45,6 @@ static struct k_work ping_work;
 
 /* global variable defined in different files */
 extern struct at_param_list at_param_list;
-extern char rsp_buf[SLM_AT_CMD_RESPONSE_MAX_LEN];
 
 static inline void setip(uint8_t *buffer, uint32_t ipaddr)
 {
@@ -127,6 +126,7 @@ static uint32_t send_ping_wait_reply(void)
 	int plseqnr;
 	int ret;
 	const uint16_t icmp_hdr_len = ICMP_HDR_LEN;
+	struct timeval tv;
 
 	if (si->ai_family == AF_INET) {
 		/* Generate IPv4 ICMP EchoReq */
@@ -270,10 +270,8 @@ static uint32_t send_ping_wait_reply(void)
 	/* We have a blocking socket and we do not want to block for
 	 * a long for sending. Thus, let's set the timeout:
 	 */
-	struct timeval tv = {
-		.tv_sec = (ping_argv.waitms / 1000),
-		.tv_usec = (ping_argv.waitms % 1000) * 1000,
-	};
+	tv.tv_sec = (ping_argv.waitms / 1000);
+	tv.tv_usec = (ping_argv.waitms % 1000) * 1000;
 
 	if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (struct timeval *)&tv,
 		       sizeof(struct timeval)) < 0) {
@@ -413,9 +411,8 @@ wait_for_data:
 	}
 
 	/* Result */
-	sprintf(rsp_buf, "#XPING: %d.%03d seconds\r\n",
+	rsp_send("#XPING: %d.%03d seconds\r\n",
 		(uint32_t)(delta_t)/1000, (uint32_t)(delta_t)%1000);
-	rsp_send(rsp_buf, strlen(rsp_buf));
 
 close_end:
 	(void)close(fd);
@@ -456,9 +453,8 @@ void ping_task(struct k_work *item)
 		int avg_s = avg / 1000;
 		int avg_f = avg % 1000;
 
-		sprintf(rsp_buf, "#XPING: average %d.%03d seconds\r\n",
+		rsp_send("#XPING: average %d.%03d seconds\r\n",
 			avg_s, avg_f);
-		rsp_send(rsp_buf, strlen(rsp_buf));
 
 		LOG_INF("Approximate round trip times in milli-seconds:\n"
 			"    Minimum = %dms, Maximum = %dms, Average = %dms",
@@ -477,8 +473,7 @@ static int ping_test_handler(const char *target)
 	ret = getaddrinfo(target, NULL, NULL, &res);
 	if (ret != 0) {
 		LOG_ERR("getaddrinfo(dest) error: %d", ret);
-		sprintf(rsp_buf, "\"%s\"\r\n", gai_strerror(ret));
-		rsp_send(rsp_buf, strlen(rsp_buf));
+		rsp_send("\"%s\"\r\n", gai_strerror(ret));
 		return -EAGAIN;
 	}
 

@@ -6,16 +6,16 @@
 
 #include <assert.h>
 #include <stdio.h>
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <zephyr/types.h>
-#include <device.h>
-#include <drivers/uart.h>
-#include <sys/byteorder.h>
-#include <settings/settings.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/uart.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/settings/settings.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/hci.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/hci.h>
 
 #include "sdc_hci_vs.h"
 
@@ -27,7 +27,7 @@
 #include "config_event.h"
 #include "hid_event.h"
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(MODULE, CONFIG_DESKTOP_BLE_QOS_LOG_LEVEL);
 
 #define INVALID_BLACKLIST 0xFFFF
@@ -37,12 +37,6 @@ LOG_MODULE_REGISTER(MODULE, CONFIG_DESKTOP_BLE_QOS_LOG_LEVEL);
 # error Too few USB IN Endpoints enabled. \
 	Modify appropriate dts.overlay to increase num-in-endpoints to 4 or more
 # endif
-#endif
-
-#ifdef CONFIG_USB_CDC_ACM_DEVICE_NAME
-#define USB_SERIAL_DEVICE_NAME CONFIG_USB_CDC_ACM_DEVICE_NAME
-#else
-#define USB_SERIAL_DEVICE_NAME  ""
 #endif
 
 #ifndef ROUNDED_DIV
@@ -90,7 +84,7 @@ struct params_blacklist {
 	uint16_t wifi_chn_bitmask;
 } __packed;
 
-static uint8_t chmap_instance_buf[CHMAP_FILTER_INST_SIZE];
+static uint8_t chmap_instance_buf[CHMAP_FILTER_INST_SIZE] __aligned(CHMAP_FILTER_INST_ALIGN);
 static struct chmap_instance *chmap_inst;
 static uint8_t current_chmap[CHMAP_BLE_BITMASK_SIZE] = CHMAP_BLE_BITMASK_DEFAULT;
 static atomic_t processing;
@@ -106,7 +100,8 @@ BUILD_ASSERT(THREAD_PRIORITY >= CONFIG_BT_HCI_TX_PRIO);
 
 static void ble_qos_thread_fn(void);
 
-static const struct device *cdc_dev;
+static const struct device *const cdc_dev =
+	DEVICE_DT_GET_OR_NULL(DT_CHOSEN(ncs_ble_qos_uart));
 static uint32_t cdc_dtr;
 
 enum ble_qos_opt {
@@ -310,7 +305,7 @@ static void ble_chn_stats_print(bool update_channel_map)
 			LOG_ERR("Encoding error");
 			return;
 		}
-		send_uart_data(cdc_dev, str, str_len);
+		send_uart_data(cdc_dev, (uint8_t *)str, str_len);
 	}
 
 	/* Channel state information print format: */
@@ -321,7 +316,7 @@ static void ble_chn_stats_print(bool update_channel_map)
 		LOG_ERR("Encoding error");
 		return;
 	}
-	send_uart_data(cdc_dev, str, str_len);
+	send_uart_data(cdc_dev, (uint8_t *)str, str_len);
 
 	str_len = 0;
 	for (uint8_t i = 0; i < CHMAP_BLE_CHANNEL_COUNT; i++) {
@@ -345,7 +340,7 @@ static void ble_chn_stats_print(bool update_channel_map)
 		}
 
 		if (str_len >= ((sizeof(str) * 2) / 3)) {
-			send_uart_data(cdc_dev, str, str_len);
+			send_uart_data(cdc_dev, (uint8_t *)str, str_len);
 			str_len = 0;
 		}
 	}
@@ -355,7 +350,7 @@ static void ble_chn_stats_print(bool update_channel_map)
 		LOG_ERR("Encoding error");
 		return;
 	}
-	send_uart_data(cdc_dev, str, str_len);
+	send_uart_data(cdc_dev, (uint8_t *)str, str_len);
 }
 
 static void hid_pkt_stats_print(uint32_t ble_recv)
@@ -402,7 +397,7 @@ static void hid_pkt_stats_print(uint32_t ble_recv)
 		LOG_ERR("Encoding error");
 		return;
 	}
-	send_uart_data(cdc_dev, str, str_len);
+	send_uart_data(cdc_dev, (uint8_t *)str, str_len);
 }
 
 static bool on_vs_evt(struct net_buf_simple *buf)
@@ -628,7 +623,7 @@ static void fetch_config(const uint8_t opt_id, uint8_t *data, size_t *size)
 	}
 }
 
-static bool event_handler(const struct event_header *eh)
+static bool app_event_handler(const struct app_event_header *aeh)
 {
 	if (IS_ENABLED(CONFIG_DESKTOP_BLE_QOS_STATS_PRINTOUT_ENABLE) &&
 	    IS_ENABLED(CONFIG_DESKTOP_HID_REPORT_MOUSE_SUPPORT)) {
@@ -638,8 +633,8 @@ static bool event_handler(const struct event_header *eh)
 		/* Count number of HID packets received via BLE. */
 		/* Send stats printout via CDC every 100 packets. */
 
-		if (is_hid_report_event(eh)) {
-			const struct hid_report_event *event = cast_hid_report_event(eh);
+		if (is_hid_report_event(aeh)) {
+			const struct hid_report_event *event = cast_hid_report_event(aeh);
 
 			/* Ignore HID output reports. */
 			if (!event->subscriber) {
@@ -658,9 +653,9 @@ static bool event_handler(const struct event_header *eh)
 		}
 	}
 
-	if (is_module_state_event(eh)) {
+	if (is_module_state_event(aeh)) {
 		const struct module_state_event *event =
-			cast_module_state_event(eh);
+			cast_module_state_event(aeh);
 
 		if (check_state(
 			    event,
@@ -696,9 +691,7 @@ static bool event_handler(const struct event_header *eh)
 			atomic_set(&params_updated, false);
 
 			if (IS_ENABLED(CONFIG_DESKTOP_BLE_QOS_STATS_PRINTOUT_ENABLE)) {
-				cdc_dev = device_get_binding(
-					USB_SERIAL_DEVICE_NAME "_0");
-				__ASSERT_NO_MSG(cdc_dev != NULL);
+				__ASSERT_NO_MSG(device_is_ready(cdc_dev));
 				/* CONFIG_UART_LINE_CTRL == 1: dynamic dtr */
 				cdc_dtr = !IS_ENABLED(CONFIG_UART_LINE_CTRL);
 			}
@@ -791,9 +784,9 @@ static void ble_qos_thread_fn(void)
 		struct ble_qos_event *event = new_ble_qos_event();
 		BUILD_ASSERT(sizeof(event->chmap) == CHMAP_BLE_BITMASK_SIZE, "");
 		memcpy(event->chmap, chmap, CHMAP_BLE_BITMASK_SIZE);
-		EVENT_SUBMIT(event);
+		APP_EVENT_SUBMIT(event);
 
-		if (IS_ENABLED(CONFIG_BT_CENTRAL)) {
+		if (IS_ENABLED(CONFIG_DESKTOP_BT_CENTRAL)) {
 			err = bt_le_set_chan_map(chmap);
 			if (err) {
 				LOG_WRN("bt_le_set_chan_map: %d", err);
@@ -809,11 +802,11 @@ static void ble_qos_thread_fn(void)
 	}
 }
 
-EVENT_LISTENER(MODULE, event_handler);
-EVENT_SUBSCRIBE(MODULE, module_state_event);
+APP_EVENT_LISTENER(MODULE, app_event_handler);
+APP_EVENT_SUBSCRIBE(MODULE, module_state_event);
 #if CONFIG_DESKTOP_BLE_QOS_STATS_PRINTOUT_ENABLE
-EVENT_SUBSCRIBE(MODULE, hid_report_event);
+APP_EVENT_SUBSCRIBE(MODULE, hid_report_event);
 #endif
 #if CONFIG_DESKTOP_CONFIG_CHANNEL_ENABLE
-EVENT_SUBSCRIBE_EARLY(MODULE, config_event);
+APP_EVENT_SUBSCRIBE_EARLY(MODULE, config_event);
 #endif

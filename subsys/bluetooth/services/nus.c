@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
 
 #include <bluetooth/services/nus.h>
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(bt_nus, CONFIG_BT_NUS_LOG_LEVEL);
 
@@ -58,13 +58,26 @@ BT_GATT_SERVICE_DEFINE(nus_svc,
 BT_GATT_PRIMARY_SERVICE(BT_UUID_NUS_SERVICE),
 	BT_GATT_CHARACTERISTIC(BT_UUID_NUS_TX,
 			       BT_GATT_CHRC_NOTIFY,
+#ifdef CONFIG_BT_NUS_AUTHEN
+			       BT_GATT_PERM_READ_AUTHEN,
+#else
 			       BT_GATT_PERM_READ,
+#endif /* CONFIG_BT_NUS_AUTHEN */
 			       NULL, NULL, NULL),
-	BT_GATT_CCC(nus_ccc_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+	BT_GATT_CCC(nus_ccc_cfg_changed,
+#ifdef CONFIG_BT_NUS_AUTHEN
+			       BT_GATT_PERM_READ_AUTHEN | BT_GATT_PERM_WRITE_AUTHEN),
+#else
+			       BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+#endif /* CONFIG_BT_NUS_AUTHEN */
 	BT_GATT_CHARACTERISTIC(BT_UUID_NUS_RX,
 			       BT_GATT_CHRC_WRITE |
 			       BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+#ifdef CONFIG_BT_NUS_AUTHEN
+			       BT_GATT_PERM_READ_AUTHEN | BT_GATT_PERM_WRITE_AUTHEN,
+#else
 			       BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+#endif /* CONFIG_BT_NUS_AUTHEN */
 			       NULL, on_receive, NULL),
 );
 

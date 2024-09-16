@@ -11,11 +11,10 @@ rsource "entropy/Kconfig"
 rsource "hw_cc310/Kconfig"
 rsource "net/Kconfig"
 rsource "sensor/Kconfig"
-rsource "gps/Kconfig"
 rsource "serial/Kconfig"
-rsource "flash/Kconfig"
+rsource "wifi/Kconfig"
 
-if MPSL
+if MPSL && !MPSL_FEM_ONLY
 rsource "mpsl/Kconfig"
 endif
 

@@ -2,10 +2,21 @@ add_subdirectory(${ZEPHYR_MCUBOOT_MODULE_DIR}/boot/bootutil/zephyr
                  ${CMAKE_CURRENT_BINARY_DIR}/boot/bootutil/zephyr
 )
 
+if(SYSBUILD)
+  # Code below is partition manager w/ child image support, thus return when
+  # sysbuild is used.
+  return()
+endif()
+
 if (CONFIG_MCUBOOT)
   if (CONFIG_NRF53_MULTI_IMAGE_UPDATE)
     set_shared(IMAGE ${IMAGE_NAME} PROPERTY NRF53_MULTI_IMAGE_UPDATE
       ${CONFIG_NRF53_MULTI_IMAGE_UPDATE})
+  endif()
+
+  if (CONFIG_NRF53_RECOVERY_NETWORK_CORE)
+    set_shared(IMAGE ${IMAGE_NAME} PROPERTY NRF53_RECOVERY_NETWORK_CORE
+      ${CONFIG_NRF53_RECOVERY_NETWORK_CORE})
   endif()
 
   dt_nodelabel(ram_flash_ctrl_dev NODELABEL nordic_ram_flash_controller)
@@ -13,18 +24,29 @@ if (CONFIG_MCUBOOT)
     # Share the information about the ram_flash node with the parent image.
     # This information is used to create the partition manager region.
     dt_nodelabel(ram_flash_dev NODELABEL flash_sim0)
-    dt_prop(ram_flash_ctrl_label PATH ${ram_flash_ctrl_dev} PROPERTY label)
     dt_reg_addr(ram_flash_addr PATH ${ram_flash_dev})
     dt_reg_size(ram_flash_size PATH ${ram_flash_dev})
     set_shared(IMAGE ${IMAGE_NAME} PROPERTY RAM_FLASH_ADDR ${ram_flash_addr})
     set_shared(IMAGE ${IMAGE_NAME} PROPERTY RAM_FLASH_SIZE ${ram_flash_size})
-    set_shared(IMAGE ${IMAGE_NAME} PROPERTY RAM_FLASH_LABEL ${ram_flash_ctrl_label})
+    set_shared(IMAGE ${IMAGE_NAME} PROPERTY RAM_FLASH_LABEL nordic_ram_flash_controller)
   endif()
 endif()
 
 if(CONFIG_BOOTLOADER_MCUBOOT)
+  if (CONFIG_NCS_IS_VARIANT_IMAGE)
+    # NCS Handles everything regarding mcuboot, ensure Zephyr doesn't interfere.
+    # This is a temporary solution until Zephyr signing has been made more modular.
+    set(CONFIG_BOOTLOADER_MCUBOOT False PARENT_SCOPE)
+
+    # When building the variant of an image, the configuration of the variant image
+    # is identical to the base image, except 'CONFIG_NCS_IS_VARIANT_IMAGE'. The
+    # logic below should only be performed once, for the base image, not for the variant variant.
+    # Hence, we have this early return to avoid execution of this file for the variant image.
+    return()
+  endif()
 
   include(${ZEPHYR_BASE}/../nrf/cmake/fw_zip.cmake)
+  include(${ZEPHYR_BASE}/../nrf/cmake/dfu_multi_image.cmake)
 
   function(sign)
     # Signs a hex image
@@ -33,15 +55,17 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
     # SIGNED_BIN_FILE_IN - (required) Hex image to sign
     # SIGNED_HEX_FILE_NAME_PREFIX - (required) Prefix of the output image
     # SLOT_SIZE - (required) The size of the primary partition
-    # START_ADDRESS_OFFSET - (required) Offset
     # SIGNED_HEX_FILE_OUT - (required) Signed hex output image
+    #
+    # Optional arguments:
+    # START_ADDRESS_OFFSET - (optional) Offset
     # SIGNED_BIN_FILE_OUT - (optional) Signed bin output image
     # SIGNED_HEX_TEST_FILE_OUT - (optional) Signed hex output test image including IMAGE_MAGIC
-    # SIGNED_BIN_FILE_OUT - (optional) Signed bin output image
+    # IMAGE_DEPENDENCIES - (optional) Dependencies between signed image and other images
+    # ROM_FIXED - (optional) Start address of image
     # DEPENDS - (optional) One or more dependencies for signing the hex image
-
-    set(oneValueArgs SIGNED_BIN_FILE_IN SIGNED_HEX_FILE_NAME_PREFIX SLOT_SIZE START_ADDRESS_OFFSET SIGNED_HEX_FILE_OUT)
-    set(oneValueOptionalArgs SIGNED_BIN_FILE_OUT SIGNED_HEX_TEST_FILE_OUT)
+    set(oneValueArgs SIGNED_BIN_FILE_IN SIGNED_HEX_FILE_NAME_PREFIX SLOT_SIZE SIGNED_HEX_FILE_OUT)
+    set(oneValueOptionalArgs SIGNED_BIN_FILE_OUT SIGNED_HEX_TEST_FILE_OUT START_ADDRESS_OFFSET IMAGE_DEPENDENCIES ROM_FIXED)
     set(multiValueArgs DEPENDS)
     cmake_parse_arguments(SIGN_ARG "" "${oneValueArgs};${oneValueOptionalArgs}" "${multiValueArgs}" ${ARGN})
     check_arguments_required_all(sign SIGN_ARG ${oneValueArgs})
@@ -58,13 +82,18 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
       set(${SIGN_ARG_SIGNED_HEX_TEST_FILE_OUT} ${test_update_hex} PARENT_SCOPE)
     endif()
 
+    if(DEFINED SIGN_ARG_ROM_FIXED)
+      set(SIGN_ARG_ROM_FIXED --rom-fixed ${SIGN_ARG_ROM_FIXED})
+    endif()
+
     # Ensure that it is possible to move the secondary slot to the memory
     # mapped area for external flash if the secondary slot is located in
     # external flash. Only devices with 'qspi' should have hex files generated
     # for the secondary slot, since these are the only ones with a memory mapped
     # area.
     dt_nodelabel(qspi_node NODELABEL "qspi")
-    if (NOT CONFIG_PM_EXTERNAL_FLASH_MCUBOOT_SECONDARY OR DEFINED qspi_node)
+    if ((NOT CONFIG_PM_EXTERNAL_FLASH_MCUBOOT_SECONDARY OR DEFINED qspi_node) AND
+        SIGN_ARG_START_ADDRESS_OFFSET)
       set(moved_test_update_hex
         ${SIGN_ARG_SIGNED_HEX_FILE_NAME_PREFIX}_moved_test_update.hex
         )
@@ -98,6 +127,10 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
         )
     endif()
 
+    if(DEFINED SIGN_ARG_IMAGE_DEPENDENCIES)
+      set(sign_dependencies "-d;\"${SIGN_ARG_IMAGE_DEPENDENCIES}\"")
+    endif()
+
     add_custom_command(
       OUTPUT
       ${signed_hex}            # Signed hex of input hex.
@@ -108,6 +141,8 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
       # to be applied by mcuboot, the application is required to write the
       # IMAGE_MAGIC into the image trailer.
       ${sign_cmd}
+      ${sign_dependencies}
+      ${SIGN_ARG_ROM_FIXED}
       --slot-size ${SIGN_ARG_SLOT_SIZE}
       ${SIGN_ARG_SIGNED_BIN_FILE_IN}
       ${signed_hex}
@@ -134,6 +169,8 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
       COMMAND
       # Sign the binary version of the input hex file.
       ${sign_cmd}
+      ${sign_dependencies}
+      ${SIGN_ARG_ROM_FIXED}
       --slot-size ${SIGN_ARG_SLOT_SIZE}
       ${to_sign_bin}
       ${update_bin}
@@ -153,17 +190,16 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
       # as the input hex file, so in order for it to work as a test update,
       # it needs to be moved.
       ${sign_cmd}
+      ${sign_dependencies}
+      ${SIGN_ARG_ROM_FIXED}
       --slot-size ${SIGN_ARG_SLOT_SIZE}
       --pad # Adds IMAGE_MAGIC to end of slot.
       ${SIGN_ARG_SIGNED_BIN_FILE_IN}
       ${test_update_hex}
 
-      # Add Zigbee OTA header to signed application
-      COMMAND
-      ${zb_add_ota_header_cmd}
-
       DEPENDS
       ${SIGN_ARG_DEPENDS}
+      ${update_bin}
       )
   endfunction()
 
@@ -191,9 +227,15 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
       mcuboot
       ${ZEPHYR_NRF_MODULE_DIR}/modules/mcuboot/tfm.conf
       )
+
+    # Add fault injection protection to MCUBOOT
+    add_overlay_config(
+      mcuboot
+      ${ZEPHYR_NRF_MODULE_DIR}/modules/mcuboot/fih_low_enable.conf
+    )
   endif()
 
-  if (CONFIG_NRF53_UPGRADE_NETWORK_CORE AND CONFIG_PM_EXTERNAL_FLASH_MCUBOOT_SECONDARY)
+  if (CONFIG_NRF53_UPGRADE_NETWORK_CORE AND CONFIG_ADD_MCUBOOT_MEDIATE_SIM_FLASH_DTS)
     # To allow multi image update of the network core we add a devicetree
     # overlay which defines a flash controller used for emulating flash
     # in RAM.
@@ -203,10 +245,42 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
       )
   endif()
 
+  # For devices with USB then a USB CDC node in mcuboot is required.
+  # As USB CDC is generally needed for this mcuboot use-case it should be
+  # considered if this solution could be better generalized.
+  if (CONFIG_MCUBOOT_USB_SUPPORT)
+    add_overlay_dts(
+      mcuboot
+      ${ZEPHYR_NRF_MODULE_DIR}/modules/mcuboot/usb.overlay
+      )
+  endif()
+
+  # Enable the same option in the MCUBoot child image
+  if (CONFIG_MCUBOOT_HARDWARE_DOWNGRADE_PREVENTION)
+    add_overlay_config(
+      mcuboot
+      ${ZEPHYR_NRF_MODULE_DIR}/modules/mcuboot/hw_counters.conf
+    )
+
+    set(imgtool_security_counter --security-counter ${CONFIG_MCUBOOT_HW_DOWNGRADE_PREVENTION_COUNTER_VALUE})
+  endif()
+
   add_child_image(
     NAME mcuboot
     SOURCE_DIR ${ZEPHYR_MCUBOOT_MODULE_DIR}/boot/zephyr
     )
+
+  if (CONFIG_BUILD_S1_VARIANT)
+    add_child_image(
+      NAME s1_image
+      PRELOAD_IMAGE mcuboot
+      )
+  elseif(CONFIG_BOOT_BUILD_DIRECT_XIP_VARIANT)
+    add_child_image(
+      NAME mcuboot_secondary_app
+      PRELOAD_IMAGE app
+      )
+  endif()
 
   set(merged_hex_file
     ${PROJECT_BINARY_DIR}/mcuboot_primary_app.hex)
@@ -240,25 +314,25 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
     endif()
   endif()
 
-  # Set default key
-  if (NOT DEFINED mcuboot_key_file)
-    message(WARNING "
-      ---------------------------------------------------------
-      --- WARNING: Using default MCUBoot key, it should not ---
-      --- be used for production.                           ---
-      ---------------------------------------------------------
-      \n"
-    )
-    set(mcuboot_key_file ${ZEPHYR_MCUBOOT_MODULE_DIR}/${CONFIG_BOOT_SIGNATURE_KEY_FILE})
-  endif()
-
   if(CONFIG_SIGN_IMAGES)
+    # Set default key
+    if (NOT DEFINED mcuboot_key_file)
+      message(WARNING "
+        ---------------------------------------------------------
+        --- WARNING: Using default MCUBoot key, it should not ---
+        --- be used for production.                           ---
+        ---------------------------------------------------------
+        \n"
+      )
+      set(mcuboot_key_file ${ZEPHYR_MCUBOOT_MODULE_DIR}/${CONFIG_BOOT_SIGNATURE_KEY_FILE})
+    endif()
+
     set(app_core_binary_name app_update.bin)
 
     execute_process(COMMAND
       ${PYTHON_EXECUTABLE}
       ${ZEPHYR_MCUBOOT_MODULE_DIR}/scripts/imgtool.py
-      getpriv -k ${mcuboot_key_file}
+      getpub -k ${mcuboot_key_file}
       OUTPUT_QUIET
       ERROR_QUIET
       RESULT_VARIABLE ret_val
@@ -271,6 +345,18 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
       return()
     endif()
 
+    # Arguments to imgtool.
+    if(NOT CONFIG_MCUBOOT_EXTRA_IMGTOOL_ARGS STREQUAL "")
+      # Separate extra arguments into the proper format for adding to
+      # extra_post_build_commands.
+      #
+      # Use UNIX_COMMAND syntax for uniform results across host
+      # platforms.
+      separate_arguments(imgtool_extra UNIX_COMMAND ${CONFIG_MCUBOOT_EXTRA_IMGTOOL_ARGS})
+    else()
+      set(imgtool_extra)
+    endif()
+
     set(sign_cmd
       ${PYTHON_EXECUTABLE}
       ${ZEPHYR_MCUBOOT_MODULE_DIR}/scripts/imgtool.py
@@ -280,26 +366,26 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
       --align       ${CONFIG_MCUBOOT_FLASH_WRITE_BLOCK_SIZE}
       --version     ${CONFIG_MCUBOOT_IMAGE_VERSION}
       --pad-header
+      ${imgtool_security_counter}
+      ${imgtool_extra}
       )
 
-    if(CONFIG_ZIGBEE AND CONFIG_ZIGBEE_FOTA)
-      set(zb_add_ota_header_cmd
-        ${PYTHON_EXECUTABLE}
-        ${NRF_DIR}/scripts/bootloader/zb_add_ota_header.py
-        --application ${PROJECT_BINARY_DIR}/${app_core_binary_name}
-        --application-version-string ${CONFIG_MCUBOOT_IMAGE_VERSION}
-        --zigbee-manufacturer-id ${CONFIG_ZIGBEE_FOTA_MANUFACTURER_ID}
-        --zigbee-image-type ${CONFIG_ZIGBEE_FOTA_IMAGE_TYPE}
-        --zigbee-comment ${CONFIG_ZIGBEE_FOTA_COMMENT}
-        --zigbee-ota-min-hw-version ${CONFIG_ZIGBEE_FOTA_MIN_HW_VERSION}
-        --zigbee-ota-max-hw-version ${CONFIG_ZIGBEE_FOTA_MAX_HW_VERSION}
-        --out-directory ${PROJECT_BINARY_DIR}
-        )
-      else()
-        set(zb_add_ota_header_cmd "")
-      endif(CONFIG_ZIGBEE AND CONFIG_ZIGBEE_FOTA)
-
     set(app_offset $<TARGET_PROPERTY:partition_manager,app_TO_SECONDARY>)
+
+    if (CONFIG_NRF53_ENFORCE_IMAGE_VERSION_EQUALITY)
+      # Specify image pair IDs to generate dependencies between images.
+      set(APPLICATION_IMAGE_PAIR_IDX 0)
+      set(NETWORK_IMAGE_PAIR_IDX 1)
+
+      # Add dependency inside application core image to require the latest network core image.
+      set(sign_dependencies IMAGE_DEPENDENCIES "(${NETWORK_IMAGE_PAIR_IDX},${CONFIG_MCUBOOT_IMAGE_VERSION})")
+    endif()
+
+    if (CONFIG_BOOT_BUILD_DIRECT_XIP_VARIANT)
+      set(rom_fixed ROM_FIXED $<TARGET_PROPERTY:partition_manager,PM_MCUBOOT_PRIMARY_ADDRESS>)
+    else()
+      set(rom_fixed)
+    endif()
 
     sign(
       SIGNED_BIN_FILE_IN ${app_to_sign_hex}
@@ -309,6 +395,8 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
       SIGNED_HEX_FILE_OUT app_signed_hex
       SIGNED_BIN_FILE_OUT app_signed_bin
       SIGNED_HEX_TEST_FILE_OUT app_signed_test_hex
+      ${sign_dependencies}
+      ${rom_fixed}
       DEPENDS ${app_sign_depends}
       )
 
@@ -324,6 +412,41 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
       mcuboot_primary_app_PM_TARGET
       mcuboot_sign_target
       )
+
+    if (CONFIG_BOOT_BUILD_DIRECT_XIP_VARIANT)
+      get_shared(mcuboot_secondary_app_bin_dir IMAGE mcuboot_secondary_app PROPERTY ZEPHYR_BINARY_DIR)
+      set(mcuboot_secondary_app_hex ${mcuboot_secondary_app_bin_dir}/zephyr.hex)
+
+      set(rom_fixed ROM_FIXED $<TARGET_PROPERTY:partition_manager,PM_MCUBOOT_SECONDARY_ADDRESS>)
+
+      sign(
+        SIGNED_BIN_FILE_IN ${mcuboot_secondary_app_hex}
+        SIGNED_HEX_FILE_NAME_PREFIX ${PROJECT_BINARY_DIR}/mcuboot_secondary_app
+        SLOT_SIZE $<TARGET_PROPERTY:partition_manager,PM_MCUBOOT_PRIMARY_SIZE>
+        SIGNED_HEX_FILE_OUT mcuboot_secondary_app_signed_hex
+        SIGNED_BIN_FILE_OUT mcuboot_secondary_app_signed_bin
+        SIGNED_HEX_TEST_FILE_OUT mcuboot_secondary_app_signed_test_hex
+        ${rom_fixed}
+        DEPENDS mcuboot_secondary_app_subimage ${mcuboot_secondary_app_bin_dir}/zephyr.hex
+        )
+
+      add_custom_target(mcuboot_secondary_app_sign_target
+        DEPENDS
+        ${mcuboot_secondary_app_signed_hex}
+        ${mcuboot_secondary_app_signed_bin}
+        ${mcuboot_secondary_app_signed_test_hex}
+        )
+
+      set_property(GLOBAL PROPERTY
+        mcuboot_secondary_app_PM_HEX_FILE
+        ${mcuboot_secondary_app_signed_hex}
+        )
+
+      set_property(GLOBAL PROPERTY
+        mcuboot_secondary_app_PM_TARGET
+        mcuboot_secondary_app_sign_target
+        )
+    endif()
 
     get_shared(cpunet_signed_app_hex IMAGE CPUNET PROPERTY PM_SIGNED_APP_HEX)
 
@@ -348,6 +471,11 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
 
       set(net_core_binary_name net_core_app_update.bin)
 
+      if (CONFIG_NRF53_ENFORCE_IMAGE_VERSION_EQUALITY)
+        # Add dependency inside network core image to require the latest application core image.
+        set(sign_dependencies IMAGE_DEPENDENCIES "(${APPLICATION_IMAGE_PAIR_IDX},${CONFIG_MCUBOOT_IMAGE_VERSION})")
+      endif()
+
       sign(
         SIGNED_BIN_FILE_IN ${cpunet_signed_app_hex}
         SIGNED_HEX_FILE_NAME_PREFIX ${PROJECT_BINARY_DIR}/net_core_app
@@ -356,6 +484,7 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
         SIGNED_HEX_FILE_OUT net_core_app_signed_hex
         SIGNED_BIN_FILE_OUT net_core_app_signed_bin
         SIGNED_HEX_TEST_FILE_OUT net_core_app_signed_test_hex
+        ${sign_dependencies}
         DEPENDS ${sign_depends}
         )
 
@@ -394,13 +523,29 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
         )
     else()
       # No network core update
-      set(generate_bin_files
-        ${PROJECT_BINARY_DIR}/${app_core_binary_name}
-        )
-      set(generate_script_params
-        "load_address=$<TARGET_PROPERTY:partition_manager,PM_APP_ADDRESS>"
-        "version_MCUBOOT=${CONFIG_MCUBOOT_IMAGE_VERSION}"
-        )
+      if(CONFIG_BOOT_BUILD_DIRECT_XIP_VARIANT)
+        set(secondary_app_core_binary_name mcuboot_secondary_app_update.bin)
+        set(generate_bin_files
+          ${PROJECT_BINARY_DIR}/${app_core_binary_name}
+          ${PROJECT_BINARY_DIR}/${secondary_app_core_binary_name}
+          )
+        set(generate_script_params
+          "${app_core_binary_name}load_address=$<TARGET_PROPERTY:partition_manager,PM_MCUBOOT_PRIMARY_APP_ADDRESS>"
+          "${app_core_binary_name}version_MCUBOOT+XIP=${CONFIG_MCUBOOT_IMAGE_VERSION}"
+          "${app_core_binary_name}slot=0"
+          "${secondary_app_core_binary_name}load_address=$<TARGET_PROPERTY:partition_manager,PM_MCUBOOT_SECONDARY_APP_ADDRESS>"
+          "${secondary_app_core_binary_name}version_MCUBOOT+XIP=${CONFIG_MCUBOOT_IMAGE_VERSION}"
+          "${secondary_app_core_binary_name}slot=1"
+          )
+      else()
+        set(generate_bin_files
+          ${PROJECT_BINARY_DIR}/${app_core_binary_name}
+          )
+        set(generate_script_params
+          "load_address=$<TARGET_PROPERTY:partition_manager,PM_APP_ADDRESS>"
+          "version_MCUBOOT=${CONFIG_MCUBOOT_IMAGE_VERSION}"
+          )
+      endif()
     endif()
 
     generate_dfu_zip(
@@ -490,6 +635,68 @@ if(CONFIG_BOOTLOADER_MCUBOOT)
     endif()
   endif(CONFIG_SIGN_IMAGES)
 endif()
+
+if (CONFIG_DFU_MULTI_IMAGE_PACKAGE_BUILD)
+  set(dfu_multi_image_ids)
+  set(dfu_multi_image_paths)
+  set(dfu_multi_image_targets)
+
+  if (CONFIG_DFU_MULTI_IMAGE_PACKAGE_APP)
+    list(APPEND dfu_multi_image_ids 0)
+    list(APPEND dfu_multi_image_paths "${PROJECT_BINARY_DIR}/${app_core_binary_name}")
+    list(APPEND dfu_multi_image_targets mcuboot_sign_target)
+  endif()
+
+  if (CONFIG_DFU_MULTI_IMAGE_PACKAGE_NET)
+    list(APPEND dfu_multi_image_ids 1)
+    list(APPEND dfu_multi_image_paths "${PROJECT_BINARY_DIR}/${net_core_binary_name}")
+    list(APPEND dfu_multi_image_targets net_core_app_sign_target)
+  endif()
+
+  if (CONFIG_DFU_MULTI_IMAGE_PACKAGE_MCUBOOT)
+    list(APPEND dfu_multi_image_ids -2 -1)
+    list(APPEND dfu_multi_image_paths "${s0_bin_path}" "${s1_bin_path}")
+    list(APPEND dfu_multi_image_targets signed_s0_target signed_s1_target)
+  endif()
+
+  dfu_multi_image_package(dfu_multi_image_pkg
+    IMAGE_IDS ${dfu_multi_image_ids}
+    IMAGE_PATHS ${dfu_multi_image_paths}
+    OUTPUT ${PROJECT_BINARY_DIR}/dfu_multi_image.bin
+    )
+
+  add_dependencies(dfu_multi_image_pkg ${dfu_multi_image_targets})
+endif()
+
+if(CONFIG_ZIGBEE AND CONFIG_ZIGBEE_FOTA)
+  if (CONFIG_ZIGBEE_FOTA_GENERATE_LEGACY_IMAGE_TYPE)
+    set(firmware_binary "${PROJECT_BINARY_DIR}/${app_core_binary_name}")
+    set(legacy_cmd "--legacy")
+  elseif(CONFIG_DFU_MULTI_IMAGE_PACKAGE_BUILD)
+    set(firmware_binary "${PROJECT_BINARY_DIR}/dfu_multi_image.bin")
+    set(legacy_cmd )
+  else()
+    message(FATAL_ERROR "No Zigbee FOTA image format selected. Please enable either legacy or the multi-image format.")
+  endif()
+
+  add_custom_target(zigbee_ota_image ALL
+    COMMAND
+    ${PYTHON_EXECUTABLE}
+      ${NRF_DIR}/scripts/bootloader/zb_add_ota_header.py
+      --application ${firmware_binary}
+      --application-version-string ${CONFIG_MCUBOOT_IMAGE_VERSION}
+      --zigbee-manufacturer-id ${CONFIG_ZIGBEE_FOTA_MANUFACTURER_ID}
+      --zigbee-image-type ${CONFIG_ZIGBEE_FOTA_IMAGE_TYPE}
+      --zigbee-comment ${CONFIG_ZIGBEE_FOTA_COMMENT}
+      --zigbee-ota-min-hw-version ${CONFIG_ZIGBEE_FOTA_MIN_HW_VERSION}
+      --zigbee-ota-max-hw-version ${CONFIG_ZIGBEE_FOTA_MAX_HW_VERSION}
+      --out-directory ${PROJECT_BINARY_DIR}
+      ${legacy_cmd}
+
+    DEPENDS
+    ${firmware_binary}
+  )
+endif(CONFIG_ZIGBEE AND CONFIG_ZIGBEE_FOTA)
 
 # Zephyr has a Kconfig option used for signing an application image
 # with MCUboot using west sign. If partition manager is in use and

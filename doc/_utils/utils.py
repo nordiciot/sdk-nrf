@@ -1,6 +1,12 @@
+#
+# Copyright (c) 2023 Nordic Semiconductor
+#
+# SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+#
+
 from os import PathLike
 from pathlib import Path
-from typing import Dict, Tuple, Optional
+from typing import Tuple, Optional
 
 from sphinx.application import Sphinx
 from sphinx.cmd.build import get_parser
@@ -24,20 +30,6 @@ ALL_DOCSETS = {
     "kconfig": ("Kconfig Reference", "index", None),
 }
 """All supported docsets (name: title, home page, manifest project name)."""
-
-
-def get_docsets(docset: str) -> Dict[str, str]:
-    """Obtain all docsets that should be displayed.
-
-    Args:
-        docset: Target docset.
-
-    Returns:
-        Dictionary of docsets.
-    """
-    docsets = ALL_DOCSETS.copy()
-    del docsets[docset]
-    return docsets
 
 
 def get_projdir(docset: str) -> Path:
@@ -97,7 +89,7 @@ def get_srcdir(docset: str) -> PathLike:
     return get_builddir() / docset / "src"
 
 
-def get_intersphinx_mapping(docset: str) -> Optional[Tuple[str, str]]:
+def get_intersphinx_mapping(docset: str) -> Optional[Tuple[str, str]]: # pylint: disable=unsubscriptable-object
     """Obtain intersphinx configuration for a given docset.
 
     Args:
@@ -118,12 +110,21 @@ def get_intersphinx_mapping(docset: str) -> Optional[Tuple[str, str]]:
     return (str(Path("..") / docset), str(inventory))
 
 
-def add_google_analytics(app: Sphinx) -> None:
+def add_google_analytics(app: Sphinx, options: dict) -> None:
     """Add Google Analytics to a docset.
 
     Args:
         app: Sphinx instance.
+        options: HTML theme options
     """
 
-    app.add_js_file("https://www.googletagmanager.com/gtag/js?id=G-4X57FZCTCL")
-    app.add_js_file("js/ga-tracker.js")
+    app.add_js_file("js/gtm-insert.js")
+    app.add_js_file(
+        "https://policy.app.cookieinformation.com/uc.js",
+        id="CookieConsent",
+        type="text/javascript",
+        **{"data-culture": "EN"},
+    )
+
+    options["add_gtm"] = True
+    options["gtm_id"] = "GTM-WF4CVFX"

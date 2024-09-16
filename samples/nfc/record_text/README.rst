@@ -10,6 +10,17 @@ NFC: Text record
 The NFC Text record sample shows how to use the NFC tag to expose a text record to NFC polling devices.
 It uses the :ref:`lib_nfc_ndef`.
 
+Requirements
+************
+
+The sample supports the following development kits:
+
+.. table-from-sample-yaml::
+
+.. include:: /includes/tfm.txt
+
+The sample also requires a smartphone or tablet.
+
 Overview
 ********
 
@@ -17,18 +28,6 @@ When the sample starts, it initializes the NFC tag and generates an NDEF message
 Then it sets up the NFC library to use the generated message and sense the external NFC field.
 
 The only events handled by the application are the NFC events.
-
-Requirements
-************
-
-The sample supports the following development kits:
-
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp_and_cpuapp_ns, nrf52840dk_nrf52840,  nrf52dk_nrf52832, nrf52833dk_nrf52833
-
-
-The sample also requires a smartphone or tablet.
 
 User interface
 **************
@@ -41,18 +40,19 @@ Building and running
 
 .. |sample path| replace:: :file:`samples/nfc/record_text`
 
-.. include:: /includes/build_and_run.txt
+.. include:: /includes/build_and_run_ns.txt
+
+.. note::
+   |nfc_nfct_driver_note|
 
 Testing
 =======
 
-After programming the sample to your development kit, test it by performing the following steps:
+After programming the sample to your development kit, complete the following steps to test it:
 
-1. Touch the NFC antenna with the smartphone or tablet and observe that LED 1 is lit.
-#. Observe that the smartphone/tablet displays the encoded text (in the most
-   suitable language).
-#. Move the smartphone/tablet away from the NFC antenna and observe that LED 1
-   turns off.
+1. Touch the NFC antenna with the smartphone or tablet and observe that **LED 1** is lit.
+#. Observe that the smartphone or tablet displays the encoded text (in the most suitable language).
+#. Move the smartphone or tablet away from the NFC antenna and observe that **LED 1** turns off.
 
 Dependencies
 ************
@@ -66,9 +66,13 @@ In addition, it uses the Type 2 Tag library from `sdk-nrfxlib`_:
 
 * :ref:`nrfxlib:nfc_api_type2`
 
-The sample uses the following Zephyr libraries:
+It uses the following Zephyr libraries:
 
 * ``include/zephyr.h``
 * ``include/device.h``
 * ``include/power/reboot.h``
 * :ref:`GPIO Interface <zephyr:api_peripherals>`
+
+The sample also uses the following secure firmware component:
+
+* :ref:`Trusted Firmware-M <ug_tfm>`

@@ -1,2 +1,2 @@
-When built for nrf5340dk_nrf5340_cpuapp_ns and nrf9160dk_nrf9160_ns targets, the sample is configured to compile and run as a non-secure application.
-Therefore, it automatically includes :ref:`TF-M <ug_tfm>` that prepares the required peripherals to be available for the application.
+When built for an ``_ns`` build target, the sample is configured to compile and run as a non-secure application with :ref:`Cortex-M Security Extensions enabled <app_boards_spe_nspe_cpuapp_ns>`.
+Therefore, it automatically includes :ref:`Trusted Firmware-M <ug_tfm>` that prepares the required peripherals and secure services to be available for the application.

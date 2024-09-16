@@ -14,8 +14,9 @@
  * @brief CAF Module State Event.
  */
 
-#include <sys/atomic.h>
-#include "event_manager.h"
+#include <zephyr/sys/atomic.h>
+#include <app_event_manager.h>
+#include <app_event_manager_profiler_tracer.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,13 +26,11 @@ extern "C" {
 
 #define MODULE_ID_PTR_VAR(mname) _CONCAT(__module_, mname)
 #define MODULE_ID_LIST_SECTION_NAME   STRINGIFY(MODULE_ID_LIST_SECTION_PREFIX)
-#define MODULE_ID_LIST_START _CONCAT(__start_, MODULE_ID_LIST_SECTION_PREFIX)
-#define MODULE_ID_LIST_STOP  _CONCAT(__stop_,  MODULE_ID_LIST_SECTION_PREFIX)
 #define MODULE_ID_PTR_VAR_EXTERN_DEC(mname) \
 	extern const void * const MODULE_ID_PTR_VAR(mname)
 
-extern const void * const MODULE_ID_LIST_START;
-extern const void * const MODULE_ID_LIST_STOP;
+extern const void * const __start_module_id_list[];
+extern const void * const __stop_module_id_list[];
 
 
 /**
@@ -41,7 +40,7 @@ extern const void * const MODULE_ID_LIST_STOP;
  */
 static inline size_t module_count(void)
 {
-	return (&MODULE_ID_LIST_STOP - &MODULE_ID_LIST_START);
+	return (__stop_module_id_list - __start_module_id_list);
 }
 
 /**
@@ -51,12 +50,37 @@ static inline size_t module_count(void)
  *
  * @return Module ID.
  */
-static inline const void * const module_id_get(size_t idx)
+static inline const void *module_id_get(size_t idx)
 {
-	if (idx >= module_count()) {
-		return NULL;
-	}
-	return *((&MODULE_ID_LIST_START) + idx);
+	__ASSERT_NO_MSG(idx < module_count());
+
+	return (__start_module_id_list + idx);
+}
+
+/**
+ * @brief Get IDX of module with given id.
+ *
+ * @param[in] module_id ID of the module.
+ *
+ * @return Module IDX.
+ */
+static inline size_t module_idx_get(const void *module_id)
+{
+	return ((const size_t *)module_id - (const size_t *)__start_module_id_list);
+}
+
+/**
+ * @brief Get name of the module with given id.
+ *
+ * @param[in] id Id of the module.
+ *
+ * @return Module name.
+ */
+static inline const char *module_name_get(const void *id)
+{
+	__ASSERT_NO_MSG(id);
+
+	return *((const char **)id);
 }
 
 /** @brief Get index of module.
@@ -69,7 +93,7 @@ static inline const void * const module_id_get(size_t idx)
  */
 #define MODULE_IDX(mname) ({                                        \
 		MODULE_ID_PTR_VAR_EXTERN_DEC(mname);                \
-		&MODULE_ID_PTR_VAR(mname) - &MODULE_ID_LIST_START;  \
+		&MODULE_ID_PTR_VAR(mname) - __start_module_id_list; \
 	})
 
 /**
@@ -181,7 +205,10 @@ enum module_state {
 	MODULE_STATE_ERROR,
 
 	/** Number of module states. */
-	MODULE_STATE_COUNT
+	MODULE_STATE_COUNT,
+
+	/** Unused in code, required for inter-core compatibility. */
+	APP_EM_ENFORCE_ENUM_SIZE(MODULE_STATE)
 };
 
 /** @brief Module state event.
@@ -203,7 +230,7 @@ enum module_state {
  */
 struct module_state_event {
 	/** Event header. */
-	struct event_header header;
+	struct app_event_header header;
 
 	/** ID of the module. */
 	const void *module_id;
@@ -212,7 +239,7 @@ struct module_state_event {
 	enum module_state state;
 };
 
-EVENT_TYPE_DECLARE(module_state_event);
+APP_EVENT_TYPE_DECLARE(module_state_event);
 
 
 /** @brief Check if the selected module reported the selected state.
@@ -221,7 +248,7 @@ EVENT_TYPE_DECLARE(module_state_event);
  * selected module reported selected state. The @ref MODULE_ID can be used to get module ID of
  * module with selected name.
  *
- * @param[in] event		Poitner to handled module state event.
+ * @param[in] event		Pointer to handled module state event.
  * @param[in] module_id		ID of the selected module.
  * @param[in] state		Selected module state.
  *
@@ -248,7 +275,7 @@ static inline bool check_state(const struct module_state_event *event,
  */
 #define MODULE_ID(mname) ({                                  \
 			MODULE_ID_PTR_VAR_EXTERN_DEC(mname); \
-			MODULE_ID_PTR_VAR(mname);            \
+			&MODULE_ID_PTR_VAR(mname);           \
 		})
 
 
@@ -287,9 +314,9 @@ static inline void module_set_state(enum module_state state)
 
 	struct module_state_event *event = new_module_state_event();
 
-	event->module_id = MODULE_ID_PTR_VAR(MODULE);
+	event->module_id = MODULE_ID(MODULE);
 	event->state = state;
-	EVENT_SUBMIT(event);
+	APP_EVENT_SUBMIT(event);
 }
 
 #ifdef __cplusplus

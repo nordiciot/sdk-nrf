@@ -19,7 +19,7 @@ extern "C" {
 #endif
 
 #include <bluetooth/gatt_pool.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/bluetooth/gatt.h>
 #include <bluetooth/conn_ctx.h>
 
 #ifndef CONFIG_BT_HIDS_INPUT_REP_MAX
@@ -340,7 +340,7 @@ struct bt_hids_rep_map {
 	uint8_t const *data;
 
 	/** Size of the map. */
-	uint8_t size;
+	uint16_t size;
 };
 
 /** @brief HID Protocol Mode event handler.
@@ -534,8 +534,8 @@ int bt_hids_disconnected(struct bt_hids *hids_obj, struct bt_conn *conn);
 
 /** @brief Send Input Report.
  *
- *  @warning The function is not thread safe.
- *	     It can not be called from multiple threads at the same time.
+ *  @note The function is not thread safe.
+ *	     It cannot be called from multiple threads at the same time.
  *
  *  @param hids_obj Pointer to HIDS instance.
  *  @param conn Pointer to Connection Object.
@@ -553,8 +553,8 @@ int bt_hids_inp_rep_send(struct bt_hids *hids_obj, struct bt_conn *conn,
 
 /** @brief Send Boot Mouse Input Report.
  *
- *  @warning The function is not thread safe.
- *	     It can not be called from multiple threads at the same time.
+ *  @note The function is not thread safe.
+ *	     It cannot be called from multiple threads at the same time.
  *
  *  @param hids_obj Pointer to HIDS instance.
  *  @param conn Pointer to Connection Object.
@@ -575,8 +575,8 @@ int bt_hids_boot_mouse_inp_rep_send(struct bt_hids *hids_obj,
 
 /** @brief Send Boot Keyboard Input Report.
  *
- *  @warning The function is not thread safe.
- *	     It can not be called from multiple threads at the same time.
+ *  @note The function is not thread safe.
+ *	     It cannot be called from multiple threads at the same time.
  *
  *  @param hids_obj Pointer to HIDS instance.
  *  @param conn Pointer to Connection Object.

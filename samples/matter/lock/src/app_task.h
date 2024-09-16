@@ -12,54 +12,83 @@
 
 #include <platform/CHIPDeviceLayer.h>
 
-#ifdef CONFIG_MCUMGR_SMP_BT
+#if CONFIG_CHIP_FACTORY_DATA
+#include <platform/nrfconnect/FactoryDataProvider.h>
+#else
+#include <platform/nrfconnect/DeviceInstanceInfoProviderImpl.h>
+#endif
+
+#ifdef CONFIG_MCUMGR_TRANSPORT_BT
 #include "dfu_over_smp.h"
 #endif
 
+#ifdef CONFIG_CHIP_ICD_SUBSCRIPTION_HANDLING
+#include "icd_util.h"
+#endif
+
 struct k_timer;
+struct Identify;
 
 class AppTask {
 public:
-	int StartApp();
+	static AppTask &Instance()
+	{
+		static AppTask sAppTask;
+		return sAppTask;
+	};
 
-	void PostEvent(const AppEvent &aEvent);
-	void UpdateClusterState();
+	CHIP_ERROR StartApp();
+
+	void UpdateClusterState(BoltLockManager::State state, BoltLockManager::OperationSource source);
+
+	static void PostEvent(const AppEvent &event);
+	static void IdentifyStartHandler(Identify *);
+	static void IdentifyStopHandler(Identify *);
 
 private:
-	int Init();
+	CHIP_ERROR Init();
 
-	void CancelFunctionTimer();
-	void StartFunctionTimer(uint32_t timeoutInMs);
+	void CancelTimer();
+	void StartTimer(uint32_t timeoutInMs);
 
-	void DispatchEvent(const AppEvent &event);
-	void LockActionHandler(BoltLockManager::Action action, bool chipInitiated);
-	void CompleteLockActionHandler();
-	void FunctionPressHandler();
-	void FunctionReleaseHandler();
-	void FunctionTimerEventHandler();
-	void StartThreadHandler();
-	void StartBLEAdvertisingHandler();
+	static void DispatchEvent(const AppEvent &event);
+	static void FunctionTimerEventHandler(const AppEvent &event);
+	static void FunctionHandler(const AppEvent &event);
+	static void StartBLEAdvertisementAndLockActionEventHandler(const AppEvent &event);
+	static void LockActionEventHandler(const AppEvent &event);
+	static void StartBLEAdvertisementHandler(const AppEvent &event);
+	static void UpdateLedStateEventHandler(const AppEvent &event);
 
-	static void UpdateStatusLED();
-	static void ButtonEventHandler(uint32_t buttonState, uint32_t hasChanged);
-	static void TimerEventHandler(k_timer *timer);
-	static void LEDStateUpdateHandler(LEDWidget &ledWidget);
 	static void ChipEventHandler(const chip::DeviceLayer::ChipDeviceEvent *event, intptr_t arg);
-#ifdef CONFIG_MCUMGR_SMP_BT
-	static void RequestSMPAdvertisingStart(void);
+	static void ButtonEventHandler(uint32_t buttonState, uint32_t hasChanged);
+	static void LEDStateUpdateHandler(LEDWidget &ledWidget);
+	static void FunctionTimerTimeoutCallback(k_timer *timer);
+	static void UpdateStatusLED();
+
+	static void LockStateChanged(BoltLockManager::State state, BoltLockManager::OperationSource source);
+
+#ifdef CONFIG_THREAD_WIFI_SWITCHING
+	static void SwitchImagesDone();
+	static void SwitchImagesTriggerHandler(const AppEvent &event);
+	static void SwitchImagesTimerTimeoutCallback(k_timer *timer);
+	static void SwitchImagesEventHandler(const AppEvent &event);
+
+	bool mSwitchImagesTimerActive = false;
 #endif
 
-	friend AppTask &GetAppTask();
+#ifdef CONFIG_CHIP_NUS
+	static void NUSLockCallback(void *context);
+	static void NUSUnlockCallback(void *context);
+#endif
 
-	enum class TimerFunction { NoneSelected = 0, SoftwareUpdate, FactoryReset };
+#ifdef CONFIG_THREAD_WIFI_SWITCHING_CLI_SUPPORT
+	static void RegisterSwitchCliCommand();
+#endif
 
-	TimerFunction mFunction = TimerFunction::NoneSelected;
-
-	static AppTask sAppTask;
+	FunctionEvent mFunction = FunctionEvent::NoneSelected;
 	bool mFunctionTimerActive = false;
-};
 
-inline AppTask &GetAppTask()
-{
-	return AppTask::sAppTask;
-}
+#if CONFIG_CHIP_FACTORY_DATA
+	chip::DeviceLayer::FactoryDataProvider<chip::DeviceLayer::InternalFlashFactoryData> mFactoryDataProvider;
+#endif
+};

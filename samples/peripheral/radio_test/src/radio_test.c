@@ -7,20 +7,35 @@
 #include "radio_test.h"
 
 #include <string.h>
-#include <hal/nrf_nvmc.h>
-#include <hal/nrf_power.h>
-#include <hal/nrf_rng.h>
-#include <nrfx_timer.h>
-#include <zephyr.h>
+#include <inttypes.h>
 
-#if CONFIG_NRF21540_FEM
-#include "nrf21540.h"
-#endif
+#include <hal/nrf_power.h>
+
+#ifdef NRF53_SERIES
+#include <hal/nrf_vreqctrl.h>
+#endif /* NRF53_SERIES */
+
+#include <nrfx_timer.h>
+#include <zephyr/kernel.h>
+#include <zephyr/random/rand32.h>
+
+#include <hal/nrf_egu.h>
+#include <helpers/nrfx_gppi.h>
+
+#if CONFIG_FEM
+#include "fem_al/fem_al.h"
+#endif /* CONFIG_FEM */
 
 /* IEEE 802.15.4 default frequency. */
 #define IEEE_DEFAULT_FREQ         (5)
 /* Length on air of the LENGTH field. */
 #define RADIO_LENGTH_LENGTH_FIELD (8UL)
+
+#define RADIO_TEST_TIMER_INSTANCE 0
+
+#define RADIO_TEST_EGU       NRF_EGU0
+#define RADIO_TEST_EGU_EVENT NRF_EGU_EVENT_TRIGGERED0
+#define RADIO_TEST_EGU_TASK  NRF_EGU_TASK_TRIGGER0
 
 /* Frequency calculation for a given channel in the IEEE 802.15.4 radio
  * mode.
@@ -44,96 +59,181 @@ static uint32_t rx_packet_cnt;
 static uint8_t current_channel;
 
 /* Timer used for channel sweeps and tx with duty cycle. */
-static const nrfx_timer_t timer = NRFX_TIMER_INSTANCE(0);
+static const nrfx_timer_t timer = NRFX_TIMER_INSTANCE(RADIO_TEST_TIMER_INSTANCE);
 
-static bool sweep_proccesing;
+static bool sweep_processing;
 
+/* Total payload size */
+static uint16_t total_payload_size;
 
-#if CONFIG_NRF21540_FEM
-static struct radio_test_nrf21540 nrf21540;
+/* PPI channel for starting radio */
+static uint8_t ppi_radio_start;
 
-static int nrf21540_configure(bool rx, nrf_radio_mode_t mode,
-			      struct radio_test_nrf21540 *nrf21540)
-{
-	int err;
+#if CONFIG_FEM
+static struct radio_test_fem fem;
+#endif /* CONFIG_FEM */
 
-	/* nRF21540 is kept powered during sweeping */
-	if (!sweep_proccesing) {
-		err = nrf21540_power_up();
-		if (err) {
-			return err;
-		}
-	}
-
-	if (nrf21540->active_delay == 0) {
-		nrf21540->active_delay =
-			nrf21540_default_active_delay_calculate(false, mode);
-	}
-
-	if (rx) {
-		return nrf21540_rx_configure(NRF21540_EXECUTE_NOW,
-					     nrf_radio_event_address_get(
-						NRF_RADIO,
-						NRF_RADIO_EVENT_DISABLED),
-					     nrf21540->active_delay);
-	}
-
-	/* Sweeping is done from the interrupt context do not trigger SPI
-	 * transfer in the interrupt.
-	 */
-	if ((nrf21540->gain != NRF21540_USE_DEFAULT_GAIN) &&
-	    !sweep_proccesing) {
-		err = nrf21540_tx_gain_set(nrf21540->gain);
-		if (err) {
-			return err;
-		}
-	}
-
-	return nrf21540_tx_configure(NRF21540_EXECUTE_NOW,
-				     nrf_radio_event_address_get(NRF_RADIO,
-						NRF_RADIO_EVENT_DISABLED),
-				     nrf21540->active_delay);
-}
-#endif /* CONFIG_NRF21540_FEM */
-
-static uint8_t rnd8(void)
-{
-	nrf_rng_event_clear(NRF_RNG, NRF_RNG_EVENT_VALRDY);
-
-	while (!nrf_rng_event_check(NRF_RNG, NRF_RNG_EVENT_VALRDY)) {
-		/* Do nothing. */
-	}
-	return nrf_rng_random_value_get(NRF_RNG);
-}
-
-static void radio_channel_set(nrf_radio_mode_t mode, uint8_t channel)
+static uint16_t channel_to_frequency(nrf_radio_mode_t mode, uint8_t channel)
 {
 #if CONFIG_HAS_HW_NRF_RADIO_IEEE802154
 	if (mode == NRF_RADIO_MODE_IEEE802154_250KBIT) {
 		if ((channel >= IEEE_MIN_CHANNEL) &&
 			(channel <= IEEE_MAX_CHANNEL)) {
-			nrf_radio_frequency_set(
-				NRF_RADIO,
-				CHAN_TO_FREQ(IEEE_FREQ_CALC(channel)));
+			return CHAN_TO_FREQ(IEEE_FREQ_CALC(channel));
 		} else {
-			nrf_radio_frequency_set(
-				NRF_RADIO,
-				CHAN_TO_FREQ(IEEE_DEFAULT_FREQ));
+			return CHAN_TO_FREQ(IEEE_DEFAULT_FREQ);
 		}
 	} else {
-		nrf_radio_frequency_set(NRF_RADIO, CHAN_TO_FREQ(channel));
+		return CHAN_TO_FREQ(channel);
 	}
 #else
-	nrf_radio_frequency_set(NRF_RADIO, CHAN_TO_FREQ(channel));
+	return CHAN_TO_FREQ(channel);
 #endif /* CONFIG_HAS_HW_NRF_RADIO_IEEE802154 */
+}
+
+static void radio_power_set(nrf_radio_mode_t mode, uint8_t channel, int8_t power)
+{
+	int8_t output_power = power;
+	int8_t radio_power = power;
+
+#if CONFIG_FEM
+	uint16_t frequency;
+
+	if (IS_ENABLED(CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC)) {
+		frequency = channel_to_frequency(mode, channel);
+		output_power = fem_tx_output_power_prepare(power, &radio_power, frequency);
+	}
+#else
+	ARG_UNUSED(mode);
+	ARG_UNUSED(channel);
+#endif /* CONFIG_FEM */
+
+#ifdef NRF53_SERIES
+	bool high_voltage_enable = false;
+
+	if (radio_power > 0) {
+		high_voltage_enable = true;
+
+		/* High voltage increases radio output power by 3 dBm. */
+		radio_power -= RADIO_TXPOWER_TXPOWER_Pos3dBm;
+	}
+
+	nrf_vreqctrl_radio_high_voltage_set(NRF_VREQCTRL, high_voltage_enable);
+#endif /* NRF53_SERIES */
+
+	nrf_radio_txpower_set(NRF_RADIO, (nrf_radio_txpower_t)radio_power);
+
+	if (!sweep_processing) {
+		printk("Requested tx output power: %" PRIi8 " dBm\n", power);
+		printk("Tx output power set to: %" PRIi8 " dBm\n", output_power);
+	}
+}
+
+static void radio_ppi_config(bool rx)
+{
+	nrfx_gppi_channel_endpoints_setup(ppi_radio_start,
+			nrf_egu_event_address_get(RADIO_TEST_EGU, RADIO_TEST_EGU_EVENT),
+			nrf_radio_task_address_get(NRF_RADIO,
+						   rx ? NRF_RADIO_TASK_RXEN : NRF_RADIO_TASK_TXEN));
+	nrfx_gppi_fork_endpoint_setup(ppi_radio_start,
+			nrf_timer_task_address_get(timer.p_reg, NRF_TIMER_TASK_START));
+	nrfx_gppi_channels_enable(BIT(ppi_radio_start));
+}
+
+static void radio_ppi_tx_reconfigure(void)
+{
+	nrfx_gppi_channels_disable(BIT(ppi_radio_start));
+	nrfx_gppi_fork_endpoint_clear(ppi_radio_start,
+				nrf_timer_task_address_get(timer.p_reg, NRF_TIMER_TASK_START));
+	nrfx_gppi_event_endpoint_clear(ppi_radio_start,
+				nrf_egu_event_address_get(RADIO_TEST_EGU, RADIO_TEST_EGU_EVENT));
+	nrfx_gppi_event_endpoint_setup(ppi_radio_start,
+				nrf_timer_event_address_get(timer.p_reg, NRF_TIMER_EVENT_COMPARE1));
+	nrfx_gppi_channels_enable(BIT(ppi_radio_start));
+}
+
+#if CONFIG_FEM
+static int fem_configure(bool rx, nrf_radio_mode_t mode,
+			 struct radio_test_fem *fem)
+{
+	int err;
+
+	/* FEM is kept powered during sweeping */
+	if (!sweep_processing) {
+		err = fem_power_up();
+		if (err) {
+			return err;
+		}
+	}
+
+	if (fem->ramp_up_time == 0) {
+		fem->ramp_up_time =
+			fem_default_ramp_up_time_get(false, mode);
+	}
+
+	if (!sweep_processing) {
+		nrf_timer_shorts_enable(timer.p_reg,
+			(NRF_TIMER_SHORT_COMPARE2_STOP_MASK | NRF_TIMER_SHORT_COMPARE2_CLEAR_MASK));
+	}
+
+	radio_ppi_config(rx);
+
+	if (rx) {
+		err = fem_rx_configure(fem->ramp_up_time);
+		if (err) {
+			printk("Failed to configure LNA.\n");
+		}
+
+		return err;
+	}
+
+	if ((!IS_ENABLED(CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC)) &&
+	    (fem->gain != FEM_USE_DEFAULT_GAIN) &&
+	    !sweep_processing) {
+		err = fem_tx_gain_set(fem->gain);
+		if (err) {
+			printk("%d: out of range FEM gain value or setting gain is not supported\n",
+				fem->gain);
+			return err;
+		}
+	}
+
+	err = fem_tx_configure(fem->ramp_up_time);
+	if (err) {
+		printk("Failed to configure PA.\n");
+	}
+
+	fem_errata_25X(mode);
+
+	return err;
+}
+#endif /* CONFIG_FEM */
+
+static void radio_start(bool rx, bool force_egu)
+{
+	if (IS_ENABLED(CONFIG_FEM) || force_egu) {
+		nrf_egu_task_trigger(RADIO_TEST_EGU,
+				     nrf_egu_task_address_get(RADIO_TEST_EGU, RADIO_TEST_EGU_TASK));
+	} else {
+		nrf_radio_task_trigger(NRF_RADIO, rx ? NRF_RADIO_TASK_RXEN : NRF_RADIO_TASK_TXEN);
+	}
+}
+
+static void radio_channel_set(nrf_radio_mode_t mode, uint8_t channel)
+{
+	uint16_t frequency;
+
+	frequency = channel_to_frequency(mode, channel);
+	nrf_radio_frequency_set(NRF_RADIO, frequency);
 }
 
 static void radio_config(nrf_radio_mode_t mode, enum transmit_pattern pattern)
 {
 	nrf_radio_packet_conf_t packet_conf;
 
-	/* Reset Radio ramp-up time. */
-	nrf_radio_modecnf0_set(NRF_RADIO, false, RADIO_MODECNF0_DTX_Center);
+	/* Set fast ramp-up time. */
+	nrf_radio_modecnf0_set(NRF_RADIO, true, RADIO_MODECNF0_DTX_Center);
+	/* Disable CRC. */
 	nrf_radio_crc_configure(NRF_RADIO, RADIO_CRCCNF_LEN_Disabled,
 				NRF_RADIO_CRC_ADDR_INCLUDE, 0);
 
@@ -194,9 +294,8 @@ static void radio_config(nrf_radio_mode_t mode, enum transmit_pattern pattern)
 		packet_conf.big_endian = false;
 		packet_conf.whiteen = false;
 
-		/* Set fast ramp-up time. */
-		nrf_radio_modecnf0_set(NRF_RADIO, true,
-				       RADIO_MODECNF0_DTX_Center);
+		/* preamble, address (BALEN + PREFIX), lflen and payload */
+		total_payload_size = 4 + (packet_conf.balen + 1) + 1 + packet_conf.maxlen;
 		break;
 #endif /* CONFIG_HAS_HW_NRF_RADIO_IEEE802154 */
 
@@ -206,24 +305,23 @@ static void radio_config(nrf_radio_mode_t mode, enum transmit_pattern pattern)
 		/* Packet configuration:
 		 * S1 size = 0 bits,
 		 * S0 size = 0 bytes,
-		 * 10-bit preamble.
+		 * 10 bytes preamble.
 		 */
 		packet_conf.plen = NRF_RADIO_PREAMBLE_LENGTH_LONG_RANGE;
-		packet_conf.maxlen = IEEE_MAX_PAYLOAD_LEN;
 		packet_conf.cilen = 2;
 		packet_conf.termlen = 3;
 		packet_conf.big_endian = false;
 		packet_conf.balen = 3;
-
-		/* Set fast ramp-up time. */
-		nrf_radio_modecnf0_set(NRF_RADIO, true,
-				       RADIO_MODECNF0_DTX_Center);
 
 		/* Set CRC length; CRC calculation does not include the address
 		 * field.
 		 */
 		nrf_radio_crc_configure(NRF_RADIO, RADIO_CRCCNF_LEN_Three,
 					NRF_RADIO_CRC_ADDR_SKIP, 0);
+
+		/* preamble, address (BALEN + PREFIX), lflen, code indicator, TERM, payload, CRC */
+		total_payload_size = 10 + (packet_conf.balen + 1) + 1 + packet_conf.cilen +
+				  packet_conf.termlen + packet_conf.maxlen + RADIO_CRCCNF_LEN_Three;
 		break;
 
 #endif /* CONFIG_HAS_HW_NRF_RADIO_BLE_CODED */
@@ -235,6 +333,9 @@ static void radio_config(nrf_radio_mode_t mode, enum transmit_pattern pattern)
 		 * 16-bit preamble.
 		 */
 		packet_conf.plen = NRF_RADIO_PREAMBLE_LENGTH_16BIT;
+
+		/* preamble, address (BALEN + PREFIX), lflen and payload */
+		total_payload_size = 2 + (packet_conf.balen + 1) + 1 + packet_conf.maxlen;
 		break;
 
 	default:
@@ -244,6 +345,9 @@ static void radio_config(nrf_radio_mode_t mode, enum transmit_pattern pattern)
 		 * 8-bit preamble.
 		 */
 		packet_conf.plen = NRF_RADIO_PREAMBLE_LENGTH_8BIT;
+
+		/* preamble, address (BALEN + PREFIX), lflen, and payload */
+		total_payload_size = 1 + (packet_conf.balen + 1) + 1 + packet_conf.maxlen;
 		break;
 	}
 
@@ -266,18 +370,21 @@ static void generate_modulated_rf_packet(uint8_t mode,
 	tx_packet[0] = sizeof(tx_packet) - 1;
 #endif /* CONFIG_HAS_HW_NRF_RADIO_IEEE802154 */
 
-	/* Fill payload with random data. */
-	for (uint8_t i = 0; i < sizeof(tx_packet) - 1; i++) {
-		if (pattern == TRANSMIT_PATTERN_RANDOM) {
-			tx_packet[i + 1] = rnd8();
-		} else if (pattern == TRANSMIT_PATTERN_11001100) {
-			tx_packet[i + 1] = 0xCC;
-		} else if (pattern == TRANSMIT_PATTERN_11110000) {
-			tx_packet[i + 1] = 0xF0;
-		} else {
-			/* Do nothing. */
-		}
+	switch (pattern) {
+	case TRANSMIT_PATTERN_RANDOM:
+		sys_rand_get(tx_packet + 1, sizeof(tx_packet) - 1);
+		break;
+	case TRANSMIT_PATTERN_11001100:
+		memset(tx_packet + 1, 0xCC, sizeof(tx_packet) - 1);
+		break;
+	case TRANSMIT_PATTERN_11110000:
+		memset(tx_packet + 1, 0xF0, sizeof(tx_packet) - 1);
+		break;
+	default:
+		/* Do nothing. */
+		break;
 	}
+
 	nrf_radio_packetptr_set(NRF_RADIO, tx_packet);
 }
 
@@ -293,35 +400,67 @@ static void radio_disable(void)
 	}
 	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_DISABLED);
 
-#if CONFIG_NRF21540_FEM
-	(void) nrf21540_txrx_configuration_clear();
-	(void) nrf21540_txrx_stop();
+#if CONFIG_FEM
+	fem_txrx_configuration_clear();
+	fem_txrx_stop();
 
-	/* Do not powerdown nRF21540 during sweeping. */
-	if (!sweep_proccesing) {
-		(void) nrf21540_power_down();
+	/* Do not power-down front-end module (FEM) during sweeping. */
+	if (!sweep_processing) {
+		(void)fem_power_down();
 	}
-#endif /* CONFIG_NRF21540_FEM */
+#endif /* CONFIG_FEM */
 }
 
-static void radio_unmodulated_tx_carrier(uint8_t mode, uint8_t txpower, uint8_t channel)
+#if NRF53_ERRATA_117_PRESENT
+static void errata_117(nrf_radio_mode_t mode)
+{
+	if (!nrf53_errata_117()) {
+		return;
+	}
+
+	if ((mode == NRF_RADIO_MODE_NRF_2MBIT) ||
+	    (mode == NRF_RADIO_MODE_BLE_2MBIT) ||
+	    (mode == NRF_RADIO_MODE_IEEE802154_250KBIT)) {
+		*((volatile uint32_t *)0x41008588) = *((volatile uint32_t *)0x01FF0084);
+	} else {
+		*((volatile uint32_t *)0x41008588) = *((volatile uint32_t *)0x01FF0080);
+	}
+}
+#else
+static void errata_117(nrf_radio_mode_t mode)
+{
+	ARG_UNUSED(mode);
+}
+#endif /* NRF53_ERRATA_117_PRESENT */
+
+static void radio_mode_set(NRF_RADIO_Type *reg, nrf_radio_mode_t mode)
+{
+	errata_117(mode);
+	nrf_radio_mode_set(reg, mode);
+}
+
+static void radio_unmodulated_tx_carrier(uint8_t mode, int8_t txpower, uint8_t channel)
 {
 	radio_disable();
 
-	nrf_radio_mode_set(NRF_RADIO, mode);
+	radio_mode_set(NRF_RADIO, mode);
 	nrf_radio_shorts_enable(NRF_RADIO, NRF_RADIO_SHORT_READY_START_MASK);
-	nrf_radio_txpower_set(NRF_RADIO, txpower);
+	radio_power_set(mode, channel, txpower);
 
 	radio_channel_set(mode, channel);
 
-#if CONFIG_NRF21540_FEM
-	(void) nrf21540_configure(false, mode, &nrf21540);
+#if CONFIG_FEM
+	(void)fem_configure(false, mode, &fem);
 #else
-	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_TXEN);
-#endif /* CONFIG_NRF21540_FEM */
+	if (sweep_processing) {
+		radio_ppi_config(false);
+	}
+#endif /* CONFIG_FEM */
+
+	radio_start(false, sweep_processing);
 }
 
-static void radio_modulated_tx_carrier(uint8_t mode, uint8_t txpower, uint8_t channel,
+static void radio_modulated_tx_carrier(uint8_t mode, int8_t txpower, uint8_t channel,
 				       enum transmit_pattern pattern)
 {
 	radio_disable();
@@ -353,8 +492,8 @@ static void radio_modulated_tx_carrier(uint8_t mode, uint8_t txpower, uint8_t ch
 		break;
 	}
 
-	nrf_radio_mode_set(NRF_RADIO, mode);
-	nrf_radio_txpower_set(NRF_RADIO, txpower);
+	radio_mode_set(NRF_RADIO, mode);
+	radio_power_set(mode, channel, txpower);
 
 	radio_channel_set(mode, channel);
 
@@ -363,21 +502,18 @@ static void radio_modulated_tx_carrier(uint8_t mode, uint8_t txpower, uint8_t ch
 	nrf_radio_event_clear(NRF_RADIO, NRF_RADIO_EVENT_END);
 	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_END_MASK);
 
-#if CONFIG_NRF21540_FEM
-	(void) nrf21540_configure(false, mode, &nrf21540);
-#else
-	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_TXEN);
-#endif /* CONFIG_NRF21540_FEM */
-	while (!nrf_radio_event_check(NRF_RADIO, NRF_RADIO_EVENT_END)) {
-		/* Do nothing */
-	}
+#if CONFIG_FEM
+	(void)fem_configure(false, mode, &fem);
+#endif /* CONFIG_FEM */
+
+	radio_start(false, false);
 }
 
 static void radio_rx(uint8_t mode, uint8_t channel, enum transmit_pattern pattern)
 {
 	radio_disable();
 
-	nrf_radio_mode_set(NRF_RADIO, mode);
+	radio_mode_set(NRF_RADIO, mode);
 	nrf_radio_shorts_enable(NRF_RADIO,
 				NRF_RADIO_SHORT_READY_START_MASK |
 				NRF_RADIO_SHORT_END_START_MASK);
@@ -390,24 +526,29 @@ static void radio_rx(uint8_t mode, uint8_t channel, enum transmit_pattern patter
 
 	nrf_radio_int_enable(NRF_RADIO, NRF_RADIO_INT_CRCOK_MASK);
 
-#if CONFIG_NRF21540_FEM
-	(void) nrf21540_configure(true, mode, &nrf21540);
+#if CONFIG_FEM
+	(void)fem_configure(true, mode, &fem);
 #else
-	nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_RXEN);
-#endif
+	if (sweep_processing) {
+		radio_ppi_config(true);
+	}
+#endif /* CONFIG_FEM */
+
+	radio_start(true, sweep_processing);
 }
 
 static void radio_sweep_start(uint8_t channel, uint32_t delay_ms)
 {
 	current_channel = channel;
 
-#if CONFIG_NRF21540_FEM
-	(void) nrf21540_power_up();
+#if CONFIG_FEM
+	(void)fem_power_up();
 
-	if (nrf21540.gain != NRF21540_USE_DEFAULT_GAIN) {
-		(void) nrf21540_tx_gain_set(nrf21540.gain);
+	if ((!IS_ENABLED(CONFIG_RADIO_TEST_POWER_CONTROL_AUTOMATIC)) &&
+	    fem.gain != FEM_USE_DEFAULT_GAIN) {
+		(void)fem_tx_gain_set(fem.gain);
 	}
-#endif
+#endif /* CONFIG_FEM */
 
 	nrfx_timer_disable(&timer);
 	nrf_timer_shorts_disable(timer.p_reg, ~0);
@@ -416,14 +557,14 @@ static void radio_sweep_start(uint8_t channel, uint32_t delay_ms)
 	nrfx_timer_extended_compare(&timer,
 		NRF_TIMER_CC_CHANNEL0,
 		nrfx_timer_ms_to_ticks(&timer, delay_ms),
-		NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK,
+		(NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK |
+		NRF_TIMER_SHORT_COMPARE0_STOP_MASK),
 		true);
 
-	nrfx_timer_clear(&timer);
 	nrfx_timer_enable(&timer);
 }
 
-static void radio_modulated_tx_carrier_duty_cycle(uint8_t mode, uint8_t txpower,
+static void radio_modulated_tx_carrier_duty_cycle(uint8_t mode, int8_t txpower,
 						  uint8_t channel,
 						  enum transmit_pattern pattern,
 						  uint32_t duty_cycle)
@@ -435,12 +576,17 @@ static void radio_modulated_tx_carrier_duty_cycle(uint8_t mode, uint8_t txpower,
 		8, 4, 32, 8, 4, 64, 16, 0, 0, 0, 0, 0, 0, 0, 0, 32
 	};
 
-	/* 1 byte preamble, 5 byte address (BALEN + PREFIX),
-	 * and sizeof(payload), no CRC
-	 */
-	const uint32_t total_payload_size     = 1 + 5 + sizeof(tx_packet);
-	const uint32_t total_time_per_payload =
-		time_in_us_per_byte[mode] * total_payload_size;
+	radio_disable();
+	generate_modulated_rf_packet(mode, pattern);
+
+	radio_mode_set(NRF_RADIO, mode);
+	nrf_radio_shorts_enable(NRF_RADIO,
+				NRF_RADIO_SHORT_READY_START_MASK |
+				NRF_RADIO_SHORT_END_DISABLE_MASK);
+	radio_power_set(mode, channel, txpower);
+	radio_channel_set(mode, channel);
+
+	const uint32_t total_time_per_payload = time_in_us_per_byte[mode] * total_payload_size;
 
 	/* Duty cycle = 100 * Time_on / (time_on + time_off),
 	 * we need to calculate "time_off" for delay.
@@ -448,36 +594,18 @@ static void radio_modulated_tx_carrier_duty_cycle(uint8_t mode, uint8_t txpower,
 	 * so we need to add this to the total timer cycle.
 	 */
 	uint32_t delay_time = total_time_per_payload +
-			   ((100 * total_time_per_payload -
-			   (total_time_per_payload * duty_cycle)) /
+			   ((100 * total_time_per_payload - (total_time_per_payload * duty_cycle)) /
 			   duty_cycle);
-
-	radio_disable();
-	generate_modulated_rf_packet(mode, pattern);
-
-	nrf_radio_mode_set(NRF_RADIO, mode);
-	nrf_radio_shorts_enable(NRF_RADIO,
-				NRF_RADIO_SHORT_READY_START_MASK |
-				NRF_RADIO_SHORT_END_DISABLE_MASK);
-	nrf_radio_txpower_set(NRF_RADIO, txpower);
-	radio_channel_set(mode, channel);
-
-#if CONFIG_NRF21540_FEM
-	(void) nrf21540_power_up();
-
-	if (nrf21540.gain != NRF21540_USE_DEFAULT_GAIN) {
-		(void) nrf21540_tx_gain_set(nrf21540.gain);
-	}
-
-	if (nrf21540.active_delay == 0) {
-		nrf21540.active_delay =
-			nrf21540_default_active_delay_calculate(false, mode);
-	}
-
-#endif /* CONFIG_NRF21540_FEM */
 
 	/* We let the TIMER start the radio transmission again. */
 	nrfx_timer_disable(&timer);
+
+#if CONFIG_FEM
+	(void)fem_configure(false, mode, &fem);
+#else
+	radio_ppi_config(false);
+#endif /* CONFIG_FEM */
+
 	nrf_timer_shorts_disable(timer.p_reg, ~0);
 	nrf_timer_int_disable(timer.p_reg, ~0);
 
@@ -485,18 +613,22 @@ static void radio_modulated_tx_carrier_duty_cycle(uint8_t mode, uint8_t txpower,
 		NRF_TIMER_CC_CHANNEL1,
 		nrfx_timer_us_to_ticks(&timer, delay_time),
 		NRF_TIMER_SHORT_COMPARE1_CLEAR_MASK,
-		true);
+		false);
 
-	nrfx_timer_clear(&timer);
-	nrfx_timer_enable(&timer);
+	unsigned int key = irq_lock();
+
+	radio_start(false, true);
+
+	radio_ppi_tx_reconfigure();
+	irq_unlock(key);
 }
 
 void radio_test_start(const struct radio_test_config *config)
 {
-#if CONFIG_NRF21540_FEM
-	nrf21540.active_delay = config->nrf21540.active_delay;
-	nrf21540.gain = config->nrf21540.gain;
-#endif
+#if CONFIG_FEM
+	fem.ramp_up_time = config->fem.ramp_up_time;
+	fem.gain = config->fem.gain;
+#endif /* CONFIG_FEM */
 
 	switch (config->type) {
 	case UNMODULATED_TX:
@@ -536,6 +668,22 @@ void radio_test_start(const struct radio_test_config *config)
 void radio_test_cancel(void)
 {
 	nrfx_timer_disable(&timer);
+	nrfx_timer_clear(&timer);
+
+	sweep_processing = false;
+
+	nrfx_gppi_channels_disable(BIT(ppi_radio_start));
+	nrfx_gppi_event_endpoint_clear(ppi_radio_start,
+			nrf_egu_event_address_get(RADIO_TEST_EGU, RADIO_TEST_EGU_EVENT));
+	nrfx_gppi_task_endpoint_clear(ppi_radio_start,
+			nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_TXEN));
+	nrfx_gppi_task_endpoint_clear(ppi_radio_start,
+			nrf_radio_task_address_get(NRF_RADIO, NRF_RADIO_TASK_RXEN));
+	nrfx_gppi_fork_endpoint_clear(ppi_radio_start,
+			nrf_timer_task_address_get(timer.p_reg, NRF_TIMER_TASK_START));
+	nrfx_gppi_event_endpoint_clear(ppi_radio_start,
+		nrf_timer_event_address_get(timer.p_reg, NRF_TIMER_EVENT_COMPARE1));
+
 	radio_disable();
 }
 
@@ -594,7 +742,7 @@ static void timer_handler(nrf_timer_event_t event_type, void *context)
 		uint8_t channel_end;
 
 		if (config->type == TX_SWEEP) {
-			sweep_proccesing = true;
+			sweep_processing = true;
 			radio_unmodulated_tx_carrier(config->mode,
 				config->params.tx_sweep.txpower,
 				current_channel);
@@ -602,7 +750,7 @@ static void timer_handler(nrf_timer_event_t event_type, void *context)
 			channel_start = config->params.tx_sweep.channel_start;
 			channel_end = config->params.tx_sweep.channel_end;
 		} else if (config->type == RX_SWEEP) {
-			sweep_proccesing = true;
+			sweep_processing = true;
 			radio_rx(config->mode,
 				current_channel,
 				config->params.rx.pattern);
@@ -614,25 +762,12 @@ static void timer_handler(nrf_timer_event_t event_type, void *context)
 			return;
 		}
 
-		sweep_proccesing = false;
+		sweep_processing = false;
 
 		current_channel++;
 		if (current_channel > channel_end) {
 			current_channel = channel_start;
 		}
-	}
-
-	if (event_type == NRF_TIMER_EVENT_COMPARE1) {
-#if CONFIG_NRF21540_FEM
-		(void) nrf21540_txrx_configuration_clear();
-		(void) nrf21540_txrx_stop();
-		(void) nrf21540_tx_configure(NRF21540_EXECUTE_NOW,
-				nrf_radio_event_address_get(NRF_RADIO,
-						NRF_RADIO_EVENT_DISABLED),
-				nrf21540.active_delay);
-#else
-		nrf_radio_task_trigger(NRF_RADIO, NRF_RADIO_TASK_TXEN);
-#endif /* CONFIG_NRF21540_FEM */
 	}
 }
 
@@ -675,22 +810,29 @@ void radio_handler(const void *context)
 
 int radio_test_init(struct radio_test_config *config)
 {
-	nrf_rng_task_trigger(NRF_RNG, NRF_RNG_TASK_START);
+	nrfx_err_t nrfx_err;
 
-#if CONFIG_NRF21540_FEM
-	int err = nrf21540_init();
+	timer_init(config);
+	IRQ_CONNECT(TIMER0_IRQn, IRQ_PRIO_LOWEST,
+		nrfx_timer_0_irq_handler, NULL, 0);
+
+	irq_connect_dynamic(RADIO_IRQn, IRQ_PRIO_LOWEST, radio_handler, config, 0);
+	irq_enable(RADIO_IRQn);
+
+	nrfx_err = nrfx_gppi_channel_alloc(&ppi_radio_start);
+	if (nrfx_err != NRFX_SUCCESS) {
+		printk("Failed to allocate gppi channel.\n");
+		return -EFAULT;
+	}
+
+#if CONFIG_FEM
+	int err = fem_init(timer.p_reg,
+			   (BIT(NRF_TIMER_CC_CHANNEL2) | BIT(NRF_TIMER_CC_CHANNEL3)));
 
 	if (err) {
 		return err;
 	}
-#endif /* CONFIG_NRF21540_FEM */
-
-	timer_init(config);
-	IRQ_CONNECT(TIMER0_IRQn, NRFX_TIMER_DEFAULT_CONFIG_IRQ_PRIORITY,
-		nrfx_timer_0_irq_handler, NULL, 0);
-
-	irq_connect_dynamic(RADIO_IRQn, 7, radio_handler, config, 0);
-	irq_enable(RADIO_IRQn);
+#endif /* CONFIG_FEM */
 
 	return 0;
 }

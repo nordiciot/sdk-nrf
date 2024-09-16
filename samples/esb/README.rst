@@ -35,9 +35,7 @@ Requirements
 
 The sample supports the following development kits:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf52840dk_nrf52840, nrf52dk_nrf52832, nrf21540dk_nrf52840
+.. table-from-sample-yaml::
 
 You can use any two of the development kits listed above and mix different development kits.
 
@@ -45,11 +43,6 @@ Configuration
 *************
 
 |config|
-
-FEM support
-===========
-
-.. include:: /includes/sample_fem_support.txt
 
 User interface
 ***************
@@ -66,6 +59,11 @@ The Transmitter sample can be found under :file:`samples/esb/ptx` in the |NCS| f
 The Receiver sample can be found under :file:`samples/esb/prx` in the |NCS| folder structure.
 
 See :ref:`gs_programming` for information about how to build and program the application.
+
+FEM support
+===========
+
+.. include:: /includes/sample_fem_support.txt
 
 Testing
 =======
@@ -87,13 +85,13 @@ This sample uses the following |NCS| libraries:
 
 In addition, it uses the following Zephyr libraries:
 
-* ``include/zephyr/types.h``
+* :file:`include/zephyr/types.h`
 * :ref:`zephyr:logging_api`
 * :ref:`zephyr:kernel_api`:
 
-  * ``include/kernel.h``
-  * ``include/irq.h``
+  * :file:`include/kernel.h`
+  * :file:`include/irq.h`
 
 * :ref:`zephyr:api_peripherals`:
 
-   * ``incude/gpio.h``
+   * :file:`incude/gpio.h`

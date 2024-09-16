@@ -5,11 +5,11 @@
  */
 #include <stdbool.h>
 #include <inttypes.h>
-#include <bluetooth/gatt.h>
-#include <bluetooth/uuid.h>
-#include <kernel.h>
-#include <ztest.h>
-#include <sys/util.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/kernel.h>
+#include <zephyr/ztest.h>
+#include <zephyr/sys/util.h>
 
 
 /* Settings of the discover mock */
@@ -58,7 +58,7 @@ static void bt_gatt_discover_work(struct k_work *work)
 	       mock_data->params->start_handle,
 	       mock_data->params->end_handle);
 
-	zassert_true(mock_data->params->start_handle < discover_mock_data.len,
+	zassert_true(mock_data->params->start_handle <= discover_mock_data.len,
 		"Unexpected start handle: %u", mock_data->params->start_handle);
 
 	for (attr_cur = discover_mock_data.attr;

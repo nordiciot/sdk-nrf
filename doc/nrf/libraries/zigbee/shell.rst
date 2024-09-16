@@ -23,10 +23,13 @@ To change this and other Zephyr's shell settings (for example, the prompt or the
 
 To configure the Zigbee shell library, use the following options:
 
-* :kconfig:`CONFIG_ZIGBEE_SHELL`
-* :kconfig:`CONFIG_ZIGBEE_SHELL_ENDPOINT`
-* :kconfig:`CONFIG_ZIGBEE_SHELL_DEBUG_CMD`
-* :kconfig:`CONFIG_ZIGBEE_SHELL_LOG_LEVEL`
+* :kconfig:option:`CONFIG_ZIGBEE_SHELL`
+* :kconfig:option:`CONFIG_ZIGBEE_SHELL_ENDPOINT`
+* :kconfig:option:`CONFIG_ZIGBEE_SHELL_DEBUG_CMD`
+* :kconfig:option:`CONFIG_ZIGBEE_SHELL_LOG_LEVEL`
+* :kconfig:option:`CONFIG_ZIGBEE_SHELL_CTX_MGR_ENTRIES_NBR`
+* :kconfig:option:`CONFIG_ZIGBEE_SHELL_MONITOR_CACHE_SIZE`
+* :kconfig:option:`CONFIG_ZIGBEE_SHELL_ZCL_CMD_TIMEOUT`
 
 For detailed steps about configuring the library in a Zigbee sample or application, see :ref:`ug_zigbee_configuring_components_logger_ep`.
 
@@ -41,7 +44,7 @@ Zigbee shell commands are available for the following backends when testing samp
 You can run the Zigbee shell commands after connecting and configuring the backend for testing.
 For more information, see :ref:`gs_testing`.
 
-.. _zigbee_cli_reference:
+.. _zigbee_shell_reference:
 
 Zigbee shell command list
 *************************
@@ -100,6 +103,8 @@ For example, ``zdo help`` displays help for all ``zdo`` commands.
 
 Example:
 
+.. zigbee_help_output_start
+
 .. code-block::
 
    help
@@ -122,6 +127,7 @@ Example:
    help               :Prints the help message.
    history            :Command history.
    kernel             :Kernel commands
+   nbr                :Zigbee neighbor table.
    nrf_clock_control  :Clock control commmands
    nvram              :Zigbee NVRAM manipulation.
    resize             :Console gets terminal screen size or assumes default in
@@ -133,6 +139,8 @@ Example:
    zcl                :ZCL subsystem commands.
    zdo                :ZDO manipulation.
    zscheduler         :Zigbee scheduler manipulation.
+
+.. zigbee_help_output_end
 
 ----
 
@@ -162,7 +170,7 @@ If the optional argument is provided, set the device role to *role*.
 Can be either ``zc`` or ``zr``.
 
 .. note::
-    Zigbee End Device is not currently supported by the CLI sample.
+    Zigbee End Device is not currently supported by the Shell sample.
 
 
 ----
@@ -432,7 +440,7 @@ Example:
 bdb factory_reset
 =================
 
-Perform a factory reset via local action.
+Perform a factory reset using local action.
 See Base Device Behavior specification chapter 9.5 for details.
 
 .. code-block::
@@ -485,6 +493,7 @@ Send a generic ZCL command to the remote node.
     The payload requires the **little-endian** byte order.
 
     To send a request using binding table entries, set ``dst_addr`` and ``ep`` to ``0``.
+    To send as groupcast, set ``dst_addr`` to a group address and ``ep`` to ``0``.
 
 Send a generic ZCL command with ID ``cmd_ID`` and payload ``payload`` to the cluster ``cluster``.
 The cluster belongs to the profile ``profile``, which resides on the endpoint ``ep`` of the remote node ``dst_addr``.
@@ -650,11 +659,11 @@ Example:
 .. note::
     |precondition4|
 
-Issue a ping-style shell command to another CLI node with the given 16-bit destination address (*dst_addr*) by using a payload equal to *payload_size* bytes.
+Issue a ping-style shell command to another Shell node with the given 16-bit destination address (*dst_addr*) by using a payload equal to *payload_size* bytes.
 The command is sent and received on endpoints with the same ID.
 
 This shell command uses a custom ZCL frame, which is constructed as a ZCL frame of a custom ping ZCL cluster with the cluster ID ``0xBEEF``.
-For details, see the implementation of :c:func:`ping_request_send` in :file:`subsys/zigbee/cli/zigbee_cli_cmd_ping.c`.
+For details, see the implementation of :c:func:`ping_request_send` in :file:`subsys/zigbee/lib/zigbee_shell/src/zigbee_shell_cmd_ping.c`.
 
 The command measures the time needed for a Zigbee frame to travel between two nodes in the network (there and back again).
 The shell command sends a ping request ZCL command, which is followed by a ping reply ZCL command.
@@ -740,6 +749,238 @@ Case 4: Ping without echo and without the APS acknowledgment
         ..
 
     In this case, the ``zcl ping`` command does not measure time after sending the ping request.
+
+----
+
+.. _zcl_groups_add:
+
+zcl groups add
+==============
+
+Add the endpoint on the remote node to the group.
+
+.. parsed-literal::
+   :class: highlight
+
+   zcl groups add *h:dst_addr* *d:ep* [-p h:profile] *h:group_id*
+
+Send Add Group command to the endpoint ``ep`` of the remote node ``dst_addr`` and add it to the group ``group_id``.
+Providing profile ID ``profile`` is optional  (Home Automation Profile is used by default).
+This command can be sent as groupcast.
+To send the command as groupcast, set ``dst_addr`` to a group address and ``ep`` to ``0``.
+
+Example 1:
+
+.. code-block::
+
+   > zcl groups add 0x1234 10 0x4321
+   Response command received, group: 0x4321, status: 0
+   Done
+
+This command sends the Add Group command (ZCL specification 3.6.2.3.2) to the device with the short address ``0x1234`` and endpoint ``10``, asking it to join the group ``0x4321``.
+
+Example 2:
+
+.. code-block::
+
+   > zcl groups add 0x1234 10 -p 0x0104 0x3210
+   Response command received, group: 0x3210, status: 0
+   Done
+
+This command sends the Add Group command (ZCL specification 3.6.2.3.2) to the device with the short address ``0x1234`` and endpoint ``10`` with profile set to ``0x0104``, asking it to join the group ``0x3210``.
+
+Example 3:
+
+.. code-block::
+
+   > zcl groups add 0x3210 0 0x1000
+   Done
+
+This command sends the Add Group command (ZCL specification 3.6.2.3.2) as groupcast to devices that belong to the group ``0x3210``, asking them to join the group ``0x1000``.
+
+----
+
+.. _zcl_groups_add_if_identify:
+
+zcl groups add_if_identify
+==========================
+
+Add the endpoints on the remote nodes to the group if the endpoints are in the Identify mode.
+
+.. parsed-literal::
+   :class: highlight
+
+   zcl groups add_if_identify *h:dst_addr* *d:ep* [-p h:profile] *h:group_id*
+
+Send Add Group If Identifying command to the endpoint ``ep`` of the remote node ``dst_addr`` and add it to the group ``group_id`` if the endpoint on the remote node is in the Identify mode.
+Providing profile ID ``profile`` is optional  (Home Automation Profile is used by default).
+This command can be sent as groupcast.
+To send the command as groupcast, set ``dst_addr`` to a group address and ``ep`` to ``0``.
+
+Example 1:
+
+.. code-block::
+
+   > zcl groups add_if_identify 0x1234 10 0x4321
+   Done
+
+This command sends the Add Group If Identifying command (ZCL specification 3.6.2.3.7) to the device with the short address ``0x1234`` and endpoint ``10``, asking it to join the group ``0x4321`` if is in the Identify mode.
+
+Example 2:
+
+.. code-block::
+
+   > zcl groups add_if_identify 0x1234 10 -p 0x0104 0x3210
+   Done
+
+This command sends the Add Group If Identifying command (ZCL specification 3.6.2.3.7) to the device with the short address ``0x1234`` and endpoint ``10`` with profile set to ``0x0104``, asking it to join the group ``0x3210`` if it is in the Identify mode.
+
+Example 3:
+
+.. code-block::
+
+   > zcl groups add_if_identify 0x3210 0 0x1000
+   Done
+
+This command sends the Add Group If Identifying command (ZCL specification 3.6.2.3.7) as groupcast to devices that belong to the group ``0x3210``, asking them to join the group ``0x1000`` if they are in the Identify mode.
+
+----
+
+.. _zcl_groups_get_member:
+
+zcl groups get_member
+=====================
+
+Get group membership from the endpoint on the remote node.
+
+.. parsed-literal::
+   :class: highlight
+
+   zcl groups get_member *h:dst_addr* *d:ep* [-p h:profile] [h:group IDs ...]
+
+Send Get Group Membership command to the endpoint ``ep`` of the remote node ``dst_addr`` to get which groups from the provided group list are including the endpoint on the remote node.
+If no group ID is provided, the remote node is requested to response with information about all groups it is part of.
+Providing profile ID ``profile`` is optional  (Home Automation Profile is used by default).
+This command can be sent as groupcast.
+To send the command as groupcast, set ``dst_addr`` to a group address and ``ep`` to ``0``.
+Response from the remote node is parsed and printed only if the command was sent as unicast.
+
+Example 1:
+
+.. code-block::
+
+   > zcl groups get_member 0x1234 10
+   short_addr=0x1234 ep=10 capacity=13 group_cnt=3 group_list=0x4321,0x3210,0x1000,
+   Done
+
+This command sends the Get Group Membership command (ZCL specification 3.6.2.3.4) to the device with the short address ``0x1234`` and endpoint ``10``, asking it to respond with the list of groups that include the device.
+
+Example 2:
+
+.. code-block::
+
+   > zcl groups get_member 0x1234 10 -p 0x0104 0x4321 0x3210
+   short_addr=0x1234 ep=10 capacity=13 group_cnt=3 group_list=0x4321,0x3210,
+   Done
+
+This command sends the Get Group Membership command (ZCL specification 3.6.2.3.4) to the device with the short address ``0x1234`` and endpoint ``10`` with profile set to ``0x0104``, asking it to respond with the list of groups that include the device and that are present in the group list provided in the command.
+
+----
+
+.. _zcl_groups_remove:
+
+zcl groups remove
+=================
+
+Remove the endpoint on the remote node from the group.
+
+.. parsed-literal::
+   :class: highlight
+
+   zcl groups remove *h:dst_addr* *d:ep* [-p h:profile] *h:group_id*
+
+Send Remove Group command to the endpoint ``ep`` of the remote node ``dst_addr`` and remove it from the group ``group_id``.
+Providing profile ID ``profile`` is optional  (Home Automation Profile is used by default).
+This command can be sent as groupcast.
+To send the command as groupcast, set ``dst_addr`` to a group address and ``ep`` to ``0``.
+
+Example 1:
+
+.. code-block::
+
+   > zcl groups remove 0x1234 10 0x4321
+   Response command received, group: 0x4321, status: 0
+   Done
+
+This command sends the Remove Group command (ZCL specification 3.6.2.3.5) to the device with the short address ``0x1234`` and endpoint ``10``, asking it to remove itself from the group ``0x4321``.
+
+Example 2:
+
+.. code-block::
+
+   > zcl groups remove 0x1234 10 -p 0x0104 0x3210
+   Response command received, group: 0x3210, status: 0
+   Done
+
+This command sends the Remove Group command (ZCL specification 3.6.2.3.5) to the device with the short address ``0x1234`` and endpoint ``10`` with profile set to ``0x0104``, asking it to remove itself from the group ``0x3210``.
+
+Example 3:
+
+.. code-block::
+
+   > zcl groups remove 0x3210 0 0x1000
+   Done
+
+This command sends the Remove Group command (ZCL specification 3.6.2.3.5) as groupcast to devices that belong to the group ``0x3210``, asking them to remove themselves from the group ``0x1000``.
+
+----
+
+.. _zcl_groups_remove_all:
+
+zcl groups remove_all
+=====================
+
+Remove the endpoint on the remote node from all groups.
+
+.. parsed-literal::
+   :class: highlight
+
+   zcl groups remove_all *h:dst_addr* *d:ep* [-p h:profile]
+
+
+Send Remove All Groups command to the endpoint ``ep`` to the remote node ``dst_addr``.
+Providing profile ID ``profile`` is optional  (Home Automation Profile is used by default).
+This command can be sent as groupcast.
+To send the command as groupcast, set ``dst_addr`` to a group address and ``ep`` to ``0``.
+
+Example 1:
+
+.. code-block::
+
+   > zcl groups remove_all 0x1234 10
+   Done
+
+This command sends the Remove All Groups command (ZCL specification 3.6.2.3.6) to the device with the short address ``0x1234`` and endpoint ``10``, asking it to remove itself from all groups.
+
+Example 2:
+
+.. code-block::
+
+   > zcl groups remove_all 0x1234 10 -p 0x0104
+   Done
+
+This command sends the Remove All Groups command (ZCL specification 3.6.2.3.6) to the device with the short address ``0x1234`` and endpoint ``10`` with profile set to ``0x0104``, asking it to remove itself from all groups.
+
+Example 3:
+
+.. code-block::
+
+   > zcl groups remove_all 0x1000 0
+   Done
+
+This command sends the Remove All Groups command (ZCL specification 3.6.2.3.6) as groupcast to devices that belong to the group ``0x3210``, asking them to remove themselves from all groups.
+
+----
 
 .. _zdo_simple_desc_req:
 
@@ -832,6 +1073,9 @@ Create a binding between two endpoints on two nodes.
    zdo bind on *h:source_eui64* *d:source_ep* *h:dst_addr*
                *d:dst_ep* *h:source_cluster_id* *h:request_dst_addr*
 
+.. note::
+    To bind the device to a group address, set ``dst_addr`` to a group address and ``dst_ep`` to ``0``.
+
 Create bound connection between a device identified by *source_eui64* and endpoint *source_ep*, and a device identified by destination address *dst_addr* and destination endpoint *dst_ep*.
 The connection is created for ZCL commands and attributes assigned to the ZCL cluster *source_cluster_id* on the *request_dst_addr* node (usually short address corresponding to *source_eui64* argument).
 
@@ -855,6 +1099,9 @@ Remove a binding between two endpoints on two nodes.
 
    zdo bind off *h:source_eui64* *d:source_ep* *h:dst_eui64*
                 *d:destination_ep* *h:source_cluster_id* *h:request_dst_addr*
+
+.. note::
+    To unbind the device from a group address, set ``dst_addr`` to a group address and ``dst_ep`` to ``0``.
 
 Remove bound connection between a device identified by *source_eui64* and endpoint *source_ep*, and a device identified by destination address *dst_eui64* and destination endpoint *dst_ep*.
 The connection is removed for ZCL commands and attributes assigned to the ZCL cluster *source_cluster_id* on the *request_dst_addr* node (usually, the same address as for the *source_eui64* device).
@@ -1052,7 +1299,7 @@ Example:
 .. code-block::
 
    > version
-   CLI: Sep  3 2020 13:34:28
+   Shell: Sep  3 2020 13:34:28
    ZBOSS: 3.3.0.2
    Zephyr kernel version: 2.3.99
    Done
@@ -1064,14 +1311,14 @@ Example:
 debug
 =====
 
-Enable or disable the debug mode in the CLI.
+Enable or disable the debug mode in the Shell.
 
 .. parsed-literal::
    :class: highlight
 
    debug *on|off*
 
-This command unblocks several additional commands in the CLI.
+This command unblocks several additional commands in the Shell.
 
 .. note::
     When used, the additional commands can render the device unstable.
@@ -1107,6 +1354,48 @@ Resume Zigbee scheduler processing.
 
 .. note::
     |precondition4|
+
+----
+
+.. _nbr_monitor_on:
+
+nbr monitor on
+==============
+
+Start monitoring the list of active Zigbee neighbors.
+
+.. code-block::
+
+   nbr monitor on
+
+----
+
+.. _nbr_monitor_off:
+
+nbr monitor off
+===============
+
+Stop monitoring the list of active Zigbee neighbors.
+
+.. code-block::
+
+   nbr monitor off
+
+----
+
+.. _nbr_monitor_trigger:
+
+nbr monitor trigger
+===================
+
+Trigger logging the list of active Zigbee neighbors.
+
+.. note::
+    This function will trigger logging only if the Zigbee active neighbor monitor is started (see :ref:`nbr_monitor_on`).
+
+.. code-block::
+
+   nbr monitor trigger
 
 ----
 

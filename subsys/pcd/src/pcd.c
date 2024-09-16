@@ -4,13 +4,13 @@
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
-#include <zephyr.h>
-#include <device.h>
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
 #include <dfu/pcd.h>
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 #ifdef CONFIG_PCD_NET
-#include <storage/stream_flash.h>
+#include <zephyr/storage/stream_flash.h>
 #endif
 
 LOG_MODULE_REGISTER(pcd, CONFIG_PCD_LOG_LEVEL);
@@ -34,6 +34,13 @@ LOG_MODULE_REGISTER(pcd, CONFIG_PCD_LOG_LEVEL);
 #include <pm_config.h>
 #define PCD_NET_CORE_APP_OFFSET PM_CPUNET_B0N_CONTAINER_SIZE
 #endif
+
+#define NETWORK_CORE_UPDATE_CHECK_TIME K_SECONDS(1)
+
+static void network_core_finished_check_handler(struct k_timer *timer);
+
+K_TIMER_DEFINE(network_core_finished_check_timer,
+	       network_core_finished_check_handler, NULL);
 
 #endif /* CONFIG_PCD_APP */
 
@@ -108,6 +115,25 @@ void pcd_fw_copy_done(void)
 
 #ifdef CONFIG_PCD_APP
 
+static void network_core_pcd_tidy(void)
+{
+	/* Configure nRF5340 Network MCU back into Non-Secure domain.
+	 * This is the default for the network core when it's reset.
+	 */
+	nrf_spu_extdomain_set(NRF_SPU, 0, false, false);
+}
+
+static void network_core_finished_check_handler(struct k_timer *timer)
+{
+	if (pcd_fw_copy_status_get() != PCD_STATUS_COPY) {
+		/* Upgrade has finished and either failed or completed
+		 * successfully, tidy up and cancel timer
+		 */
+		k_timer_stop(&network_core_finished_check_timer);
+		network_core_pcd_tidy();
+	}
+}
+
 /** @brief Construct a PCD CMD for copying data/firmware.
  *
  * @param data   The data to copy.
@@ -131,17 +157,9 @@ static int pcd_cmd_write(const void *data, size_t len, off_t offset)
 	return 0;
 }
 
-static int network_core_update(const void *src_addr, size_t len, bool wait)
+static int network_core_pcd_cmdset(const void *src_addr, size_t len, bool wait)
 {
 	int err;
-
-	/* Retain nRF5340 Network MCU in Secure domain (bus
-	 * accesses by Network MCU will have Secure attribute set).
-	 * This is needed for the network core to be able to read the
-	 * shared RAM area used for IPC.
-	 */
-	nrf_spu_extdomain_set(NRF_SPU, 0, true, false);
-
 	/* Ensure that the network core is turned off */
 	nrf_reset_network_force_off(NRF_RESET, true);
 
@@ -174,13 +192,34 @@ static int network_core_update(const void *src_addr, size_t len, bool wait)
 
 	nrf_reset_network_force_off(NRF_RESET, true);
 	LOG_INF("Turned off network core");
-
+	network_core_pcd_tidy();
 	return 0;
+}
+
+static int network_core_update(const void *src_addr, size_t len, bool wait)
+{
+	/* Configure nRF5340 Network MCU into Secure domain (bus
+	 * accesses by Network MCU will have Secure attribute set).
+	 * This is needed for the network core to be able to read the
+	 * shared RAM area used for IPC.
+	 */
+	nrf_spu_extdomain_set(NRF_SPU, 0, true, false);
+
+	return network_core_pcd_cmdset(src_addr, len, wait);
 }
 
 int pcd_network_core_update_initiate(const void *src_addr, size_t len)
 {
-	return network_core_update(src_addr, len, false);
+	int rc = network_core_update(src_addr, len, false);
+
+	if (rc == 0) {
+		k_timer_start(&network_core_finished_check_timer,
+			      NETWORK_CORE_UPDATE_CHECK_TIME,
+			      NETWORK_CORE_UPDATE_CHECK_TIME);
+		k_busy_wait(1 * USEC_PER_SEC);
+	}
+
+	return rc;
 }
 
 int pcd_network_core_update(const void *src_addr, size_t len)

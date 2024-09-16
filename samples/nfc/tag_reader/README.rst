@@ -9,35 +9,33 @@ NFC: Tag reader
 
 The NFC Tag reader sample demonstrates how to use the :ref:`st25r3911b_nfc_readme` driver to interact with an NFC-A Tag.
 
-Overview
-********
-
-The sample shows how to use the ST25R3911B NFC reader to read data from a tag that supports the ISO/IEC 14443 standard (NFC-A technology).
-This device can be used to read and parse content of an NFC Type 2 Tag or Type 4 Tag.
-
-After successful parsing, the tag content is printed using the logging subsystem.
-
-Before reading data, the sample detects which NFC technology is used by sending the appropriate initialization commands (ALL Request, SENS Request).
-It also performs automatic collision resolution.
-
-Supported tag types:
-
-* NFC Type 2 Tag
-* NFC Type 4 Tag
-
 Requirements
 ************
 
 The sample supports the following development kits:
 
-.. table-from-rows:: /includes/sample_board_rows.txt
-   :header: heading
-   :rows: nrf5340dk_nrf5340_cpuapp, nrf52840dk_nrf52840, nrf52dk_nrf52832, nrf52833dk_nrf52833
+.. table-from-sample-yaml::
 
 The sample has the following additional requirements:
 
 * NFC Reader ST25R3911B Nucleo expansion board (X-NUCLEO-NFC05A1)
 * NFC Type 2 Tag or Type 4 Tag
+
+Overview
+********
+
+The sample shows how to use the ST25R3911B NFC reader to read data from a tag that supports the ISO/IEC 14443 standard (NFC-A technology).
+You can use this device to read and parse content of an NFC Type 2 Tag or Type 4 Tag.
+
+After successful parsing, the tag content is printed using the logging subsystem.
+
+Before reading data, the sample sends the appropriate initialization commands (ALL Request, SENS Request) to detect which NFC technology is used.
+It also performs an automatic collision resolution.
+
+Supported tag types are:
+
+* NFC Type 2 Tag
+* NFC Type 4 Tag
 
 Building and running
 ********************
@@ -45,9 +43,13 @@ Building and running
 
 .. include:: /includes/build_and_run.txt
 
+.. note::
+   |nfc_nfct_driver_note|
+
 Testing
 =======
 After programming the sample to your development kit, you can test it with an NFC-A Type 2 Tag or Tag 4 Type.
+Complete the following steps:
 
 1. Connect the Nucleo expansion board to the development kit.
 #. |connect_terminal|
@@ -55,8 +57,7 @@ After programming the sample to your development kit, you can test it with an NF
 #. Touch the ST25R3911B NFC reader with a Type 2 Tag or Type 4 Tag.
 #. Observe the output in the terminal.
    The content of the tag is printed there.
-#. After a little delay, the tag can be read again.
-
+#. After a short delay, the tag can be read again.
 
 Dependencies
 ************

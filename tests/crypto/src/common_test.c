@@ -9,10 +9,10 @@
 #include <string.h>
 #include <stdint.h>
 #include <stddef.h>
-#include <sys/printk.h>
+#include <zephyr/sys/printk.h>
 
-#include <sys/util.h>
-#include <sys_clock.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/sys_clock.h>
 
 #include "common_test.h"
 
@@ -39,12 +39,45 @@ const size_t test_vector_name_offset[] = {
 	offsetof(test_vector_ecjpake_t, p_test_vector_name),
 };
 
+#if !defined(MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG)
 static int entropy_func(void *ctx, unsigned char *buf, size_t len)
 {
 	return entropy_get_entropy(ctx, buf, len);
 }
+#endif
 
-#if defined(MBEDTLS_CTR_DRBG_C)
+#if defined(MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG)
+
+mbedtls_psa_external_random_context_t drbg_ctx;
+
+int init_drbg(const unsigned char *p_optional_seed, size_t len)
+{
+	static const unsigned char ncs_seed[] = "ncs_drbg_seed";
+
+	const unsigned char *p_seed;
+
+	if (p_optional_seed == NULL) {
+		p_seed = ncs_seed;
+		len = sizeof(ncs_seed);
+	} else {
+		p_seed = p_optional_seed;
+	}
+
+	int ret = nrf_cc3xx_platform_ctr_drbg_init(
+		(nrf_cc3xx_platform_ctr_drbg_context_t *)&drbg_ctx, p_seed, len);
+	return ret;
+}
+
+int external_rng(void *ctx, unsigned char *output, size_t len)
+{
+	int out_len;
+	int ret = mbedtls_psa_external_get_random(NULL, output, len, &out_len);
+	return ret;
+}
+
+int (*drbg_random)(void *, unsigned char *, size_t) = &external_rng;
+
+#elif defined(MBEDTLS_CTR_DRBG_C)
 mbedtls_ctr_drbg_context drbg_ctx;
 int (*drbg_random)(void *, unsigned char *, size_t) = &mbedtls_ctr_drbg_random;
 
@@ -61,11 +94,11 @@ int init_drbg(const unsigned char *p_optional_seed, size_t len)
 		p_seed = p_optional_seed;
 	}
 
-	const struct device *p_device =
-	    device_get_binding(DT_LABEL(DT_CHOSEN(zephyr_entropy)));
+	const struct device *p_device = DEVICE_DT_GET(DT_CHOSEN(zephyr_entropy));
 
-	if (p_device == NULL)
+	if (!device_is_ready(p_device)) {
 		return -ENODEV;
+	}
 
 	// Ensure previously run test is properly deallocated
 	// (This frees the mutex inside ctr_drbg context)
@@ -75,6 +108,7 @@ int init_drbg(const unsigned char *p_optional_seed, size_t len)
 				     p_seed, len);
 }
 #elif defined(MBEDTLS_HMAC_DRBG_C)
+
 mbedtls_hmac_drbg_context drbg_ctx;
 int (*drbg_random)(void *, unsigned char *, size_t) = &mbedtls_hmac_drbg_random;
 
@@ -96,11 +130,11 @@ int init_drbg(const unsigned char *p_optional_seed, size_t len)
 	mbedtls_hmac_drbg_free(&drbg_ctx);
 	mbedtls_hmac_drbg_init(&drbg_ctx);
 
-	const struct device *p_device =
-	    device_get_binding(DT_LABEL(DT_CHOSEN(zephyr_entropy)));
+	const struct device *p_device = DEVICE_DT_GET(DT_CHOSEN(zephyr_entropy));
 
-	if (!p_device)
+	if (!device_is_ready(p_device)) {
 		return -ENODEV;
+	}
 
 	const mbedtls_md_info_t *p_info =
 		mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
@@ -108,6 +142,7 @@ int init_drbg(const unsigned char *p_optional_seed, size_t len)
 	return mbedtls_hmac_drbg_seed(&drbg_ctx, p_info, entropy_func,
 		(void *)p_device, p_seed, len);
 }
+
 #endif
 
 const char *get_vector_name(const test_case_t *tc, uint32_t v)
